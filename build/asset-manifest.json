@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/sequencing/static/css/main.e6c13ad2.css",
+    "main.js": "/sequencing/static/js/main.b67788e6.js",
+    "static/js/453.0f58db6a.chunk.js": "/sequencing/static/js/453.0f58db6a.chunk.js",
+    "index.html": "/sequencing/index.html",
+    "main.e6c13ad2.css.map": "/sequencing/static/css/main.e6c13ad2.css.map",
+    "main.b67788e6.js.map": "/sequencing/static/js/main.b67788e6.js.map",
+    "453.0f58db6a.chunk.js.map": "/sequencing/static/js/453.0f58db6a.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.e6c13ad2.css",
+    "static/js/main.b67788e6.js"
+  ]
+}
