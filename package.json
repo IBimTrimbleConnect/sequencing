@@ -11,6 +11,8 @@
     "@preact/signals": "^2.9.2",
     "@preact/signals-react": "^3.10.2",
     "@redux-devtools/extension": "^3.3.0",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.111.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
@@ -20,14 +22,14 @@
     "axios": "^1.5.1",
     "dayjs": "^1.11.20",
     "dotenv": "^16.3.1",
-    "exceljs": "^4.4.0",
+    "exceljs": "^3.4.0",
     "file-saver": "^2.0.5",
     "mathjs": "^15.2.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-redux": "^9.1.0",
     "react-router-dom": "^6.21.2",
-    "react-scripts": "5.0.1",
+    "react-scripts": "^5.0.1",
     "redux": "^5.0.1",
     "redux-logger": "^3.0.6",
     "redux-saga": "^1.3.0",
@@ -62,6 +64,7 @@
     ]
   },
   "devDependencies": {
+    "eslint-plugin-jest": "^25.6.0",
     "gh-pages": "^6.3.0"
   }
 }

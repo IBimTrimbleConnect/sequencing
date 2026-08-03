@@ -28,6 +28,7 @@ import {
 
 import SubPlanModal from "./SubPlanModal";
 import SequenceObjectCollapse from "./SequenceObjectCollapse";
+import { getMovedItemSortDatetime } from "../utils/sortDate";
 
 const math = require("mathjs");
 
@@ -40,6 +41,7 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   const dispatch = useDispatch();
   const { message } = App.useApp();
 
+  const projectId = useSelector((state) => state.sequence.projectId || "");
   const subPlans = useSelector((state) => state.sequence.subPlans);
   const sequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects,
@@ -62,7 +64,15 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   );
 
   const currentSubPlans = useMemo(() => {
-    return subPlans.filter((x) => String(x.planId) === String(plan.id));
+    return subPlans
+      .filter((subPlan) => String(subPlan.planId) === String(plan.id))
+      .sort((a, b) => {
+        const timeA = new Date(a.sortDatetime || 0).getTime();
+
+        const timeB = new Date(b.sortDatetime || 0).getTime();
+
+        return timeA - timeB;
+      });
   }, [subPlans, plan.id]);
 
   useEffect(() => {
@@ -84,29 +94,51 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   }, [activeSimulationItem, currentSubPlans]);
 
   const handleDragEnd = ({ active, over }) => {
-    if (!over || active.id === over.id) return;
+    if (!over || String(active.id) === String(over.id)) {
+      return;
+    }
 
     const oldIndex = currentSubPlans.findIndex(
-      (x) => String(x.id) === String(active.id),
+      (subPlan) => String(subPlan.id) === String(active.id),
     );
 
     const newIndex = currentSubPlans.findIndex(
-      (x) => String(x.id) === String(over.id),
+      (subPlan) => String(subPlan.id) === String(over.id),
     );
 
-    if (oldIndex === -1 || newIndex === -1) return;
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
 
-    const sortedCurrentSubPlans = arrayMove(
-      currentSubPlans,
-      oldIndex,
-      newIndex,
-    );
+    const reorderedSubPlans = arrayMove(currentSubPlans, oldIndex, newIndex);
 
-    dispatch(
-      UpdateSubPlanRequest({
-        subPlans: sortedCurrentSubPlans,
-      }),
-    );
+    const movedSubPlan = reorderedSubPlans[newIndex];
+
+    const previousSubPlan =
+      newIndex > 0 ? reorderedSubPlans[newIndex - 1] : null;
+
+    const nextSubPlan =
+      newIndex < reorderedSubPlans.length - 1
+        ? reorderedSubPlans[newIndex + 1]
+        : null;
+
+    try {
+      const sortDatetime = getMovedItemSortDatetime({
+        previousItem: previousSubPlan,
+        nextItem: nextSubPlan,
+      });
+
+      dispatch(
+        UpdateSubPlanRequest({
+          id: movedSubPlan.id,
+          sortDatetime,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to calculate SubPlan order:", error);
+
+      message.error(error?.message || "Unable to reorder the SubPlan.");
+    }
   };
 
   const handleEdit = (subPlan) => {
@@ -154,11 +186,19 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
           sequenceObjects.forEach((group) => {
             (group?.objects || []).forEach((obj) => {
-              if (obj?.modelId == null || obj?.id == null) {
+              const existingModelId =
+                obj?.modelExternalId ?? obj?.model_external_id ?? obj?.modelId;
+
+              const existingObjectId =
+                obj?.externalId ?? obj?.external_id ?? obj?.id;
+
+              if (existingModelId == null || existingObjectId == null) {
                 return;
               }
 
-              existingObjectKeys.add(createObjectKey(obj.modelId, obj.id));
+              existingObjectKeys.add(
+                createObjectKey(existingModelId, existingObjectId),
+              );
             });
           });
 
@@ -181,11 +221,18 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
             for (let i = 0; i < objBoxes.length; i++) {
               const box = objBoxes[i];
-              const objectId = box?.id ?? selection.objectRuntimeIds?.[i];
+              let runtimeId = box?.id ?? selection.objectRuntimeIds?.[i];
 
-              if (objectId == null) {
+              if (runtimeId == null) {
                 continue;
               }
+
+              const objectIds = await tcapi.viewer.convertToObjectIds(
+                selection.modelId,
+                [runtimeId],
+              );
+
+              const objectId = objectIds?.[0];
 
               const objectKey = createObjectKey(selection.modelId, objectId);
 
@@ -238,10 +285,6 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
                 cogZ !== null;
 
               for (const property of properties) {
-                const propertyName = String(property.name || "")
-                  .toUpperCase()
-                  .trim();
-
                 for (const asmProperty of property.properties || []) {
                   if (isCompleted()) {
                     break;
@@ -297,7 +340,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
                   if (
                     cogX === null &&
                     (upperName.includes("GRAVITY X") ||
-                      upperName.includes("GRAVITYX") || upperName.includes("OX"))
+                      upperName.includes("GRAVITYX") ||
+                      upperName.includes("OX"))
                   ) {
                     cogX = Number(value).toFixed(0);
                     continue;
@@ -306,7 +350,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
                   if (
                     cogY === null &&
                     (upperName.includes("GRAVITY Y") ||
-                      upperName.includes("GRAVITYY") || upperName.includes("OY"))
+                      upperName.includes("GRAVITYY") ||
+                      upperName.includes("OY"))
                   ) {
                     cogY = Number(value).toFixed(0);
                     continue;
@@ -315,7 +360,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
                   if (
                     cogZ === null &&
                     (upperName.includes("GRAVITY Z") ||
-                      upperName.includes("GRAVITYZ") || upperName.includes("OZ"))
+                      upperName.includes("GRAVITYZ") ||
+                      upperName.includes("OZ"))
                   ) {
                     cogZ = Number(value).toFixed(0);
                   }
@@ -330,6 +376,9 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
               newAddedSequenceObjects.push({
                 modelId: selection.modelId,
+                modelExternalId: selection.modelId,
+                externalId: objectId,
+                runtimeId,
                 subPlanId: subPlan.id,
                 planId: plan.id,
                 id: objectId,
@@ -378,8 +427,12 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
           const newAssignedObjects = newObjects.map((object) => ({
             asmPos: object.asmPos,
             date: object.date,
+            assignedDate: object.assignedDate ?? object.date,
             id: object.id,
+            externalId: object.externalId ?? object.id,
             modelId: object.modelId,
+            modelExternalId: object.modelExternalId ?? object.modelId,
+            runtimeId: object.runtimeId,
             planId: object.planId,
             subPlanId: object.subPlanId,
             positionCode: object.positionCode,
@@ -398,6 +451,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
           dispatch(
             SetObjectsRequest({
+              projectId,
+              planId: plan.id,
               subPlanId: subPlan.id,
               objects: newAssignedObjects,
             }),
@@ -443,29 +498,23 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
       const createObjectKey = (modelId, objectId) =>
         `${String(modelId)}::${String(objectId)}`;
 
-      const parseNumericValue = (value) => {
-        if (typeof value === "number") {
-          return Number.isFinite(value) ? value : null;
-        }
-
-        if (value == null) {
-          return null;
-        }
-
-        const parsed = Number.parseFloat(
-          String(value).replace(/,/g, "").trim(),
-        );
-
-        return Number.isFinite(parsed) ? parsed : null;
-      };
-
       const existingObjectKeys = new Set();
 
       sequenceObjects.forEach((group) => {
         (group?.objects || []).forEach((obj) => {
-          if (obj?.modelId == null || obj?.id == null) return;
+          const existingModelId =
+            obj?.modelExternalId ?? obj?.model_external_id ?? obj?.modelId;
 
-          existingObjectKeys.add(createObjectKey(obj.modelId, obj.id));
+          const existingObjectId =
+            obj?.externalId ?? obj?.external_id ?? obj?.id;
+
+          if (existingModelId == null || existingObjectId == null) {
+            return;
+          }
+
+          existingObjectKeys.add(
+            createObjectKey(existingModelId, existingObjectId),
+          );
         });
       });
 
@@ -481,11 +530,18 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
         );
 
         for (let i = 0; i < items.length; i++) {
-          const objectId = selection.objectRuntimeIds?.[i];
+          const runtimeId = selection.objectRuntimeIds?.[i];
 
-          if (objectId == null) {
+          if (runtimeId == null) {
             continue;
           }
+
+          const objectIds = await tcapi.viewer.convertToObjectIds(
+            selection.modelId,
+            [runtimeId],
+          );
+
+          const objectId = objectIds?.[0];
 
           const objectKey = createObjectKey(selection.modelId, objectId);
 
@@ -527,10 +583,6 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
             cogZ !== null;
 
           for (const property of properties) {
-            const propertyName = String(property.name || "")
-              .toUpperCase()
-              .trim();
-
             for (const asmProperty of property.properties || []) {
               if (isCompleted()) {
                 break;
@@ -580,7 +632,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
               if (
                 cogX === null &&
                 (upperName.includes("GRAVITY X") ||
-                  upperName.includes("GRAVITYX") || upperName.includes("OX"))
+                  upperName.includes("GRAVITYX") ||
+                  upperName.includes("OX"))
               ) {
                 cogX = Number(value).toFixed(0);
                 continue;
@@ -589,7 +642,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
               if (
                 cogY === null &&
                 (upperName.includes("GRAVITY Y") ||
-                  upperName.includes("GRAVITYY") || upperName.includes("OY"))
+                  upperName.includes("GRAVITYY") ||
+                  upperName.includes("OY"))
               ) {
                 cogY = Number(value).toFixed(0);
                 continue;
@@ -598,7 +652,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
               if (
                 cogZ === null &&
                 (upperName.includes("GRAVITY Z") ||
-                  upperName.includes("GRAVITYZ") || upperName.includes("OZ"))
+                  upperName.includes("GRAVITYZ") ||
+                  upperName.includes("OZ"))
               ) {
                 cogZ = Number(value).toFixed(0);
               }
@@ -616,6 +671,9 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
           newAddedSequenceObjects.push({
             modelId: selection.modelId,
+            modelExternalId: selection.modelId,
+            externalId: objectId,
+            runtimeId,
             subPlanId: subPlan.id,
             planId: plan.id,
             id: objectId,
@@ -658,8 +716,12 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
       const newAssignedObjects = newObjects.map((object) => ({
         asmPos: object.asmPos,
         date: object.date,
+        assignedDate: object.assignedDate ?? object.date,
         id: object.id,
+        externalId: object.externalId ?? object.id,
         modelId: object.modelId,
+        modelExternalId: object.modelExternalId ?? object.modelId,
+        runtimeId: object.runtimeId,
         planId: object.planId,
         subPlanId: object.subPlanId,
         positionCode: object.positionCode,
@@ -668,7 +730,6 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
           Array.isArray(object.cog) && object.cog.length === 3
             ? object.cog
             : null,
-
 
         weight: object.weight,
 
@@ -680,9 +741,10 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
         center: object.center ?? [0, 0, 0],
         camera: object.camera,
       }));
-
       dispatch(
         SetObjectsRequest({
+          projectId,
+          planId: plan.id,
           subPlanId: subPlan.id,
           objects: newAssignedObjects,
         }),
@@ -722,95 +784,167 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
       return;
     }
 
-    const tcapi = await WorkspaceAPI.connect(window.parent);
+    try {
+      const tcapi = await WorkspaceAPI.connect(window.parent);
+      const subPlanId = String(subPlan.id);
 
-    const subPlanId = String(subPlan.id);
+      /*
+       * Gom Internal Object ID theo modelId.
+       * obj.id hiện đang lưu Internal Object ID sau khi gọi convertToObjectIds().
+       */
+      const modelGroups = new Map();
 
-    // 1) get all objects based on asigned date
-    const items = [];
+      for (const group of sequenceObjects) {
+        if (!group) {
+          continue;
+        }
 
-    sequenceObjects.forEach((group) => {
-      if (!group) {
+        const groupSubPlanId = String(group.subPlanId ?? "");
+
+        for (const obj of group.objects || []) {
+          const objSubPlanId = String(obj.subPlanId ?? groupSubPlanId);
+
+          if (objSubPlanId !== subPlanId) {
+            continue;
+          }
+
+          const objectId = obj.id;
+          const modelId = obj.modelId ?? group.modelId;
+          const parsedDate = parseDate(obj.assignedDate || obj.date);
+
+          if (objectId == null || modelId == null || !parsedDate) {
+            continue;
+          }
+
+          const modelKey = String(modelId);
+
+          if (!modelGroups.has(modelKey)) {
+            modelGroups.set(modelKey, {
+              modelId,
+              objects: [],
+            });
+          }
+
+          modelGroups.get(modelKey).objects.push({
+            objectId,
+            simulationTime: parsedDate.valueOf(),
+            camera: obj.camera,
+          });
+        }
+      }
+
+      if (!modelGroups.size) {
+        message.warning("No valid objects found for simulation.");
         return;
       }
 
-      const groupSubPlanId = String(group.subPlanId ?? "");
+      /*
+       * Convert Internal Object IDs -> Runtime IDs theo từng model.
+       * Convert một lần cho cả model thay vì gọi API cho từng object.
+       */
+      const items = [];
 
-      const objects = group.objects || [];
+      for (const group of modelGroups.values()) {
+        const uniqueObjectMap = new Map();
 
-      objects.forEach((obj) => {
-        const objSubPlanId = String(obj.subPlanId ?? groupSubPlanId ?? "");
+        for (const object of group.objects) {
+          const objectKey = String(object.objectId);
 
-        if (objSubPlanId !== subPlanId) {
-          return;
+          if (!uniqueObjectMap.has(objectKey)) {
+            uniqueObjectMap.set(objectKey, object);
+          }
         }
 
-        const runtimeId = obj.id ?? obj.runtimeId ?? obj.objectRuntimeId;
-        const modelId = obj.modelId || group.modelId;
+        const uniqueObjects = [...uniqueObjectMap.values()];
+        const objectIds = uniqueObjects.map((object) => object.objectId);
 
-        if (runtimeId == null || modelId == null) {
-          return;
+        let runtimeIds = [];
+
+        try {
+          runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
+            group.modelId,
+            objectIds,
+          );
+        } catch (error) {
+          console.error("Failed to convert object IDs to runtime IDs:", {
+            modelId: group.modelId,
+            objectIds,
+            error,
+          });
+
+          continue;
         }
 
-        const parsedDate = parseDate(obj.assignedDate || obj.date);
+        uniqueObjects.forEach((object, index) => {
+          const runtimeId = runtimeIds?.[index];
 
-        if (!parsedDate) {
-          return;
-        }
+          if (runtimeId == null) {
+            console.warn("Runtime ID was not found:", {
+              modelId: group.modelId,
+              objectId: object.objectId,
+            });
 
-        items.push({
-          modelId,
-          runtimeId,
-          simulationTime: parsedDate.valueOf(),
-          camera: obj.camera,
+            return;
+          }
+
+          items.push({
+            modelId: group.modelId,
+            objectId: object.objectId,
+            runtimeId,
+            simulationTime: object.simulationTime,
+            camera: object.camera,
+          });
         });
-      });
-    });
+      }
 
-    if (!items.length) {
-      return;
-    }
+      if (!items.length) {
+        message.warning("Cannot convert the selected objects to runtime IDs.");
+        return;
+      }
 
-    items.sort((a, b) => a.simulationTime - b.simulationTime);
+      /*
+       * Sắp xếp theo ngày thi công.
+       * Khi cùng ngày, giữ thứ tự hiện tại.
+       */
+      items.sort((a, b) => a.simulationTime - b.simulationTime);
 
-    // 2) get color
-    const color = subPlan.color;
+      const color = subPlan.color;
+      const DELAY_MS = 200;
 
-    // 3) Isolate objects
-    const DELAY_MS = 200;
+      /*
+       * Lưu các Runtime ID đã xuất hiện theo từng model
+       * để isolate theo kiểu tích lũy.
+       */
+      const accumulatedModelMap = new Map();
 
-    const modelMap = new Map();
-
-    try {
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
         const modelKey = String(item.modelId);
 
-        if (!modelMap.has(modelKey)) {
-          modelMap.set(modelKey, {
+        if (!accumulatedModelMap.has(modelKey)) {
+          accumulatedModelMap.set(modelKey, {
             modelId: item.modelId,
-            entityIds: [],
+            entityIds: new Set(),
           });
         }
 
-        modelMap.get(modelKey).entityIds.push(item.runtimeId);
+        accumulatedModelMap.get(modelKey).entityIds.add(item.runtimeId);
 
-        const accumulatedObjects = Array.from(modelMap.values()).map(
+        const accumulatedObjects = [...accumulatedModelMap.values()].map(
           (group) => ({
-            ...group,
-            entityIds: [...new Set(group.entityIds)],
+            modelId: group.modelId,
+            entityIds: [...group.entityIds],
           }),
         );
 
-        // Isolate objects
-        await tcapi.viewer.isolateEntities(
-          accumulatedObjects.map((group) => ({
-            modelId: group.modelId,
-            entityIds: group.entityIds,
-          })),
-        );
+        /*
+         * Isolate toàn bộ object đã chạy đến bước hiện tại.
+         */
+        await tcapi.viewer.isolateEntities(accumulatedObjects);
 
-        //Color objects
+        /*
+         * Tô màu object hiện tại.
+         */
         if (color) {
           await tcapi.viewer.setObjectState(
             {
@@ -823,15 +957,33 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
             },
             {
               color: {
-                r: color.r,
-                g: color.g,
-                b: color.b,
+                r: color.r ?? 0,
+                g: color.g ?? 0,
+                b: color.b ?? 0,
               },
               visible: true,
             },
           );
         }
 
+        /*
+         * Highlight object hiện tại.
+         */
+        await tcapi.viewer.setSelection(
+          {
+            modelObjectIds: [
+              {
+                modelId: item.modelId,
+                objectRuntimeIds: [item.runtimeId],
+              },
+            ],
+          },
+          "set",
+        );
+
+        /*
+         * Di chuyển camera nếu object đã lưu camera.
+         */
         if (item.camera) {
           await tcapi.viewer.setCamera(item.camera, {
             animationTime: 1000,
@@ -844,6 +996,7 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
       }
     } catch (error) {
       console.error("handleSimulation error:", error);
+      message.error("Simulation failed.");
     }
   };
 
@@ -876,6 +1029,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
     dispatch(
       SetObjectsRequest({
+        projectId,
+        planId: plan.id,
         subPlanId: subPlan.id,
         objects: sortedObjects,
       }),
@@ -884,6 +1039,10 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
   const handleHighlightObject = async (subPlan) => {
     try {
+      if (!subPlan?.id) {
+        return;
+      }
+
       const tcapi = await WorkspaceAPI.connect(window.parent);
 
       const currentGroup = sequenceObjects.find(
@@ -903,37 +1062,138 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
         return;
       }
 
-      // Group objects by modelId and prevent duplicate objectRuntimeIds.
-      const modelGroups = new Map();
+      /*
+       * Runtime IDs that are already available
+       * can be sent directly to setSelection.
+       */
+      const runtimeGroups = new Map();
 
-      for (const obj of objects) {
-        if (obj?.modelId == null || obj?.id == null) {
+      /*
+       * Objects without runtimeId must be resolved
+       * from stable external object IDs.
+       */
+      const unresolvedGroups = new Map();
+
+      for (const object of objects) {
+        const modelId = object?.modelId;
+
+        const runtimeId = object?.runtimeId;
+
+        const externalId =
+          object?.externalId ??
+          object?.external_id ??
+          object?.objectId ??
+          object?.id;
+
+        if (modelId == null) {
           continue;
         }
 
-        const modelId = String(obj.modelId);
-        const objectId = Number(obj.id);
+        const modelKey = String(modelId);
 
-        if (!Number.isFinite(objectId)) {
+        /*
+         * Prefer the runtime ID resolved during hydration.
+         */
+        if (runtimeId != null && Number.isFinite(Number(runtimeId))) {
+          if (!runtimeGroups.has(modelKey)) {
+            runtimeGroups.set(modelKey, {
+              modelId,
+              runtimeIds: new Set(),
+            });
+          }
+
+          runtimeGroups.get(modelKey).runtimeIds.add(Number(runtimeId));
+
           continue;
         }
 
-        if (!modelGroups.has(modelId)) {
-          modelGroups.set(modelId, {
-            modelId: obj.modelId,
-            objectRuntimeIds: new Set(),
+        /*
+         * Do not convert external IDs to Number.
+         * Trimble external object IDs can be strings.
+         */
+        if (externalId == null || externalId === "") {
+          continue;
+        }
+
+        if (!unresolvedGroups.has(modelKey)) {
+          unresolvedGroups.set(modelKey, {
+            modelId,
+            externalIds: [],
           });
         }
 
-        modelGroups.get(modelId).objectRuntimeIds.add(objectId);
+        unresolvedGroups.get(modelKey).externalIds.push(externalId);
       }
 
-      const modelObjectIds = [...modelGroups.values()]
+      /*
+       * Resolve objects that do not currently
+       * have a runtimeId.
+       */
+      for (const group of unresolvedGroups.values()) {
+        const uniqueExternalIds = [
+          ...new Map(
+            group.externalIds.map((externalId) => [
+              String(externalId),
+              externalId,
+            ]),
+          ).values(),
+        ];
+
+        if (!uniqueExternalIds.length) {
+          continue;
+        }
+
+        try {
+          const runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
+            group.modelId,
+            uniqueExternalIds,
+          );
+
+          const validRuntimeIds = (runtimeIds || [])
+            .map(Number)
+            .filter(Number.isFinite);
+
+          if (!validRuntimeIds.length) {
+            console.warn("No runtime IDs were resolved:", {
+              modelId: group.modelId,
+              externalIds: uniqueExternalIds,
+            });
+
+            continue;
+          }
+
+          const modelKey = String(group.modelId);
+
+          if (!runtimeGroups.has(modelKey)) {
+            runtimeGroups.set(modelKey, {
+              modelId: group.modelId,
+              runtimeIds: new Set(),
+            });
+          }
+
+          const targetGroup = runtimeGroups.get(modelKey);
+
+          validRuntimeIds.forEach((runtimeId) => {
+            targetGroup.runtimeIds.add(runtimeId);
+          });
+        } catch (error) {
+          console.error("Failed to resolve runtime IDs:", {
+            modelId: group.modelId,
+            externalIds: uniqueExternalIds,
+            error,
+          });
+        }
+      }
+
+      const modelObjectIds = [...runtimeGroups.values()]
         .map((group) => ({
           modelId: group.modelId,
-          objectRuntimeIds: [...group.objectRuntimeIds],
+
+          objectRuntimeIds: [...group.runtimeIds],
         }))
         .filter((group) => group.objectRuntimeIds.length > 0);
+
+      console.log("Highlight modelObjectIds:", modelObjectIds);
 
       if (!modelObjectIds.length) {
         await tcapi.viewer.setSelection(
@@ -942,6 +1202,8 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
           },
           "set",
         );
+
+        console.warn("No valid objects were found for highlighting.");
 
         return;
       }
@@ -958,9 +1220,16 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   };
 
   const getObjectKey = (obj) => {
-    const runtimeId = obj.id || obj.runtimeId || obj.objectRuntimeId;
+    const modelId = obj.modelId ?? obj.modelExternalId ?? obj.model_external_id;
 
-    return `${obj.modelId}-${runtimeId}`;
+    const objectId =
+      obj.externalId ??
+      obj.external_id ??
+      obj.id ??
+      obj.runtimeId ??
+      obj.objectRuntimeId;
+
+    return `${String(modelId)}-${String(objectId)}`;
   };
 
   const getObjectDate = (obj) => {
@@ -984,7 +1253,7 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
     });
 
     return objectIndexes;
-  }, [sequenceObjects, plan.id, subPlans]);
+  }, [sequenceObjects]);
 
   useEffect(() => {
     return () => {
@@ -1003,8 +1272,6 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
             DeleteSubPlanRequest({
               planId: plan.id,
               subPlanId: item.id,
-              subPlans,
-              sequenceObjects,
             }),
           );
         }}

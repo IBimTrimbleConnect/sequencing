@@ -1,12 +1,7 @@
-import axios from "axios";
-import {
-  all,
-  call,
-  put,
-  takeLatest,
-  takeEvery,
-  fork,
-} from "redux-saga/effects";
+import { all, call, put, takeEvery, takeLatest } from "redux-saga/effects";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+
 import {
   GetSubPlansSuccess,
   GetSubPlansFailure,
@@ -16,8 +11,6 @@ import {
   DeleteSubPlanSuccess,
   UpdateSubPlanSuccess,
   UpdateSubPlanFailure,
-  UpdateCommentSuccess,
-  UpdateCommentFailure,
   SetObjectsSuccess,
   SetObjectsFailure,
   GetSourceSequenceSuccess,
@@ -30,730 +23,901 @@ import {
   UpdatePlanFailure,
   DeletePlanSuccess,
   DeletePlanFailure,
-  UploadTemplateSuccess,
-  UploadTemplateFailure,
   ExportTemplateSuccess,
   ExportTemplateFailure,
+  UpdateSequenceObjectSortDatesSuccess,
+  UpdateSequenceObjectSortDatesFailure,
+  UpdateSequenceObjectFieldsSuccess,
+  UpdateSequenceObjectFieldsFailure,
 } from "./action";
-import instance from "../../interceptors/axios";
-import ExcelJS from "exceljs";
-import { saveAs } from "file-saver";
 
-const TEMPLATE_FOLDER_NAME = "SequencingTemplate";
-//Backup
-function safeParseJson(value, fallback = []) {
-  try {
-    if (!value) return fallback;
-    return JSON.parse(value);
-  } catch (error) {
-    console.error("JSON parse error:", error, value);
-    return fallback;
-  }
+import * as actionType from "./actionTypes";
+
+import {
+  getPlansByProject,
+  createPlan,
+  updatePlan,
+  deletePlan,
+} from "../../services/planService";
+
+import {
+  getSubPlansByProject,
+  getSubPlansByPlan,
+  createSubPlan,
+  updateSubPlan,
+  deleteSubPlan,
+  createSubPlans,
+} from "../../services/subPlanService";
+
+import {
+  getSequenceObjectsByProject,
+  replaceSequenceObjectsForSubPlan,
+  copySequenceObjectsToSubPlans,
+  updateSequenceObjectSortDates,
+  updateSequenceObjectFields,
+} from "../../services/sequenceObjectService";
+import * as WorkspaceAPI from "trimble-connect-workspace-api";
+
+import { extractRuntimeObjectProperties } from "../../utils/runtimeObjectProperties";
+
+function getErrorMessage(error, fallback) {
+  return error?.message || error?.details || error?.hint || fallback;
 }
-function parseSequenceObjects(comments) {
-  if (!comments || comments.length === 0) return [];
 
-  const contents = comments
-    .map((x) => {
-      const [id, content = ""] = x.description.split("tuan");
+/* -------------------------------------------------------------------------- */
+/*                                   PLANS                                    */
+/* -------------------------------------------------------------------------- */
 
-      return {
-        id,
-        content,
-      };
-    })
-    .sort((a, b) => Number(a.id) - Number(b.id));
-
-  const content = contents.map((x) => x.content).join("");
-
-  const parsed = safeParseJson(content, []);
-
-  if (Array.isArray(parsed)) return parsed;
-
-  if (Array.isArray(parsed.objects)) return parsed.objects;
-
-  return [];
-}
 function* getPlansSaga(action) {
   try {
-    const { projectId, projectName } = action.payload;
-    const templateFolderId = yield call(getOrCreateTemplateFolder, {
-      projectId,
-      projectName,
-    });
-    const getFolderUrl = `/folders/by_path?path=${encodeURIComponent(action.payload.projectName)}&projectId=${action.payload.projectId}`;
+    const payload = action.payload || {};
 
-    const response = yield call(instance.get, getFolderUrl);
+    const projectId = payload.projectId;
 
-    const folders = response.data.filter((x) => x.name === "Sequence");
+    const projectName = payload.projectName || "";
 
-    console.log(folders);
+    const currentUser = payload.currentUser || null;
 
-    if (folders.length === 0) {
-      const insertFolderUrl = `/folders`;
-
-      const insertFolderResponse = yield call(instance.post, insertFolderUrl, {
-        name: "Sequence",
-        parentId: response.data[0].parentId,
-      });
-
-      yield put(
-        GetPlanSuccess({
-          rootCommentId: null,
-          folderId: insertFolderResponse.data.id,
-          plans: [],
-          subPlans: [],
-          sequenceObjects: [],
-        }),
-      );
-
-      return;
+    if (!projectId) {
+      throw new Error("Trimble project ID is required.");
     }
 
-    const sequenceFolderId = folders[0].id;
+    const tcapi = yield call(WorkspaceAPI.connect, window.parent);
 
-    const getRootCommentUrl = `/comments?objectId=${sequenceFolderId}&objectType=FOLDER`;
-    const rootCommentResponse = yield call(instance.get, getRootCommentUrl);
+    const [plans, subPlans, sequenceObjectRows] = yield all([
+      call(getPlansByProject, projectId),
+      call(getSubPlansByProject, projectId),
+      call(getSequenceObjectsByProject, projectId),
+    ]);
 
-    const rootCommentId =
-      rootCommentResponse.data.length > 0
-        ? rootCommentResponse.data[0].id
-        : null;
+    const hydratedObjects = yield call(hydrateSequenceObjects, {
+      tcapi,
+      objects: sequenceObjectRows,
+    });
 
-    const plans = safeParseJson(
-      rootCommentResponse.data.length > 0
-        ? rootCommentResponse.data[0].description
-        : "[]",
-      [],
+    const objectsBySubPlan = new Map();
+
+    for (const object of hydratedObjects) {
+      const subPlanId = object?.subPlanId;
+
+      if (subPlanId == null) {
+        continue;
+      }
+
+      const key = String(subPlanId);
+
+      if (!objectsBySubPlan.has(key)) {
+        objectsBySubPlan.set(key, []);
+      }
+
+      objectsBySubPlan.get(key).push(object);
+    }
+
+    const sequenceObjects = subPlans.map((subPlan) => ({
+      planId: subPlan.planId,
+
+      subPlanId: subPlan.id,
+
+      objects: (objectsBySubPlan.get(String(subPlan.id)) || []).map(
+        (object) => ({
+          ...object,
+          planId: subPlan.planId,
+          subPlanId: subPlan.id,
+        }),
+      ),
+    }));
+
+    yield put(
+      GetPlanSuccess({
+        projectId: String(projectId),
+
+        projectName,
+
+        currentUser,
+
+        plans,
+        subPlans,
+        sequenceObjects,
+      }),
     );
+  } catch (error) {
+    console.error("Failed to load sequencing data:", error);
 
-    const allSubPlans = [];
-    const allSequenceObjects = [];
+    yield put(
+      GetPlanFailure(error?.message || "Failed to load sequencing data."),
+    );
+  }
+}
 
-    for (const plan of plans) {
-      const getSubPlanCommentUrl = `/comments?objectId=${plan.id}&objectType=FOLDER`;
+const getStableModelId = (object) =>
+  object?.modelId ??
+  object?.modelExternalId ??
+  object?.model_external_id ??
+  null;
 
-      const subPlanCommentResponse = yield call(
-        instance.get,
-        getSubPlanCommentUrl,
+const getStableExternalId = (object) =>
+  object?.externalId ??
+  object?.external_id ??
+  object?.objectId ??
+  object?.id ??
+  null;
+
+const createRuntimeObjectKey = (modelId, externalId) =>
+  `${String(modelId)}::${String(externalId)}`;
+
+const createUnavailableObject = ({ object, modelId, externalId }) => ({
+  ...object,
+
+  modelId,
+  modelExternalId:
+    object?.modelExternalId ?? object?.model_external_id ?? modelId,
+
+  externalId,
+
+  /*
+   * Keep id as stable external object ID.
+   */
+  id: externalId,
+
+  runtimeId: null,
+
+  asmPos: object?.asmPos || "",
+
+  asmName: object?.asmName || "",
+
+  name: object?.name || "",
+
+  positionCode: object?.positionCode || "",
+
+  rawWeight: object?.rawWeight ?? null,
+
+  weight: object?.rawWeight ?? object?.weight ?? null,
+
+  rawLength: object?.rawLength ?? null,
+
+  length: object?.rawLength ?? object?.length ?? null,
+
+  rawCog: object?.rawCog ?? null,
+
+  cog: object?.rawCog ?? object?.cog ?? null,
+
+  objectAvailable: false,
+});
+
+async function hydrateSequenceObjects({ tcapi, objects }) {
+  if (!Array.isArray(objects) || objects.length === 0) {
+    return [];
+  }
+
+  const modelGroups = new Map();
+
+  for (const object of objects) {
+    const modelId = getStableModelId(object);
+
+    const externalId = getStableExternalId(object);
+
+    if (modelId == null || externalId == null) {
+      continue;
+    }
+
+    const modelKey = String(modelId);
+
+    if (!modelGroups.has(modelKey)) {
+      modelGroups.set(modelKey, {
+        modelId,
+        entries: [],
+      });
+    }
+
+    modelGroups.get(modelKey).entries.push({
+      source: object,
+      externalId,
+    });
+  }
+
+  const hydratedMap = new Map();
+
+  for (const group of modelGroups.values()) {
+    /*
+     * Remove duplicated external IDs before
+     * requesting Trimble Connect.
+     */
+    const uniqueEntries = [
+      ...new Map(
+        group.entries.map((entry) => [String(entry.externalId), entry]),
+      ).values(),
+    ];
+
+    const externalIds = uniqueEntries.map((entry) => entry.externalId);
+
+    let runtimeIds = [];
+
+    try {
+      runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
+        group.modelId,
+        externalIds,
       );
+    } catch (error) {
+      console.error("Failed to resolve runtime IDs:", {
+        modelId: group.modelId,
+        externalIds,
+        error,
+      });
 
-      const phaseCommentId =
-        subPlanCommentResponse.data.length > 0
-          ? subPlanCommentResponse.data[0].id
-          : null;
+      for (const entry of uniqueEntries) {
+        hydratedMap.set(
+          createRuntimeObjectKey(group.modelId, entry.externalId),
+          createUnavailableObject({
+            object: entry.source,
+            modelId: group.modelId,
+            externalId: entry.externalId,
+          }),
+        );
+      }
 
-      const subPlansInPlan = safeParseJson(
-        subPlanCommentResponse.data.length > 0
-          ? subPlanCommentResponse.data[0].description
-          : "[]",
-        [],
-      );
+      continue;
+    }
 
-      const normalizedSubPlans = subPlansInPlan.map((subPlan) => ({
-        ...subPlan,
-        planId: plan.id,
-        phaseCommentId,
-      }));
+    const availableEntries = [];
 
-      allSubPlans.push(...normalizedSubPlans);
+    uniqueEntries.forEach((entry, index) => {
+      const runtimeId = runtimeIds?.[index];
 
-      for (const subPlan of normalizedSubPlans) {
-        const getSequenceCommentUrl = `/comments?objectId=${subPlan.id}&objectType=FOLDER`;
-
-        const sequenceCommentResponse = yield call(
-          instance.get,
-          getSequenceCommentUrl,
+      if (runtimeId == null) {
+        hydratedMap.set(
+          createRuntimeObjectKey(group.modelId, entry.externalId),
+          createUnavailableObject({
+            object: entry.source,
+            modelId: group.modelId,
+            externalId: entry.externalId,
+          }),
         );
 
-        const objects = parseSequenceObjects(sequenceCommentResponse.data);
+        return;
+      }
 
-        const normalizedObjects = objects.map((obj) => ({
-          ...obj,
-          planId: plan.id,
-          subPlanId: subPlan.id,
-        }));
+      availableEntries.push({
+        ...entry,
+        runtimeId,
+      });
+    });
 
-        allSequenceObjects.push({
-          planId: plan.id,
-          subPlanId: subPlan.id,
-          objects: normalizedObjects,
+    if (!availableEntries.length) {
+      continue;
+    }
+
+    let propertyItems = [];
+
+    try {
+      propertyItems = await tcapi.viewer.getObjectProperties(
+        group.modelId,
+        availableEntries.map((entry) => entry.runtimeId),
+      );
+    } catch (error) {
+      console.error("Failed to load object properties:", {
+        modelId: group.modelId,
+        runtimeIds: availableEntries.map((entry) => entry.runtimeId),
+        error,
+      });
+
+      propertyItems = [];
+    }
+
+    availableEntries.forEach((entry, index) => {
+      const propertyItem = propertyItems?.[index];
+
+      const runtimeProperties = propertyItem
+        ? extractRuntimeObjectProperties(propertyItem)
+        : {
+            asmPos: "",
+            asmName: "",
+            name: "",
+            positionCode: "",
+            rawWeight: null,
+            weight: null,
+            rawLength: null,
+            length: null,
+            rawCog: null,
+            cog: null,
+          };
+
+      hydratedMap.set(createRuntimeObjectKey(group.modelId, entry.externalId), {
+        ...entry.source,
+
+        modelId: group.modelId,
+
+        modelExternalId:
+          entry.source?.modelExternalId ??
+          entry.source?.model_external_id ??
+          group.modelId,
+
+        externalId: entry.externalId,
+
+        /*
+         * Keep id as stable external ID.
+         */
+        id: entry.externalId,
+
+        runtimeId: entry.runtimeId,
+
+        ...runtimeProperties,
+
+        objectAvailable: Boolean(propertyItem),
+      });
+    });
+  }
+
+  /*
+   * Return objects in Supabase order.
+   */
+  return objects.map((object) => {
+    const modelId = getStableModelId(object);
+
+    const externalId = getStableExternalId(object);
+
+    if (modelId == null || externalId == null) {
+      return {
+        ...object,
+        objectAvailable: false,
+      };
+    }
+
+    return (
+      hydratedMap.get(createRuntimeObjectKey(modelId, externalId)) ||
+      createUnavailableObject({
+        object,
+        modelId,
+        externalId,
+      })
+    );
+  });
+}
+
+function* updateSequenceObjectSortDatesSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const updatedObjects = yield call(
+      updateSequenceObjectSortDates,
+      payload.objects || [],
+    );
+
+    yield put(
+      UpdateSequenceObjectSortDatesSuccess({
+        subPlanId: payload.subPlanId,
+        objects: updatedObjects,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to update sequence object order:", error);
+
+    yield put(
+      UpdateSequenceObjectSortDatesFailure(
+        error?.message || "Failed to update sequence object order.",
+      ),
+    );
+  }
+}
+
+function* createPlanSaga(action) {
+  try {
+    const { projectId, name, color } = action.payload || {};
+
+    const newPlan = yield call(createPlan, {
+      trimbleProjectId: projectId,
+      name,
+      color,
+    });
+
+    yield put(
+      CreatePlanSuccess({
+        newPlan,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to create plan:", error);
+
+    yield put(
+      CreatePlanFailure(getErrorMessage(error, "Failed to create plan.")),
+    );
+  }
+}
+
+function* updatePlanSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const planId = payload.id || payload.planId;
+
+    if (!planId) {
+      throw new Error("Plan ID is required.");
+    }
+
+    const updatedPlan = yield call(updatePlan, {
+      id: planId,
+      name: payload.name,
+      color: payload.color,
+      sortDatetime: payload.sortDatetime ?? payload.sort_datetime,
+    });
+
+    yield put(
+      UpdatePlanSuccess({
+        updatedPlan,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to update Plan:", error);
+
+    yield put(
+      UpdatePlanFailure(getErrorMessage(error, "Failed to update Plan.")),
+    );
+  }
+}
+
+function* deletePlanSaga(action) {
+  try {
+    const planId =
+      action.payload?.planId || action.payload?.folderId || action.payload?.id;
+
+    if (!planId) {
+      throw new Error("Plan ID is required.");
+    }
+
+    yield call(deletePlan, planId);
+
+    yield put(
+      DeletePlanSuccess({
+        deletedPlanId: planId,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to delete plan:", error);
+
+    yield put(
+      DeletePlanFailure(getErrorMessage(error, "Failed to delete plan.")),
+    );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 SUB PLANS                                  */
+/* -------------------------------------------------------------------------- */
+
+function* getSubPlansSaga(action) {
+  try {
+    const { projectId, planId } = action.payload || {};
+
+    let subPlans;
+
+    if (planId) {
+      subPlans = yield call(getSubPlansByPlan, planId);
+    } else if (projectId) {
+      subPlans = yield call(getSubPlansByProject, projectId);
+    } else {
+      throw new Error("Project ID or Plan ID is required.");
+    }
+
+    yield put(
+      GetSubPlansSuccess({
+        subPlans,
+        sequenceObjects: [],
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to load sub plans:", error);
+
+    yield put(
+      GetSubPlansFailure(getErrorMessage(error, "Failed to load sub plans.")),
+    );
+  }
+}
+
+function* createSubPlanSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const projectId = payload.projectId || payload.trimbleProjectId;
+
+    const planId = payload.planId || payload.phaseFolderId;
+
+    if (!projectId) {
+      throw new Error("Trimble project ID is required.");
+    }
+
+    if (!planId) {
+      throw new Error("Plan ID is required.");
+    }
+
+    if (!payload.name?.trim()) {
+      throw new Error("SubPlan name is required.");
+    }
+
+    const newSubPlan = yield call(createSubPlan, {
+      trimbleProjectId: projectId,
+      planId,
+      name: payload.name.trim(),
+      color: payload.color || null,
+      sortDatetime: payload.sortDatetime ?? payload.sort_datetime ?? null,
+    });
+
+    yield put(
+      CreateSubPlanSuccess({
+        newSubPlan,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to create sub plan:", error);
+
+    yield put(
+      CreateSubPlanFailure(
+        getErrorMessage(error, "Failed to create sub plan."),
+      ),
+    );
+  }
+}
+
+function* updateSubPlanSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const subPlanId = payload.id || payload.subPlanId;
+
+    if (!subPlanId) {
+      throw new Error("SubPlan ID is required.");
+    }
+
+    const updatedSubPlan = yield call(updateSubPlan, {
+      id: subPlanId,
+      name: payload.name,
+      color: payload.color,
+      sortDatetime: payload.sortDatetime ?? payload.sort_datetime,
+    });
+
+    yield put(
+      UpdateSubPlanSuccess({
+        updatedSubPlan,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to update SubPlan:", error);
+
+    yield put(
+      UpdateSubPlanFailure(getErrorMessage(error, "Failed to update SubPlan.")),
+    );
+  }
+}
+
+function* deleteSubPlanSaga(action) {
+  try {
+    const subPlanId = action.payload?.subPlanId || action.payload?.id;
+
+    if (!subPlanId) {
+      throw new Error("SubPlan ID is required.");
+    }
+
+    yield call(deleteSubPlan, subPlanId);
+
+    yield put(
+      DeleteSubPlanSuccess({
+        deletedSubPlanId: subPlanId,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to delete sub plan:", error);
+
+    yield put(
+      DeleteSubPlanFailure(
+        getErrorMessage(error, "Failed to delete sub plan."),
+      ),
+    );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            COPY / SOURCE SEQUENCE                           */
+/* -------------------------------------------------------------------------- */
+
+function* getSourceSequenceSaga(action) {
+  try {
+    const { planId } = action.payload || {};
+
+    if (!planId) {
+      throw new Error("Source Plan ID is required.");
+    }
+
+    const sequences = yield call(getSubPlansByPlan, planId);
+
+    yield put(
+      GetSourceSequenceSuccess({
+        sequences,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to load source sequence:", error);
+
+    yield put(
+      GetSourceSequenceFailure(
+        getErrorMessage(error, "Failed to load source sequence."),
+      ),
+    );
+  }
+}
+
+function* copySequenceSaga(action) {
+  try {
+    const payload = action.payload || {};
+    const targetPlanId = payload.planId;
+
+    if (!targetPlanId) {
+      throw new Error("Target Plan ID is required.");
+    }
+
+    const sourceSubPlans = payload.newSubPlans || payload.subPlansToCopy || [];
+
+    const createdSubPlans = yield call(createSubPlans, {
+      trimbleProjectId: payload.projectId,
+      planId: targetPlanId,
+      subPlans: sourceSubPlans,
+    });
+
+    /*
+     * Optional object copy.
+     *
+     * Source subplan ID must be available as:
+     * sourceSubPlanId, sourceId, or id.
+     */
+    if (payload.copyObjects !== false) {
+      const mappings = createdSubPlans.map((createdSubPlan, index) => ({
+        sourceSubPlanId:
+          sourceSubPlans[index]?.sourceSubPlanId ||
+          sourceSubPlans[index]?.sourceId ||
+          sourceSubPlans[index]?.id,
+        targetSubPlanId: createdSubPlan.id,
+        targetPlanId,
+      }));
+
+      const validMappings = mappings.filter(
+        (mapping) => mapping.sourceSubPlanId,
+      );
+
+      if (validMappings.length > 0) {
+        yield call(copySequenceObjectsToSubPlans, {
+          trimbleProjectId: payload.projectId,
+          mappings: validMappings,
         });
       }
     }
 
     yield put(
-      GetPlanSuccess({
-        rootCommentId,
-        folderId: sequenceFolderId,
-        plans,
-        subPlans: allSubPlans,
-        sequenceObjects: allSequenceObjects,
-      }),
-    );
-  } catch (error) {
-    console.error("Error fetching sequence data:", error);
-    yield put(GetPlanFailure(error.message));
-  }
-}
-function* getSubPlansSaga(action) {
-  try {
-    //Get comment in the sequence folder
-    const getCommentUrl = `/comments?objectId=${action.payload.folderId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-
-    const subPlans = JSON.parse(
-      commentResponse.data.length > 0
-        ? commentResponse.data[0].description
-        : "[]",
-    );
-    console.log("subPlans", subPlans);
-    const sequenceObjects = [];
-    for (const subPlan of subPlans) {
-      const getSequenceCommentUrl = `/comments?objectId=${subPlan.id}&objectType=FOLDER`;
-      const sequenceCommentResponse = yield call(
-        instance.get,
-        getSequenceCommentUrl,
-      );
-      console.log("sequenceCommentResponse", sequenceCommentResponse);
-      const contents = sequenceCommentResponse.data.map((x) => {
-        return {
-          id: x.description.split("tuan")[0],
-          content: x.description.split("tuan")[1],
-        };
-      });
-      contents.sort((a, b) => parseInt(a.id) - parseInt(b.id));
-      const content = contents.map((x) => x.content).join("");
-      const objects = JSON.parse(content.length > 0 ? content : null);
-      sequenceObjects.push(objects);
-    }
-    console.log("sequenceObjects", sequenceObjects);
-    yield put(
-      GetSubPlansSuccess({
-        phaseCommentId:
-          commentResponse.data.length > 0 ? commentResponse.data[0].id : null,
-        phaseFolderId: action.payload.folderId,
-        subPlans: subPlans,
-        sequenceObjects: sequenceObjects,
-      }),
-    );
-  } catch (error) {
-    console.error("Error fetching folder:", error);
-    yield put(GetSubPlansFailure(error.message));
-  }
-}
-function* createPlanSaga(action) {
-  const insertFolderUrl = `/folders`;
-  console.log(action.payload);
-  const insertFolderBody = {
-    name: action.payload.name,
-    parentId: action.payload.rootFolderId,
-  };
-  const insertFolderResponse = yield call(
-    instance.post,
-    insertFolderUrl,
-    insertFolderBody,
-  );
-  try {
-    const newPlan = {
-      id: insertFolderResponse.data.id,
-      name: action.payload.name,
-    };
-    const newPlans = [...action.payload.plans, newPlan];
-    console.log(newPlans);
-    if (action.payload.rootCommentId) {
-      //Update comment with new phase list
-      const updateCommentUrl = `/comments/${action.payload.rootCommentId}`;
-      yield call(instance.patch, updateCommentUrl, {
-        description: JSON.stringify(newPlans),
-      });
-      yield put(
-        CreatePlanSuccess({
-          rootCommentId: action.payload.rootCommentId,
-          plans: [...action.payload.plans, newPlan],
-        }),
-      );
-    } else {
-      //Create comment with phase list
-      const createCommentUrl = `/comments`;
-      const createCommentBody = {
-        objectId: action.payload.rootFolderId,
-        objectType: "FOLDER",
-        description: JSON.stringify(newPlans),
-      };
-      console.log(createCommentBody);
-      const responseInsertComment = yield call(
-        instance.post,
-        createCommentUrl,
-        createCommentBody,
-      );
-      yield put(
-        CreatePlanSuccess({
-          rootCommentId: responseInsertComment.data.id,
-          plans: [...action.payload.plans, newPlan],
-        }),
-      );
-    }
-  } catch (error) {
-    console.error("Error creating folder:", error);
-    yield put(CreatePlanFailure(error.message));
-  }
-}
-function* updatePlanSaga(action) {
-  try {
-    //Update comment with new sequence list
-    const updateCommentUrl = `/comments/${action.payload.commentId}`;
-    yield call(instance.patch, updateCommentUrl, {
-      description: JSON.stringify(action.payload.plans),
-    });
-    yield put(
-      UpdatePlanSuccess({
-        plans: [...action.payload.plans],
-      }),
-    );
-  } catch (error) {
-    console.error("Error updating comment:", error);
-    yield put(UpdatePlanFailure(error.message));
-  }
-}
-function* deletePlanSaga(action) {
-  try {
-    //Delete folder
-    const deleteFolderUrl = `/folders/${action.payload.folderId}`;
-    var deleteStatus = false;
-    try {
-      const deleteFolderResponse = yield call(instance.delete, deleteFolderUrl);
-      console.log("deleteFolderResponse", deleteFolderResponse.status);
-      deleteStatus = deleteFolderResponse.status === 204;
-    } catch (error) {
-      deleteStatus = error.message.includes("404");
-    }
-    if (deleteStatus) {
-      const newPlans = action.payload.plans.filter(
-        (x) => x.id !== action.payload.folderId,
-      );
-
-      //Update comment with new sequence list
-      const updateCommentUrl = `/comments/${action.payload.rootCommentId}`;
-      yield call(instance.patch, updateCommentUrl, {
-        description: JSON.stringify(newPlans),
-      });
-      yield put(
-        DeletePlanSuccess({
-          plans: [...newPlans],
-          deletedPlanId: action.payload.folderId,
-        }),
-      );
-    } else {
-      yield put(DeletePlanFailure("Failed to delete plan"));
-    }
-  } catch (error) {
-    console.error("Error updating comment:", error);
-    yield put(DeletePlanFailure(error.message));
-  }
-}
-function* createSubPlanSaga(action) {
-  const insertFolderUrl = `/folders`;
-  console.log(action.payload);
-  const insertFolderBody = {
-    name: action.payload.name,
-    parentId: action.payload.phaseFolderId,
-  };
-  const insertFolderResponse = yield call(
-    instance.post,
-    insertFolderUrl,
-    insertFolderBody,
-  );
-  try {
-    const newSubPlan = {
-      id: insertFolderResponse.data.id,
-      planId: action.payload.phaseFolderId,
-      name: action.payload.name,
-      color: action.payload.color,
-      check: action.payload.check,
-    };
-    const prevSubPlans = action.payload.subPlans.filter(
-      (x) => x && x.planId === newSubPlan.planId,
-    );
-    const newSubPlans = [...prevSubPlans, newSubPlan];
-    console.log(newSubPlans);
-    if (action.payload.phaseCommentId) {
-      //Update comment with new sequence list
-      const updateCommentUrl = `/comments/${action.payload.phaseCommentId}`;
-      yield call(instance.patch, updateCommentUrl, {
-        description: JSON.stringify(newSubPlans),
-      });
-      yield put(
-        CreateSubPlanSuccess({
-          phaseCommentId: action.payload.phaseCommentId,
-          subPlans: [...action.payload.subPlans, newSubPlan],
-          sequenceObjects: [
-            ...action.payload.sequenceObjects,
-            {
-              planId: newSubPlan.planId,
-              subPlanId: newSubPlan.id,
-              objects: [],
-            },
-          ],
-        }),
-      );
-    } else {
-      //Create comment with sequence list
-      const createCommentUrl = `/comments`;
-      const createCommentBody = {
-        objectId: action.payload.phaseFolderId,
-        objectType: "FOLDER",
-        description: JSON.stringify(newSubPlans),
-      };
-      const responseInsertComment = yield call(
-        instance.post,
-        createCommentUrl,
-        createCommentBody,
-      );
-      yield put(
-        CreateSubPlanSuccess({
-          phaseCommentId: responseInsertComment.data.id,
-          subPlans: [...action.payload.subPlans, newSubPlan],
-          sequenceObjects: [
-            ...action.payload.sequenceObjects,
-            {
-              planId: newSubPlan.planId,
-              subPlanId: newSubPlan.id,
-              objects: [],
-            },
-          ],
-        }),
-      );
-    }
-  } catch (error) {
-    console.error("Error creating folder:", error);
-    yield put(CreateSubPlanFailure(error.message));
-  }
-}
-function* updateSubPlanSaga(action) {
-  try {
-    //Get comment in the folder
-    const getCommentUrl = `/comments?objectId=${action.payload.subPlans[0].planId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-    const comments = commentResponse.data;
-    //Update comment with new sequence list
-    const updateCommentUrl = `/comments/${comments[0].id}`;
-    yield call(instance.patch, updateCommentUrl, {
-      description: JSON.stringify(action.payload.subPlans),
-    });
-    yield put(
       UpdateSubPlanSuccess({
-        subPlans: [...action.payload.subPlans],
+        subPlans: [...(payload.subPlans || []), ...createdSubPlans],
       }),
     );
   } catch (error) {
-    console.error("Error updating comment:", error);
-    yield put(UpdateSubPlanFailure(error.message));
-  }
-}
-function* deleteSubPlanSaga(action) {
-  try {
-    console.log("deleteSubPlanSaga", action.payload);
-    //Delete folder
-    const deleteFolderUrl = `/folders/${action.payload.subPlanId}`;
-    var deleteStatus = false;
-    try {
-      const deleteFolderResponse = yield call(instance.delete, deleteFolderUrl);
-      console.log("deleteFolderResponse", deleteFolderResponse.status);
-      deleteStatus = deleteFolderResponse.status === 204;
-    } catch (error) {
-      deleteStatus = error.message.includes("404");
-    }
-    if (deleteStatus) {
-      const newSubPlans = action.payload.subPlans.filter(
-        (x) => x && x.id !== action.payload.subPlanId,
-      );
-      const newSequenceObjects = action.payload.sequenceObjects.filter(
-        (x) => x && x.subPlanId !== action.payload.subPlanId,
-      );
-      //Get comment in the folder
-      const getCommentUrl = `/comments?objectId=${action.payload.planId}&objectType=FOLDER`;
-      const commentResponse = yield call(instance.get, getCommentUrl);
-      const comments = commentResponse.data;
-
-      //Update comment with new sequence list
-      const updateCommentUrl = `/comments/${comments[0].id}`;
-      yield call(instance.patch, updateCommentUrl, {
-        description: JSON.stringify(newSubPlans),
-      });
-      yield put(
-        DeleteSubPlanSuccess({
-          subPlans: [...newSubPlans],
-          sequenceObjects: [...newSequenceObjects],
-        }),
-      );
-    } else {
-      yield put(DeleteSubPlanFailure("Failed to delete sub plan"));
-    }
-  } catch (error) {
-    console.error("Error updating comment:", error);
-    yield put(DeleteSubPlanFailure(error.message));
-  }
-}
-function* getSourceSequenceSaga(action) {
-  try {
-    //Get comment in the sequence folder
-    const getCommentUrl = `/comments?objectId=${action.payload.folderId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-
-    const sequences = JSON.parse(
-      commentResponse.data.length > 0
-        ? commentResponse.data[0].description
-        : "[]",
-    );
+    console.error("Failed to copy sequence:", error);
 
     yield put(
-      GetSourceSequenceSuccess({
-        sequences: sequences,
-      }),
-    );
-  } catch (error) {
-    console.error("Error fetching folder:", error);
-    yield put(GetSourceSequenceFailure(error.message));
-  }
-}
-function* copySequenceSaga(action) {
-  try {
-    const newSubPlans = [];
-
-    for (const subPlan of action.payload.newSubPlans) {
-      const insertFolderUrl = "/folders";
-      const insertFolderBody = {
-        name: subPlan.name,
-        parentId: action.payload.planId,
-      };
-
-      const insertFolderResponse = yield call(
-        instance.post,
-        insertFolderUrl,
-        insertFolderBody,
-      );
-
-      newSubPlans.push({
-        id: insertFolderResponse.data.id,
-        planId: action.payload.planId,
-        name: subPlan.name,
-        color: subPlan.color,
-        check: false,
-      });
-    }
-    //Get comment in the folder
-    const getCommentUrl = `/comments?objectId=${action.payload.planId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-    const comments = commentResponse.data;
-    console.log("comments", comments);
-    if (comments.length === 0) {
-      //Create comment with sequence list
-      const createCommentUrl = `/comments`;
-      const createCommentBody = {
-        objectId: action.payload.planId,
-        objectType: "FOLDER",
-        description: JSON.stringify(newSubPlans),
-      };
-      const responseInsertComment = yield call(
-        instance.post,
-        createCommentUrl,
-        createCommentBody,
-      );
-    } else {
-      //Update comment with new sequence list
-      const updateCommentUrl = `/comments/${comments[0].id}`;
-      yield call(instance.patch, updateCommentUrl, {
-        description: JSON.stringify(newSubPlans),
-      });
-    }
-    yield put(
-      UpdateSubPlanSuccess({
-        subPlans: [...action.payload.subPlans, ...newSubPlans],
-      }),
-    );
-  } catch (error) {
-    console.error("Error updating comment:", error);
-    const message = error?.message ?? "Something went wrong";
-    yield put(UpdateSubPlanFailure(error.message));
-  }
-}
-function* updateCommentSaga(action) {
-  try {
-    //Get comment in the folder
-    const getCommentUrl = `/comments?objectId=${action.payload.folderId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-    const comments = commentResponse.data;
-    //Update comment with new sequence list
-    const updateCommentUrl = `/comments/${comments[0].id}`;
-    yield call(instance.patch, updateCommentUrl, {
-      description: JSON.stringify(action.payload.subPlans),
-    });
-    yield put(
-      UpdateCommentSuccess({
-        subPlans: [...action.payload.subPlans],
-      }),
-    );
-  } catch (error) {
-    console.error("Error updating comment:", error);
-    yield put(UpdateCommentFailure(error.message));
-  }
-}
-function* setObjectsSaga(action) {
-  try {
-    console.log("Set objects saga", action.payload);
-    const subPlanId = action.payload.subPlanId;
-    console.log(subPlanId);
-    //Get all comments
-    const getCommentUrl = `/comments?objectId=${subPlanId}&objectType=FOLDER`;
-    const commentResponse = yield call(instance.get, getCommentUrl);
-
-    for (const comment of commentResponse.data) {
-      const deleteCommentUrl = `/comments/${comment.id}`;
-      console.log("Deleting comment with id", comment.id);
-      yield call(instance.delete, deleteCommentUrl);
-    }
-
-    //Create comment with sequence list
-    const stringContent = JSON.stringify(action.payload);
-    var startIndex = 0;
-    var step = 800;
-    var chunkIndex = 0;
-    const createCommentUrl = `/comments`;
-    while (startIndex < stringContent.length) {
-      const chunk = stringContent.substring(startIndex, startIndex + step);
-      startIndex += step;
-      chunkIndex++;
-      const createCommentBody = {
-        objectId: subPlanId,
-        objectType: "FOLDER",
-        description: chunkIndex + "tuan" + chunk,
-      };
-      const responseInsertComment = yield call(
-        instance.post,
-        createCommentUrl,
-        createCommentBody,
-      );
-    }
-    yield put(SetObjectsSuccess(action.payload));
-  } catch (error) {
-    console.error("Error creating folder:", error);
-    yield put(SetObjectsFailure(error.message));
-  }
-}
-
-function* getOrCreateTemplateFolder({ projectId, projectName }) {
-  const getFolderUrl = `/folders/by_path?path=${encodeURIComponent(projectName)}&projectId=${projectId}`;
-  const response = yield call(instance.get, getFolderUrl);
-
-  const templateFolder = response.data.find(
-    (x) => x.name === TEMPLATE_FOLDER_NAME,
-  );
-
-  if (templateFolder) {
-    return templateFolder.id;
-  }
-
-  const createResponse = yield call(instance.post, "/folders", {
-    name: TEMPLATE_FOLDER_NAME,
-    parentId: response.data[0].parentId,
-  });
-
-  return createResponse.data.id;
-}
-
-function* uploadTemplateSaga(action) {
-  try {
-    const { projectId, projectName, file } = action.payload;
-
-    const templateFolderId = yield call(getOrCreateTemplateFolder, {
-      projectId,
-      projectName,
-    });
-
-    const initRes = yield call(instance.post, "/trimble/files/uploads", {
-      parentId: templateFolderId,
-      name: file.name,
-      size: file.size,
-      contentType:
-        file.type ||
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-
-    const uploadUrl =
-      initRes.data.uploadUrl || initRes.data.upload_url || initRes.data.url;
-
-    const fileId =
-      initRes.data.fileId || initRes.data.file_id || initRes.data.id;
-
-    if (!uploadUrl) {
-      throw new Error("Failed to get uploadUrl");
-    }
-
-    const uploadRes = yield call(fetch, uploadUrl, {
-      method: "PUT",
-      body: file,
-    });
-
-    if (!uploadRes.ok) {
-      throw new Error(`Upload failed: ${uploadRes.status}`);
-    }
-
-    const detailsRes = yield call(
-      instance.get,
-      `/trimble/files/uploads/${fileId}`,
-    );
-
-    yield put(
-      UploadTemplateSuccess({
-        templateFolderId,
-        templateFile: detailsRes.data,
-      }),
-    );
-  } catch (error) {
-    yield put(
-      UploadTemplateFailure(error.response?.data?.message || error.message),
+      UpdateSubPlanFailure(getErrorMessage(error, "Failed to copy sequence.")),
     );
   }
 }
 
-const PLACEHOLDERS = {
-  ProjectName: "",
-  ReportDate: "",
-  GroupDate: "",
-  Qty: "",
-  Index: "",
-  AsmName: "",
-  AsmPos: "",
-  MainProfile: "",
-  GridPos: "",
-  Length: "",
-  Weight: "",
-  Comment: "",
+/* -------------------------------------------------------------------------- */
+/*                              SEQUENCE OBJECTS                              */
+/* -------------------------------------------------------------------------- */
+
+const getSequenceObjectKey = (object) => {
+  const modelExternalId =
+    object?.modelExternalId ?? object?.model_external_id ?? object?.modelId;
+
+  const externalId =
+    object?.externalId ?? object?.external_id ?? object?.objectId ?? object?.id;
+
+  return `${String(modelExternalId)}::${String(externalId)}`;
 };
 
+function* setObjectsSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const projectId = payload.projectId ?? payload.trimbleProjectId;
+
+    const planId = payload.planId;
+    const subPlanId = payload.subPlanId;
+
+    const runtimeObjects = Array.isArray(payload.objects)
+      ? payload.objects
+      : [];
+
+    if (!projectId) {
+      throw new Error("Trimble project ID is required.");
+    }
+
+    if (!subPlanId) {
+      throw new Error("SubPlan ID is required.");
+    }
+
+    const savedObjects = yield call(replaceSequenceObjectsForSubPlan, {
+      trimbleProjectId: projectId,
+      subPlanId,
+      objects: runtimeObjects,
+    });
+
+    const runtimeMap = new Map(
+      runtimeObjects.map((object) => [getSequenceObjectKey(object), object]),
+    );
+
+    const mergedObjects = savedObjects.map((savedObject) => {
+      const runtimeObject = runtimeMap.get(getSequenceObjectKey(savedObject));
+
+      return {
+        ...savedObject,
+        ...runtimeObject,
+
+        dbId: savedObject.dbId,
+
+        modelExternalId:
+          savedObject.modelExternalId ??
+          runtimeObject?.modelExternalId ??
+          runtimeObject?.modelId,
+
+        externalId:
+          savedObject.externalId ??
+          runtimeObject?.externalId ??
+          runtimeObject?.id,
+
+        modelId: runtimeObject?.modelId ?? null,
+
+        runtimeId: runtimeObject?.runtimeId ?? null,
+
+        id: runtimeObject?.id ?? savedObject.externalId,
+
+        planId: runtimeObject?.planId ?? planId,
+
+        subPlanId,
+
+        asmPos: runtimeObject?.asmPos ?? "",
+
+        asmName: runtimeObject?.asmName ?? runtimeObject?.name ?? "",
+
+        name: runtimeObject?.name ?? runtimeObject?.asmName ?? "",
+
+        positionCode: runtimeObject?.positionCode ?? "",
+
+        rawWeight: runtimeObject?.rawWeight ?? runtimeObject?.weight ?? null,
+
+        weight: runtimeObject?.weight ?? runtimeObject?.rawWeight ?? null,
+
+        rawLength: runtimeObject?.rawLength ?? runtimeObject?.length ?? null,
+
+        length: runtimeObject?.length ?? runtimeObject?.rawLength ?? null,
+
+        rawCog: runtimeObject?.rawCog ?? runtimeObject?.cog ?? null,
+
+        cog: runtimeObject?.cog ?? runtimeObject?.rawCog ?? null,
+
+        distance: runtimeObject?.distance ?? 0,
+
+        center: runtimeObject?.center ?? [0, 0, 0],
+
+        camera: runtimeObject?.camera ?? null,
+
+        objectAvailable: runtimeObject?.objectAvailable ?? true,
+      };
+    });
+
+    yield put(
+      SetObjectsSuccess({
+        projectId,
+        planId,
+        subPlanId,
+        objects: mergedObjects,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to save sequence objects:", error);
+
+    yield put(
+      SetObjectsFailure(
+        getErrorMessage(error, "Failed to save sequence objects."),
+      ),
+    );
+  }
+}
+
+function* updateSequenceObjectFieldsSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const updatedObjects = yield call(
+      updateSequenceObjectFields,
+      payload.objects || [],
+    );
+
+    yield put(
+      UpdateSequenceObjectFieldsSuccess({
+        subPlanId: payload.subPlanId,
+        objects: updatedObjects,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to update sequence object fields:", error);
+
+    yield put(
+      UpdateSequenceObjectFieldsFailure(
+        error?.message || "Failed to update sequence object fields.",
+      ),
+    );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                EXCEL EXPORT                                */
+/* -------------------------------------------------------------------------- */
+
+const DEFAULT_TEMPLATE_PATH = "/templates/SequencingTemplate.xlsx";
+
 function getCellText(cell) {
-  return typeof cell.value === "string" ? cell.value : "";
+  if (typeof cell.value === "string") {
+    return cell.value;
+  }
+
+  if (cell.value && Array.isArray(cell.value.richText)) {
+    return cell.value.richText.map((item) => item.text || "").join("");
+  }
+
+  if (cell.value?.text) {
+    return String(cell.value.text);
+  }
+
+  if (cell.value?.result !== undefined) {
+    return String(cell.value.result ?? "");
+  }
+
+  return "";
 }
 
 function fillText(value, data) {
-  if (typeof value !== "string") return value;
+  if (typeof value !== "string") {
+    return value;
+  }
 
-  return value.replace(/\{\{(.*?)\}\}/g, (_, key) => {
-    return data[key.trim()] ?? "";
-  });
+  return value.replace(/\{\{\s*(.*?)\s*\}\}/g, (_, key) => data[key] ?? "");
 }
 
 function copyRowStyle(fromRow, toRow) {
-  fromRow.eachCell({ includeEmpty: true }, (cell, col) => {
-    const target = toRow.getCell(col);
+  fromRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+    const target = toRow.getCell(columnNumber);
 
     target.style = JSON.parse(JSON.stringify(cell.style || {}));
+
     target.numFmt = cell.numFmt;
-    target.alignment = cell.alignment;
-    target.border = cell.border;
-    target.fill = cell.fill;
-    target.font = cell.font;
+    target.alignment = cell.alignment ? { ...cell.alignment } : undefined;
+    target.border = cell.border
+      ? JSON.parse(JSON.stringify(cell.border))
+      : undefined;
+    target.fill = cell.fill ? JSON.parse(JSON.stringify(cell.fill)) : undefined;
+    target.font = cell.font ? { ...cell.font } : undefined;
   });
 
   toRow.height = fromRow.height;
@@ -770,7 +934,7 @@ function fillHeader(worksheet, data) {
 }
 
 function findTemplateRows(worksheet) {
-  let groupDateRowIndex = null;
+  let groupRowIndex = null;
   let itemRowIndex = null;
 
   worksheet.eachRow((row, rowNumber) => {
@@ -778,7 +942,7 @@ function findTemplateRows(worksheet) {
       const text = getCellText(cell);
 
       if (text.includes("{{GroupDate}}") || text.includes("{{Qty}}")) {
-        groupDateRowIndex = rowNumber;
+        groupRowIndex = rowNumber;
       }
 
       if (
@@ -791,134 +955,119 @@ function findTemplateRows(worksheet) {
     });
   });
 
-  if (!groupDateRowIndex || !itemRowIndex) {
+  if (!groupRowIndex || !itemRowIndex) {
     throw new Error(
-      "Template thiếu {{GroupDate}}/{{Qty}} hoặc dòng item {{Index}}",
+      "The template is missing the group or item placeholder row.",
     );
   }
 
   return {
-    groupDateRowIndex,
+    groupRowIndex,
     itemRowIndex,
   };
 }
 
 function fillGroups(worksheet, groups) {
-  const { groupDateRowIndex, itemRowIndex } = findTemplateRows(worksheet);
+  const { groupRowIndex, itemRowIndex } = findTemplateRows(worksheet);
 
-  const dateTemplateRow = worksheet.getRow(groupDateRowIndex);
+  const groupTemplateRow = worksheet.getRow(groupRowIndex);
+
   const itemTemplateRow = worksheet.getRow(itemRowIndex);
 
-  const dateTemplateValues = [...dateTemplateRow.values];
+  const groupTemplateValues = [...groupTemplateRow.values];
+
   const itemTemplateValues = [...itemTemplateRow.values];
 
-  worksheet.spliceRows(groupDateRowIndex, itemRowIndex - groupDateRowIndex + 1);
+  const groupTemplateStyle = worksheet.getRow(groupRowIndex);
 
-  let insertAt = groupDateRowIndex;
+  const itemTemplateStyle = worksheet.getRow(itemRowIndex);
 
-  groups.forEach((group) => {
-    worksheet.spliceRows(insertAt, 0, dateTemplateValues);
+  worksheet.spliceRows(groupRowIndex, itemRowIndex - groupRowIndex + 1);
 
-    const dateRow = worksheet.getRow(insertAt);
-    copyRowStyle(dateTemplateRow, dateRow);
+  let insertAt = groupRowIndex;
 
-    dateRow.eachCell({ includeEmpty: true }, (cell) => {
-      cell.value = fillText(cell.value, {
-        GroupDate: group.date || "",
-        Qty: group.items.length,
-      });
+  for (const group of groups) {
+    const currentGroupRowIndex = insertAt;
+
+    worksheet.spliceRows(currentGroupRowIndex, 0, groupTemplateValues);
+
+    const groupRow = worksheet.getRow(currentGroupRowIndex);
+
+    copyRowStyle(groupTemplateStyle, groupRow);
+
+    const groupData = {
+      GroupDate: group.date || "",
+      Qty: group.items?.length || 0,
+    };
+
+    groupRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.value = fillText(cell.value, groupData);
     });
 
-    dateRow.commit();
-    insertAt++;
+    insertAt += 1;
 
-    group.items.forEach((item, index) => {
-      worksheet.spliceRows(insertAt, 0, itemTemplateValues);
+    const items = group.items || [];
 
-      const itemRow = worksheet.getRow(insertAt);
-      copyRowStyle(itemTemplateRow, itemRow);
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const currentItemRowIndex = insertAt;
+
+      worksheet.spliceRows(currentItemRowIndex, 0, itemTemplateValues);
+
+      const itemRow = worksheet.getRow(currentItemRowIndex);
+
+      copyRowStyle(itemTemplateStyle, itemRow);
+
+      const itemData = {
+        Index: index + 1,
+        AsmName: item.AsmName || "",
+        AsmPos: item.AsmPos || "",
+        MainProfile: item.MainProfile || "",
+        GridPos: item.GridPos || "",
+        Length: item.Length ?? "",
+        Weight: item.Weight ?? "",
+        Comment: item.Comment || "",
+      };
 
       itemRow.eachCell({ includeEmpty: true }, (cell) => {
-        cell.value = fillText(cell.value, {
-          Index: index + 1,
-          AsmName: item.AsmName || "",
-          AsmPos: item.AsmPos || "",
-          MainProfile: item.MainProfile || "",
-          GridPos: item.GridPos || "",
-          Length: item.Length || "",
-          Weight: item.Weight || "",
-          Comment: item.Comment || "",
-        });
+        cell.value = fillText(cell.value, itemData);
       });
 
-      itemRow.commit();
-      insertAt++;
-    });
-  });
+      insertAt += 1;
+    }
+  }
 }
 
 function buildGroupsFromSequenceObjects(plans = [], sequenceObjects = []) {
   return sequenceObjects
     .filter((group) => group && Array.isArray(group.objects))
     .map((group) => {
-      const plan = plans.find((x) => String(x.id) === String(group.planId));
+      const plan = plans.find(
+        (item) => String(item.id) === String(group.planId),
+      );
 
       return {
         name: plan?.name || "",
         date: group.objects[0]?.date || group.objects[0]?.assignedDate || "",
-        items: group.objects.map((obj) => ({
-          AsmName: obj.name || obj.asmName || "",
-          AsmPos: obj.asmPos || "",
-          MainProfile: obj.profile || obj.mainProfile || "",
-          GridPos: obj.positionCode || obj.gridPos || obj.location || "",
-          Length: obj.length || "",
-          Weight: Math.round(Number(obj.weight || 0) * 100) / 100,
-          Comment: obj.comment || "",
+        items: group.objects.map((object) => ({
+          AsmName: object.name || object.asmName || "",
+          AsmPos: object.asmPos || "",
+          MainProfile: object.profile || object.mainProfile || "",
+          GridPos:
+            object.positionCode || object.gridPos || object.location || "",
+          Length: object.length ?? "",
+          Weight: Math.round(Number(object.weight || 0) * 100) / 100,
+          Comment: object.comment || "",
         })),
       };
     });
 }
 
-function* getTemplateFile(templateFolderId) {
-  const res = yield call(instance.get, `/folders/${templateFolderId}/contents`);
-
-  const file = res.data.find(
-    (x) =>
-      (x.type === "FILE" || x.objectType === "FILE" || x.fileType) &&
-      (x.name?.endsWith(".xlsx") || x.name?.endsWith(".xlsm")),
-  );
-
-  if (!file) {
-    throw new Error(`Không tìm thấy file Excel trong ${TEMPLATE_FOLDER_NAME}`);
-  }
-
-  return file;
-}
-
-// function* downloadTemplateBuffer(fileId) {
-//   const res = yield call(instance.get, `/files/${fileId}/downloadurl`);
-
-//   const downloadUrl =
-//     res.data.url || res.data.downloadUrl || res.data.download_url;
-
-//   if (!downloadUrl) {
-//     throw new Error("Không lấy được downloadUrl");
-//   }
-
-//   const response = yield call(fetch, downloadUrl);
-
-//   if (!response.ok) {
-//     throw new Error(`Download template failed: ${response.status}`);
-//   }
-
-//   return yield call([response, response.arrayBuffer]);
-// }
-
-function* downloadPublicTemplateBuffer() {
-  const response = yield call(fetch, "/templates/SequencingTemplate.xlsx");
+function* downloadPublicTemplateBuffer(templatePath = DEFAULT_TEMPLATE_PATH) {
+  const response = yield call(fetch, templatePath);
 
   if (!response.ok) {
-    throw new Error(`Không tìm thấy template: ${response.status}`);
+    throw new Error(`Unable to load Excel template: ${response.status}`);
   }
 
   return yield call([response, response.arrayBuffer]);
@@ -926,50 +1075,102 @@ function* downloadPublicTemplateBuffer() {
 
 function* exportTemplateSaga(action) {
   try {
-    const { projectName, plans, sequenceObjects } = action.payload;
+    const { projectName, plans, sequenceObjects, templatePath, fileName } =
+      action.payload || {};
 
     const groups = buildGroupsFromSequenceObjects(plans, sequenceObjects);
 
-    const buffer = yield call(downloadPublicTemplateBuffer);
+    if (groups.length === 0) {
+      throw new Error("No sequencing data is available for export.");
+    }
+
+    const buffer = yield call(
+      downloadPublicTemplateBuffer,
+      templatePath || DEFAULT_TEMPLATE_PATH,
+    );
 
     const workbook = new ExcelJS.Workbook();
+
     yield call([workbook.xlsx, workbook.xlsx.load], buffer);
 
     const worksheet = workbook.getWorksheet(1);
 
+    if (!worksheet) {
+      throw new Error("No worksheet was found in the Excel template.");
+    }
+
     fillHeader(worksheet, {
-      ProjectName: projectName,
-      ReportDate: new Date().toLocaleDateString("vi-VN"),
+      ProjectName: projectName || "",
+      ReportDate: new Date().toLocaleDateString("en-AU"),
     });
 
     fillGroups(worksheet, groups);
 
     const output = yield call([workbook.xlsx, workbook.xlsx.writeBuffer]);
 
+    const safeFileName = String(fileName || "Sequencing")
+      .trim()
+      .replace(/[<>:"/\\|?*]/g, "_");
+
     saveAs(
       new Blob([output], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       }),
-      "Sequencing.xlsx",
+      `${safeFileName}.xlsx`,
+    );
+
+    yield put(
+      ExportTemplateSuccess?.({
+        fileName: `${safeFileName}.xlsx`,
+      }) || {
+        type: "EXPORT_TEMPLATE_SUCCESS",
+      },
     );
   } catch (error) {
-    console.error(error);
+    console.error("Failed to export Excel template:", error);
+
+    if (ExportTemplateFailure) {
+      yield put(
+        ExportTemplateFailure(
+          getErrorMessage(error, "Failed to export Excel template."),
+        ),
+      );
+    }
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                  WATCHER                                   */
+/* -------------------------------------------------------------------------- */
+
 function* sequenceSaga() {
-  yield takeEvery("GET_PLAN_REQUEST", getPlansSaga);
-  yield takeEvery("CREATE_PLAN_REQUEST", createPlanSaga);
-  yield takeEvery("UPDATE_PLAN_REQUEST", updatePlanSaga);
-  yield takeEvery("DELETE_PLAN_REQUEST", deletePlanSaga);
-  yield takeEvery("GET_SUBPLAN_REQUEST", getSubPlansSaga);
-  yield takeEvery("UPDATE_SUBPLAN_REQUEST", updateSubPlanSaga);
-  yield takeEvery("CREATE_SUBPLAN_REQUEST", createSubPlanSaga);
-  yield takeEvery("DELETE_SUBPLAN_REQUEST", deleteSubPlanSaga);
-  yield takeEvery("UPDATE_COMMENT_REQUEST", updateCommentSaga);
-  yield takeEvery("GET_SOURCE_SEQUENCE_REQUEST", getSourceSequenceSaga);
-  yield takeEvery("COPY_SEQUENCE_REQUEST", copySequenceSaga);
-  yield takeEvery("SET_OBJECTS_REQUEST", setObjectsSaga);
-  yield takeEvery("EXPORT_TEMPLATE_REQUEST", exportTemplateSaga);
+  yield takeEvery(actionType.GET_PLAN_REQUEST, getPlansSaga);
+  yield takeEvery(actionType.CREATE_PLAN_REQUEST, createPlanSaga);
+  yield takeEvery(actionType.UPDATE_PLAN_REQUEST, updatePlanSaga);
+  yield takeEvery(actionType.DELETE_PLAN_REQUEST, deletePlanSaga);
+
+  yield takeEvery(actionType.GET_SUBPLAN_REQUEST, getSubPlansSaga);
+  yield takeEvery(actionType.CREATE_SUBPLAN_REQUEST, createSubPlanSaga);
+  yield takeEvery(actionType.UPDATE_SUBPLAN_REQUEST, updateSubPlanSaga);
+  yield takeEvery(actionType.DELETE_SUBPLAN_REQUEST, deleteSubPlanSaga);
+
+  yield takeEvery(
+    actionType.GET_SOURCE_SEQUENCE_REQUEST,
+    getSourceSequenceSaga,
+  );
+  yield takeEvery(actionType.COPY_SEQUENCE_REQUEST, copySequenceSaga);
+
+  yield takeEvery(actionType.SET_OBJECTS_REQUEST, setObjectsSaga);
+
+  yield takeEvery(actionType.EXPORT_TEMPLATE_REQUEST, exportTemplateSaga);
+  yield takeLatest(
+    actionType.UPDATE_SEQUENCE_OBJECT_SORT_DATES_REQUEST,
+    updateSequenceObjectSortDatesSaga,
+  );
+  yield takeLatest(
+    actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_REQUEST,
+    updateSequenceObjectFieldsSaga,
+  );
 }
+
 export default sequenceSaga;

@@ -1,24 +1,57 @@
-import React from "react";
-import { Button, Dropdown, Popconfirm } from "antd";
+import React, {
+  useMemo,
+  useState,
+} from "react";
+import {
+  Button,
+  Dropdown,
+  Popconfirm,
+} from "antd";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useDispatch, useSelector } from "react-redux";
 
 import {
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   FolderAddOutlined,
   MenuOutlined,
   MoreOutlined,
-  PlusOutlined,
-  CopyOutlined,
-  SortAscendingOutlined,
-  SelectOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
+  SelectOutlined,
+  SortAscendingOutlined,
 } from "@ant-design/icons";
+
+const MenuButton = ({
+  icon,
+  children,
+  danger = false,
+  onClick,
+}) => (
+  <Button
+    size="small"
+    type="text"
+    danger={danger}
+    icon={icon}
+    onClick={(event) => {
+      event.stopPropagation();
+      onClick?.();
+    }}
+    style={{
+      width: "100%",
+      justifyContent: "flex-start",
+    }}
+  >
+    {children}
+  </Button>
+);
 
 const SortableHeader = ({
   plan,
+
+  isOwner = false,
+
   onEdit,
   onDelete,
   onAddSubPlan,
@@ -29,8 +62,15 @@ const SortableHeader = ({
   onHighlightObject,
   onSimulation,
 }) => {
-  const phaseCommentId = useSelector((state) => state.sequence.phaseCommentId);
-  const [dropdownOpen, setDropdownOpen] = React.useState(false);
+  const [
+    dropdownOpen,
+    setDropdownOpen,
+  ] = useState(false);
+
+  const [
+    deleteConfirmOpen,
+    setDeleteConfirmOpen,
+  ] = useState(false);
 
   const {
     attributes,
@@ -39,242 +79,426 @@ const SortableHeader = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: plan.id });
+  } = useSortable({
+    id: String(plan.id),
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    width: "100%",
-  };
+    /*
+     * Only Owner can reorder Plans.
+     */
+    disabled: !isOwner,
+  });
 
   const closeDropdown = () => {
     setDropdownOpen(false);
   };
 
-  const menuItems = [
-    onAssignObject && {
-      key: "addObject",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<PlusOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onAssignObject?.(plan);
-          }}
-        >
-          Assign Multiple Assemblies
-        </Button>
-      ),
-    },
-    onAutoAssign && {
-      key: "autoAddOff",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<PlusOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onAutoAssign?.(plan);
-          }}
-        >
-          Assign Picked Assemblies In Order
-        </Button>
-      ),
-    },
-    onSimulation && {
-      key: "simulation",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<PlayCircleOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onSimulation?.(plan);
-          }}
-        >
-          Run Simulation
-        </Button>
-      ),
-    },
-    onHighlightObject && {
-      key: "highlightObject",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<SelectOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onHighlightObject?.(plan);
-          }}
-        >
-          Highlight
-        </Button>
-      ),
-    },
-    onAddSubPlan && {
-      key: "addSubPlan",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<FolderAddOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onAddSubPlan(plan);
-          }}
-        >
-          Create Sub Plan
-        </Button>
-      ),
-    },
-    onSortByDate && {
-      key: "sortByDate",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<SortAscendingOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onSortByDate(plan);
-          }}
-        >
-          Sort By Date
-        </Button>
-      ),
-    },
-    onCopySubPlan && {
-      key: "copySubPlan",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<CopyOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onCopySubPlan(plan);
-          }}
-        >
-          Copy Sub Plan
-        </Button>
-      ),
-    },
-    {
-      key: "editName",
-      label: (
-        <Button
-          size="small"
-          type="text"
-          icon={<EditOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeDropdown();
-            onEdit?.(plan);
-          }}
-        >
-          Edit
-        </Button>
-      ),
-    },
-    {
-      key: "deletePlan",
-      label: (
-        <Popconfirm
-          title="Delete"
-          description="Are you sure?"
-          okText="Yes"
-          cancelText="No"
-          onConfirm={(e) => {
-            e?.stopPropagation?.();
-            closeDropdown();
-            onDelete?.(plan);
-          }}
-          onCancel={(e) => {
-            e?.stopPropagation?.();
-            closeDropdown();
-          }}
-        >
-          <Button
-            size="small"
-            danger
-            type="text"
-            icon={<DeleteOutlined />}
-            onClick={(e) => e.stopPropagation()}
+  const executeAction = (
+    callback,
+  ) => {
+    closeDropdown();
+    callback?.(plan);
+  };
+
+  const menuItems = useMemo(() => {
+    const items = [];
+
+    /*
+     * Available to both Owner and Viewer.
+     */
+    if (onSimulation) {
+      items.push({
+        key: "runSimulation",
+        label: (
+          <MenuButton
+            icon={
+              <PlayCircleOutlined />
+            }
+            onClick={() =>
+              executeAction(
+                onSimulation,
+              )
+            }
           >
-            Delete
-          </Button>
-        </Popconfirm>
+            Run Simulation
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onHighlightObject) {
+      items.push({
+        key: "highlightObjects",
+        label: (
+          <MenuButton
+            icon={
+              <SelectOutlined />
+            }
+            onClick={() =>
+              executeAction(
+                onHighlightObject,
+              )
+            }
+          >
+            Highlight
+          </MenuButton>
+        ),
+      });
+    }
+
+    /*
+     * Editing and deleting features
+     * are visible only to Owner.
+     */
+    if (!isOwner) {
+      return items;
+    }
+
+    if (
+      items.length > 0
+    ) {
+      items.push({
+        type: "divider",
+      });
+    }
+
+    if (onAssignObject) {
+      items.push({
+        key:
+          "assignMultipleAssemblies",
+        label: (
+          <MenuButton
+            icon={<PlusOutlined />}
+            onClick={() =>
+              executeAction(
+                onAssignObject,
+              )
+            }
+          >
+            Assign Multiple Assemblies
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onAutoAssign) {
+      items.push({
+        key:
+          "assignPickedAssemblies",
+        label: (
+          <MenuButton
+            icon={<PlusOutlined />}
+            onClick={() =>
+              executeAction(
+                onAutoAssign,
+              )
+            }
+          >
+            Assign Picked Assemblies In Order
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onAddSubPlan) {
+      items.push({
+        key: "createSubPlan",
+        label: (
+          <MenuButton
+            icon={
+              <FolderAddOutlined />
+            }
+            onClick={() =>
+              executeAction(
+                onAddSubPlan,
+              )
+            }
+          >
+            Create Sub Plan
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onSortByDate) {
+      items.push({
+        key: "sortByDate",
+        label: (
+          <MenuButton
+            icon={
+              <SortAscendingOutlined />
+            }
+            onClick={() =>
+              executeAction(
+                onSortByDate,
+              )
+            }
+          >
+            Sort By Date
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onCopySubPlan) {
+      items.push({
+        key: "copySubPlan",
+        label: (
+          <MenuButton
+            icon={<CopyOutlined />}
+            onClick={() =>
+              executeAction(
+                onCopySubPlan,
+              )
+            }
+          >
+            Copy Sub Plan
+          </MenuButton>
+        ),
+      });
+    }
+
+    const hasEditActions =
+      Boolean(onEdit) ||
+      Boolean(onDelete);
+
+    if (hasEditActions) {
+      items.push({
+        type: "divider",
+      });
+    }
+
+    if (onEdit) {
+      items.push({
+        key: "edit",
+        label: (
+          <MenuButton
+            icon={<EditOutlined />}
+            onClick={() =>
+              executeAction(
+                onEdit,
+              )
+            }
+          >
+            Edit
+          </MenuButton>
+        ),
+      });
+    }
+
+    if (onDelete) {
+      items.push({
+        key: "delete",
+        label: (
+          <Popconfirm
+            title="Delete"
+            description="Are you sure?"
+            okText="Yes"
+            cancelText="No"
+            open={
+              deleteConfirmOpen
+            }
+            onOpenChange={(open) => {
+              setDeleteConfirmOpen(
+                open,
+              );
+
+              if (open) {
+                setDropdownOpen(
+                  true,
+                );
+              }
+            }}
+            onConfirm={(event) => {
+              event?.stopPropagation?.();
+
+              setDeleteConfirmOpen(
+                false,
+              );
+
+              closeDropdown();
+
+              onDelete(plan);
+            }}
+            onCancel={(event) => {
+              event?.stopPropagation?.();
+
+              setDeleteConfirmOpen(
+                false,
+              );
+
+              closeDropdown();
+            }}
+          >
+            <div>
+              <MenuButton
+                danger
+                icon={
+                  <DeleteOutlined />
+                }
+                onClick={() => {
+                  setDeleteConfirmOpen(
+                    true,
+                  );
+                }}
+              >
+                Delete
+              </MenuButton>
+            </div>
+          </Popconfirm>
+        ),
+      });
+    }
+
+    return items;
+  }, [
+    plan,
+    isOwner,
+    onEdit,
+    onDelete,
+    onAddSubPlan,
+    onAssignObject,
+    onAutoAssign,
+    onCopySubPlan,
+    onSortByDate,
+    onHighlightObject,
+    onSimulation,
+    deleteConfirmOpen,
+  ]);
+
+  const style = {
+    transform:
+      CSS.Transform.toString(
+        transform,
       ),
-    },
-  ].filter(Boolean);
+
+    transition,
+
+    opacity: isDragging
+      ? 0.5
+      : 1,
+
+    display: "flex",
+
+    alignItems: "center",
+
+    justifyContent:
+      "space-between",
+
+    width: "100%",
+
+    minWidth: 0,
+  };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div
+      ref={setNodeRef}
+      style={style}
+    >
       <div
         style={{
           display: "flex",
           alignItems: "center",
           gap: 8,
           minWidth: 0,
+          flex: 1,
         }}
       >
-        <span
-          {...attributes}
-          {...listeners}
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            cursor: "grab",
-            display: "inline-flex",
-            alignItems: "center",
-          }}
-        >
-          <MenuOutlined />
-        </span>
+        {isOwner && (
+          <span
+            {...attributes}
+            {...listeners}
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+            style={{
+              cursor: isDragging
+                ? "grabbing"
+                : "grab",
+
+              display:
+                "inline-flex",
+
+              alignItems:
+                "center",
+
+              flexShrink: 0,
+
+              touchAction:
+                "none",
+            }}
+          >
+            <MenuOutlined />
+          </span>
+        )}
 
         <span
+          title={plan?.name}
           style={{
             overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            textOverflow:
+              "ellipsis",
+            whiteSpace:
+              "nowrap",
+            minWidth: 0,
           }}
         >
-          {plan.name}
+          {plan?.name ||
+            "Unnamed Plan"}
         </span>
       </div>
 
-      <div onClick={(e) => e.stopPropagation()}>
-        <Dropdown
-          open={dropdownOpen}
-          onOpenChange={setDropdownOpen}
-          menu={{ items: menuItems }}
-          trigger={["click"]}
+      {menuItems.length > 0 && (
+        <div
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+          style={{
+            flexShrink: 0,
+          }}
         >
-          <Button
-            type="text"
-            size="small"
-            icon={<MoreOutlined />}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </Dropdown>
-      </div>
+          <Dropdown
+            open={dropdownOpen}
+            trigger={["click"]}
+            placement="bottomRight"
+            destroyOnHidden
+            onOpenChange={(open) => {
+              if (
+                !open &&
+                deleteConfirmOpen
+              ) {
+                return;
+              }
+
+              setDropdownOpen(
+                open,
+              );
+            }}
+            menu={{
+              items: menuItems,
+              onClick: ({
+                domEvent,
+              }) => {
+                domEvent.stopPropagation();
+              },
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={
+                <MoreOutlined />
+              }
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            />
+          </Dropdown>
+        </div>
+      )}
     </div>
   );
 };
 
-export default SortableHeader;
+export default React.memo(
+  SortableHeader,
+);

@@ -15,7 +15,7 @@ export function CreatePlanSuccess(payload) {
 export function CreatePlanFailure(payload) {
   return {
     type: actionType.CREATE_PLAN_FAILURE,
-    payload: payload, 
+    payload: payload,
   };
 }
 
@@ -307,7 +307,6 @@ export const SetActiveSimulationItem = (payload) => ({
   payload,
 });
 
-
 export const UploadTemplateRequest = (payload) => ({
   type: actionType.UPLOAD_TEMPLATE_REQUEST,
   payload,
@@ -340,5 +339,34 @@ export const ExportTemplateFailure = (payload) => ({
 
 export const SetSimulationDateRange = (payload) => ({
   type: actionType.SET_SIMULATION_DATE_RANGE,
+  payload,
+});
+
+export const UpdateSequenceObjectSortDatesRequest = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_SORT_DATES_REQUEST,
+  payload,
+});
+
+export const UpdateSequenceObjectSortDatesSuccess = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_SORT_DATES_SUCCESS,
+  payload,
+});
+
+export const UpdateSequenceObjectSortDatesFailure = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_SORT_DATES_FAILURE,
+  payload,
+});
+export const UpdateSequenceObjectFieldsRequest = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_REQUEST,
+  payload,
+});
+
+export const UpdateSequenceObjectFieldsSuccess = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_SUCCESS,
+  payload,
+});
+
+export const UpdateSequenceObjectFieldsFailure = (payload) => ({
+  type: actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_FAILURE,
   payload,
 });
