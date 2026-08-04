@@ -185,6 +185,29 @@ export default function App() {
   const modelLoaded =
     loadedModels.length > 0;
 
+  /*
+   * Normalize all loaded model IDs to strings.
+   * Child components use this list to hide objects
+   * whose model is not currently loaded.
+   */
+  const loadedModelIds = useMemo(
+    () =>
+      loadedModels
+        .map(
+          (model) =>
+            model?.id ??
+            model?.modelId ??
+            model?.modelExternalId,
+        )
+        .filter(
+          (modelId) =>
+            modelId != null &&
+            modelId !== "",
+        )
+        .map(String),
+    [loadedModels],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -400,9 +423,16 @@ export default function App() {
               currentLoadedModels
                 .map(
                   (model) =>
-                    model?.id,
+                    model?.id ??
+                    model?.modelId ??
+                    model?.modelExternalId,
                 )
-                .filter(Boolean),
+                .filter(
+                  (modelId) =>
+                    modelId != null &&
+                    modelId !== "",
+                )
+                .map(String),
           }),
         );
       } catch (error) {
@@ -545,6 +575,9 @@ export default function App() {
         <Main
           isOwner={isOwner}
           readOnly={isViewer}
+          loadedModelIds={
+            loadedModelIds
+          }
         />
       </Content>
 
@@ -558,7 +591,11 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        <Simulation />
+        <Simulation
+          loadedModelIds={
+            loadedModelIds
+          }
+        />
       </Footer>
     </Layout>
   );

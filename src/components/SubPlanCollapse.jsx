@@ -24,11 +24,12 @@ import {
   DeleteSubPlanRequest,
   UpdateSubPlanRequest,
   SetObjectsRequest,
+  UpdateSequenceObjectSortDatesRequest,
 } from "../store/sequence/action";
 
 import SubPlanModal from "./SubPlanModal";
 import SequenceObjectCollapse from "./SequenceObjectCollapse";
-import { getMovedItemSortDatetime } from "../utils/sortDate";
+import { createUtcSortDate, getMovedItemSortDatetime } from "../utils/sortDate";
 
 const math = require("mathjs");
 
@@ -42,6 +43,7 @@ const SubPlanCollapse = ({
   activeSimulationItem,
   isOwner = false,
   readOnly = false,
+  loadedModelIds = [],
 }) => {
   const dispatch = useDispatch();
   const { message } = App.useApp();
@@ -1028,38 +1030,118 @@ const SubPlanCollapse = ({
       return;
     }
 
+    if (!projectId) {
+      message.error("Trimble project ID is required.");
+
+      return;
+    }
+
+    if (!subPlan?.id) {
+      return;
+    }
+
     const currentGroup = sequenceObjects.find(
       (group) => group && String(group.subPlanId) === String(subPlan.id),
     );
 
-    const objects = currentGroup?.objects || [];
+    const objects = Array.isArray(currentGroup?.objects)
+      ? currentGroup.objects
+      : [];
 
-    const sortedObjects = [...objects].sort((a, b) => {
-      const dateA = dayjs(
-        a.date || a.assignedDate || "",
-        ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD"],
-        true,
+    if (objects.length < 2) {
+      message.info("There are not enough objects to sort.");
+
+      return;
+    }
+
+    const originalIndexMap = new Map(
+      objects.map((object, index) => [getObjectKey(object), index]),
+    );
+
+    const sortedObjects = [...objects].sort((first, second) => {
+      const firstDateValue = first?.assignedDate || first?.date || null;
+
+      const secondDateValue = second?.assignedDate || second?.date || null;
+
+      const firstDate = firstDateValue ? parseDate(firstDateValue) : null;
+
+      const secondDate = secondDateValue ? parseDate(secondDateValue) : null;
+
+      const firstValid = firstDate?.isValid() === true;
+
+      const secondValid = secondDate?.isValid() === true;
+
+      if (!firstValid && !secondValid) {
+        return (
+          (originalIndexMap.get(getObjectKey(first)) ?? 0) -
+          (originalIndexMap.get(getObjectKey(second)) ?? 0)
+        );
+      }
+
+      if (!firstValid) {
+        return 1;
+      }
+
+      if (!secondValid) {
+        return -1;
+      }
+
+      const dateDifference = firstDate.valueOf() - secondDate.valueOf();
+
+      if (dateDifference !== 0) {
+        return dateDifference;
+      }
+
+      return (
+        (originalIndexMap.get(getObjectKey(first)) ?? 0) -
+        (originalIndexMap.get(getObjectKey(second)) ?? 0)
       );
-
-      const dateB = dayjs(
-        b.date || b.assignedDate || "",
-        ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD"],
-        true,
-      );
-
-      if (!dateA.isValid() && !dateB.isValid()) return 0;
-      if (!dateA.isValid()) return 1;
-      if (!dateB.isValid()) return -1;
-
-      return dateA.valueOf() - dateB.valueOf();
     });
 
+    const baseDate = new Date();
+
+    const updates = sortedObjects.map((object, index) => ({
+      dbId: object?.dbId ?? object?.db_id ?? null,
+
+      subPlanId: subPlan.id,
+
+      modelExternalId:
+        object?.modelExternalId ?? object?.model_external_id ?? object?.modelId,
+
+      externalId: object?.externalId ?? object?.external_id ?? object?.id,
+
+      sortDatetime: createUtcSortDate(baseDate, index),
+    }));
+
+    const invalidObject = updates.find(
+      (object) =>
+        !object.dbId &&
+        (object.modelExternalId == null || object.externalId == null),
+    );
+
+    if (invalidObject) {
+      message.error(
+        "One or more objects are missing stable database references.",
+      );
+
+      return;
+    }
+
     dispatch(
-      SetObjectsRequest({
-        projectId,
+      UpdateSequenceObjectSortDatesRequest({
+        projectId: String(projectId),
+
         planId: plan.id,
+
         subPlanId: subPlan.id,
-        objects: sortedObjects,
+
+        objects: updates,
+
+        orderedObjects: sortedObjects.map((object, index) => ({
+          ...object,
+
+          sortDatetime: updates[index].sortDatetime,
+        })),
       }),
     );
   };
@@ -1338,6 +1420,7 @@ const SubPlanCollapse = ({
           activeSimulationItem={activeSimulationItem}
           displayIndexMap={displayIndexMap}
           isOwner={canEdit}
+          loadedModelIds={loadedModelIds}
         />
       ),
 

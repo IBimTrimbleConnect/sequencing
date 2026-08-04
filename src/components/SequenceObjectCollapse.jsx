@@ -29,7 +29,6 @@ import {
 import {
   useSortable,
   SortableContext,
-  arrayMove,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
@@ -609,6 +608,7 @@ const SequenceObjectCollapse = ({
   activeSimulationItem,
   displayIndexMap,
   isOwner = false,
+  loadedModelIds = [],
 }) => {
   const dispatch = useDispatch();
 
@@ -690,6 +690,50 @@ const SequenceObjectCollapse = ({
 
   const currentObjects = localObjects;
 
+  const loadedModelIdSet = useMemo(
+    () =>
+      new Set(
+        (loadedModelIds || [])
+          .filter(
+            (modelId) =>
+              modelId != null &&
+              modelId !== "",
+          )
+          .map(String),
+      ),
+    [loadedModelIds],
+  );
+
+  /*
+   * Chỉ hiển thị và thao tác với object thuộc
+   * model đang được load trong Trimble Connect.
+   */
+  const visibleObjects = useMemo(() => {
+    if (!loadedModelIdSet.size) {
+      return [];
+    }
+
+    return currentObjects.filter(
+      (object) => {
+        const modelId =
+          getObjectModelId(
+            object,
+          );
+
+        if (modelId == null) {
+          return false;
+        }
+
+        return loadedModelIdSet.has(
+          String(modelId),
+        );
+      },
+    );
+  }, [
+    currentObjects,
+    loadedModelIdSet,
+  ]);
+
   const items = useMemo(() => {
     const result = [];
 
@@ -700,7 +744,13 @@ const SequenceObjectCollapse = ({
         const objectId = getInternalObjectId(obj);
         const modelId = getObjectModelId(obj);
 
-        if (objectId == null || modelId == null) {
+        if (
+          objectId == null ||
+          modelId == null ||
+          !loadedModelIdSet.has(
+            String(modelId),
+          )
+        ) {
           return;
         }
 
@@ -716,7 +766,10 @@ const SequenceObjectCollapse = ({
     });
 
     return result;
-  }, [sequenceObjects]);
+  }, [
+    sequenceObjects,
+    loadedModelIdSet,
+  ]);
 
   const updateObjects = useCallback(
     (objects) => {
@@ -763,11 +816,19 @@ const SequenceObjectCollapse = ({
     const modelGroups = new Map();
 
     objects.forEach((item) => {
-      const objectId = getInternalObjectId(item);
+      const objectId =
+        getInternalObjectId(item);
 
-      const modelId = getObjectModelId(item);
+      const modelId =
+        getObjectModelId(item);
 
-      if (modelId == null || objectId == null) {
+      if (
+        modelId == null ||
+        objectId == null ||
+        !loadedModelIdSet.has(
+          String(modelId),
+        )
+      ) {
         return;
       }
 
@@ -828,7 +889,7 @@ const SequenceObjectCollapse = ({
     }
 
     return modelObjectIds;
-  }, []);
+  }, [loadedModelIdSet]);
 
   const selectObjectsInViewer = useCallback(
     async (objects) => {
@@ -896,7 +957,9 @@ const SequenceObjectCollapse = ({
       );
     }
 
-    const currentItem = selectedIds[0] || currentObjects[focusedIndex];
+    const currentItem =
+      selectedIds[0] ||
+      visibleObjects[focusedIndex];
 
     if (!currentItem) {
       return -1;
@@ -912,7 +975,7 @@ const SequenceObjectCollapse = ({
     items,
     activeSimulationItem,
     selectedIds,
-    currentObjects,
+    visibleObjects,
     focusedIndex,
     subPlan.id,
   ]);
@@ -960,7 +1023,10 @@ const SequenceObjectCollapse = ({
   );
 
   useEffect(() => {
-    if (!activeSimulationItem || !currentObjects.length) {
+    if (
+      !activeSimulationItem ||
+      !visibleObjects.length
+    ) {
       return;
     }
 
@@ -968,7 +1034,8 @@ const SequenceObjectCollapse = ({
       return;
     }
 
-    const index = currentObjects.findIndex(
+    const index =
+      visibleObjects.findIndex(
       (item) =>
         String(getObjectModelId(item)) ===
           String(activeSimulationItem.modelId) &&
@@ -980,7 +1047,8 @@ const SequenceObjectCollapse = ({
       return;
     }
 
-    const item = currentObjects[index];
+    const item =
+      visibleObjects[index];
 
     setFocusedIndex(index);
     setSelectedIds([item]);
@@ -1000,7 +1068,11 @@ const SequenceObjectCollapse = ({
     }, 150);
 
     return () => clearTimeout(timeoutId);
-  }, [activeSimulationItem, currentObjects, subPlan.id]);
+  }, [
+    activeSimulationItem,
+    visibleObjects,
+    subPlan.id,
+  ]);
 
   const handleKeyDown = useCallback(
     (event) => {
@@ -1020,161 +1092,279 @@ const SequenceObjectCollapse = ({
     [next, prev],
   );
 
-  const onDragEndSubItem = useCallback(
-    ({ active, over }) => {
-      if (!isOwner) {
-        return;
-      }
+  const onDragEndSubItem =
+    useCallback(
+      ({ active, over }) => {
+        if (!isOwner) {
+          return;
+        }
 
-      if (!over) {
-        return;
-      }
+        if (!over) {
+          return;
+        }
 
-      const activeKey = String(active.id);
-      const overKey = String(over.id);
+        const activeKey =
+          String(active.id);
 
-      if (activeKey === overKey) {
-        return;
-      }
+        const overKey =
+          String(over.id);
 
-      const oldIndex = currentObjects.findIndex(
-        (item) => getObjectKey(item) === activeKey,
-      );
+        if (
+          activeKey === overKey
+        ) {
+          return;
+        }
 
-      const newIndex = currentObjects.findIndex(
-        (item) => getObjectKey(item) === overKey,
-      );
+        const oldIndex =
+          visibleObjects.findIndex(
+            (item) =>
+              getObjectKey(item) ===
+              activeKey,
+          );
 
-      if (oldIndex < 0 || newIndex < 0) {
-        return;
-      }
+        const newIndex =
+          visibleObjects.findIndex(
+            (item) =>
+              getObjectKey(item) ===
+              overKey,
+          );
 
-      const selectedKeySet = new Set(
-        selectedIds.map((item) => getObjectKey(item)),
-      );
+        if (
+          oldIndex < 0 ||
+          newIndex < 0
+        ) {
+          return;
+        }
 
-      /*
-       * If the dragged row is not selected,
-       * move only that row.
-       */
-      if (!selectedKeySet.has(activeKey)) {
-        selectedKeySet.clear();
-        selectedKeySet.add(activeKey);
-      }
+        const selectedKeySet =
+          new Set(
+            selectedIds.map(
+              (item) =>
+                getObjectKey(item),
+            ),
+          );
 
-      const movingObjects = currentObjects.filter((item) =>
-        selectedKeySet.has(getObjectKey(item)),
-      );
+        if (
+          !selectedKeySet.has(
+            activeKey,
+          )
+        ) {
+          selectedKeySet.clear();
+          selectedKeySet.add(
+            activeKey,
+          );
+        }
 
-      /*
-       * Dropping onto the moving group itself
-       * does not change its position.
-       */
-      if (movingObjects.length > 1 && selectedKeySet.has(overKey)) {
-        return;
-      }
+        const movingObjects =
+          visibleObjects.filter(
+            (item) =>
+              selectedKeySet.has(
+                getObjectKey(item),
+              ),
+          );
 
-      const remainingObjects = currentObjects.filter(
-        (item) => !selectedKeySet.has(getObjectKey(item)),
-      );
+        if (
+          movingObjects.length > 1 &&
+          selectedKeySet.has(
+            overKey,
+          )
+        ) {
+          return;
+        }
 
-      const overIndexInRemaining = remainingObjects.findIndex(
-        (item) => getObjectKey(item) === overKey,
-      );
+        const remainingVisibleObjects =
+          visibleObjects.filter(
+            (item) =>
+              !selectedKeySet.has(
+                getObjectKey(item),
+              ),
+          );
 
-      if (overIndexInRemaining < 0) {
-        return;
-      }
+        const overIndexInRemaining =
+          remainingVisibleObjects.findIndex(
+            (item) =>
+              getObjectKey(item) ===
+              overKey,
+          );
 
-      const movingDown = oldIndex < newIndex;
+        if (
+          overIndexInRemaining < 0
+        ) {
+          return;
+        }
 
-      const insertIndex = movingDown
-        ? overIndexInRemaining + 1
-        : overIndexInRemaining;
+        const movingDown =
+          oldIndex < newIndex;
 
-      const safeInsertIndex = Math.max(
-        0,
-        Math.min(insertIndex, remainingObjects.length),
-      );
+        const insertIndex =
+          movingDown
+            ? overIndexInRemaining + 1
+            : overIndexInRemaining;
 
-      const previousItem =
-        safeInsertIndex > 0 ? remainingObjects[safeInsertIndex - 1] : null;
+        const safeInsertIndex =
+          Math.max(
+            0,
+            Math.min(
+              insertIndex,
+              remainingVisibleObjects.length,
+            ),
+          );
 
-      const nextItem =
-        safeInsertIndex < remainingObjects.length
-          ? remainingObjects[safeInsertIndex]
-          : null;
+        const previousItem =
+          safeInsertIndex > 0
+            ? remainingVisibleObjects[
+                safeInsertIndex - 1
+              ]
+            : null;
 
-      let sortDates;
+        const nextItem =
+          safeInsertIndex <
+          remainingVisibleObjects.length
+            ? remainingVisibleObjects[
+                safeInsertIndex
+              ]
+            : null;
 
-      try {
-        sortDates = createSortDatesBetween({
-          previousItem,
-          nextItem,
-          count: movingObjects.length,
-        });
-      } catch (error) {
-        console.error("Unable to calculate sequence object order:", error);
+        let sortDates;
 
-        return;
-      }
+        try {
+          sortDates =
+            createSortDatesBetween({
+              previousItem,
+              nextItem,
+              count:
+                movingObjects.length,
+            });
+        } catch (error) {
+          console.error(
+            "Unable to calculate sequence object order:",
+            error,
+          );
 
-      /*
-       * Only the dragged/selected rows receive
-       * a new sortDatetime.
-       */
-      const updatedMovingObjects = movingObjects.map((object, index) => ({
-        ...object,
-        sortDatetime: sortDates[index],
-      }));
+          return;
+        }
 
-      const reordered = [
-        ...remainingObjects.slice(0, safeInsertIndex),
-        ...updatedMovingObjects,
-        ...remainingObjects.slice(safeInsertIndex),
-      ];
+        const updatedMovingObjects =
+          movingObjects.map(
+            (object, index) => ({
+              ...object,
+              sortDatetime:
+                sortDates[index],
+            }),
+          );
 
-      /*
-       * Optimistic UI update.
-       */
-      setLocalObjects(reordered);
+        const reorderedVisible = [
+          ...remainingVisibleObjects.slice(
+            0,
+            safeInsertIndex,
+          ),
+          ...updatedMovingObjects,
+          ...remainingVisibleObjects.slice(
+            safeInsertIndex,
+          ),
+        ];
 
-      /*
-       * Only update the selected rows in Supabase.
-       */
-      dispatch(
-        UpdateSequenceObjectSortDatesRequest({
-          subPlanId: subPlan.id,
-          objects: updatedMovingObjects.map((object) => ({
-            dbId: object.dbId,
-            modelExternalId:
-              object.modelExternalId ??
-              object.model_external_id ??
-              object.modelId,
-            externalId: object.externalId ?? object.external_id ?? object.id,
-            sortDatetime: object.sortDatetime,
-          })),
-        }),
-      );
+        /*
+         * Giữ nguyên các object thuộc model chưa loaded,
+         * chỉ thay vị trí các object đang visible.
+         */
+        const reorderedVisibleQueue =
+          [...reorderedVisible];
 
-      setSelectedIds(updatedMovingObjects);
+        const reorderedAll =
+          currentObjects.map(
+            (object) => {
+              const modelId =
+                getObjectModelId(
+                  object,
+                );
 
-      const activeItem = updatedMovingObjects.find(
-        (item) => getObjectKey(item) === activeKey,
-      );
+              if (
+                modelId == null ||
+                !loadedModelIdSet.has(
+                  String(modelId),
+                )
+              ) {
+                return object;
+              }
 
-      if (activeItem) {
-        setLastSelected(activeItem);
-      }
+              return (
+                reorderedVisibleQueue.shift() ||
+                object
+              );
+            },
+          );
 
-      const nextActiveIndex = reordered.findIndex(
-        (item) => getObjectKey(item) === activeKey,
-      );
+        setLocalObjects(
+          reorderedAll,
+        );
 
-      setFocusedIndex(nextActiveIndex);
-    },
-    [currentObjects, selectedIds, dispatch, isOwner, subPlan.id],
-  );
+        dispatch(
+          UpdateSequenceObjectSortDatesRequest({
+            subPlanId:
+              subPlan.id,
+
+            objects:
+              updatedMovingObjects.map(
+                (object) => ({
+                  dbId:
+                    object.dbId,
+
+                  modelExternalId:
+                    object.modelExternalId ??
+                    object.model_external_id ??
+                    object.modelId,
+
+                  externalId:
+                    object.externalId ??
+                    object.external_id ??
+                    object.id,
+
+                  sortDatetime:
+                    object.sortDatetime,
+                }),
+              ),
+          }),
+        );
+
+        setSelectedIds(
+          updatedMovingObjects,
+        );
+
+        const activeItem =
+          updatedMovingObjects.find(
+            (item) =>
+              getObjectKey(item) ===
+              activeKey,
+          );
+
+        if (activeItem) {
+          setLastSelected(
+            activeItem,
+          );
+        }
+
+        const nextActiveIndex =
+          reorderedVisible.findIndex(
+            (item) =>
+              getObjectKey(item) ===
+              activeKey,
+          );
+
+        setFocusedIndex(
+          nextActiveIndex,
+        );
+      },
+      [
+        currentObjects,
+        visibleObjects,
+        selectedIds,
+        dispatch,
+        isOwner,
+        subPlan.id,
+        loadedModelIdSet,
+      ],
+    );
 
   const handleAssignDate = useCallback(
     (date, dateStep) => {
@@ -1197,7 +1387,8 @@ const SequenceObjectCollapse = ({
 
       let dateCount = 0;
 
-      const updated = currentObjects.map((object) => {
+      const updated =
+        currentObjects.map((object) => {
         const key = getObjectKey(object);
 
         if (!selectedKeys.has(key)) {
@@ -1301,16 +1492,24 @@ const SequenceObjectCollapse = ({
       );
 
       if (selectedKeySet.has(triggerKey)) {
-        return currentObjects.filter((object) =>
-          selectedKeySet.has(getObjectKey(object)),
+        return visibleObjects.filter(
+          (object) =>
+            selectedKeySet.has(
+              getObjectKey(object),
+            ),
         );
       }
 
-      return currentObjects.filter(
-        (object) => getObjectKey(object) === triggerKey,
+      return visibleObjects.filter(
+        (object) =>
+          getObjectKey(object) ===
+          triggerKey,
       );
     },
-    [currentObjects, selectedIds],
+    [
+      visibleObjects,
+      selectedIds,
+    ],
   );
 
   const updateSelectedObjectCameras = useCallback(
@@ -1424,9 +1623,13 @@ const SequenceObjectCollapse = ({
         selectedIds.map((item) => getObjectKey(item)),
       );
 
-      const selectedObjects = currentObjects.filter((obj) =>
-        selectedKeys.has(getObjectKey(obj)),
-      );
+      const selectedObjects =
+        visibleObjects.filter(
+          (obj) =>
+            selectedKeys.has(
+              getObjectKey(obj),
+            ),
+        );
 
       const modelObjectIds = await resolveViewerModelObjects(selectedObjects);
 
@@ -1446,20 +1649,59 @@ const SequenceObjectCollapse = ({
     } catch (error) {
       console.error("Zoom selected objects error:", error);
     }
-  }, [currentObjects, selectedIds, resolveViewerModelObjects]);
+  }, [
+    visibleObjects,
+    selectedIds,
+    resolveViewerModelObjects,
+  ]);
 
   useEffect(() => {
-    if (!currentObjects.length) {
+    const visibleKeySet =
+      new Set(
+        visibleObjects.map(
+          (object) =>
+            getObjectKey(object),
+        ),
+      );
+
+    setSelectedIds((previous) =>
+      previous.filter((object) =>
+        visibleKeySet.has(
+          getObjectKey(object),
+        ),
+      ),
+    );
+
+    setLastSelected((previous) =>
+      previous &&
+      visibleKeySet.has(
+        getObjectKey(previous),
+      )
+        ? previous
+        : null,
+    );
+  }, [visibleObjects]);
+
+  useEffect(() => {
+    if (!visibleObjects.length) {
       setFocusedIndex(-1);
       return;
     }
 
-    if (focusedIndex > currentObjects.length - 1) {
-      setFocusedIndex(currentObjects.length - 1);
+    if (
+      focusedIndex >
+      visibleObjects.length - 1
+    ) {
+      setFocusedIndex(
+        visibleObjects.length - 1,
+      );
     }
-  }, [currentObjects.length, focusedIndex]);
+  }, [
+    visibleObjects.length,
+    focusedIndex,
+  ]);
 
-  if (!currentObjects.length) {
+  if (!visibleObjects.length) {
     return (
       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Objects" />
     );
@@ -1472,7 +1714,10 @@ const SequenceObjectCollapse = ({
       onDragEnd={isOwner ? onDragEndSubItem : undefined}
     >
       <SortableContext
-        items={currentObjects.map((item) => getObjectKey(item))}
+        items={visibleObjects.map(
+          (item) =>
+            getObjectKey(item),
+        )}
         strategy={verticalListSortingStrategy}
       >
         <div
@@ -1485,7 +1730,7 @@ const SequenceObjectCollapse = ({
         >
           <List
             loading={loading}
-            dataSource={currentObjects}
+            dataSource={visibleObjects}
             style={{
               marginLeft: 10,
               minWidth: 100,
@@ -1503,7 +1748,7 @@ const SequenceObjectCollapse = ({
                 lastSelected={lastSelected}
                 setLastSelected={setLastSelected}
                 setFocusedIndex={setFocusedIndex}
-                currentObjects={currentObjects}
+                currentObjects={visibleObjects}
                 icon={<FileOutlined />}
                 onAssignDate={handleAssignDate}
                 onDelete={handleDelete}

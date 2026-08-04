@@ -25,9 +25,9 @@ import SubPlanModal from "./SubPlanModal";
 import SubPlanCollapse from "./SubPlanCollapse";
 import SortableHeader from "./SortableHeader";
 import CopySubPlanModal from "./CopySubPlanModal";
-import { createUtcSortDate, getMovedItemSortDatetime } from "../utils/sortDate";
+import { getMovedItemSortDatetime } from "../utils/sortDate";
 
-const Main = ({ isOwner = false }) => {
+const Main = ({ isOwner = false, loadedModelIds = [] }) => {
   const dispatch = useDispatch();
   const [form] = Form.useForm();
 
@@ -393,7 +393,7 @@ const Main = ({ isOwner = false }) => {
               plan={plan}
               activeSimulationItem={activeSimulationItem}
               isOwner={isOwner}
-              readOnly={!isOwner}
+              loadedModelIds={loadedModelIds}
             />
           ),
         };
@@ -403,6 +403,7 @@ const Main = ({ isOwner = false }) => {
       sequenceObjects,
       activeSimulationItem,
       isOwner,
+      loadedModelIds,
       handleEdit,
       handleDelete,
       handleAddSubPlan,

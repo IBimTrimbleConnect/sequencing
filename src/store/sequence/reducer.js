@@ -368,48 +368,88 @@ const reducers = (state = initialState, action) => {
       };
 
     case type.UPDATE_SEQUENCE_OBJECT_SORT_DATES_SUCCESS: {
-      const subPlanId = action.payload?.subPlanId;
+  const subPlanId =
+    action.payload?.subPlanId;
 
-      const updatedObjects = action.payload?.objects || [];
+  const updatedObjects =
+    Array.isArray(
+      action.payload?.objects,
+    )
+      ? action.payload.objects
+      : [];
 
-      const updatedMap = new Map(
-        updatedObjects.map((object) => [String(object.dbId), object]),
-      );
+  const updateByDbId =
+    new Map(
+      updatedObjects
+        .filter(
+          (object) =>
+            object?.dbId != null,
+        )
+        .map((object) => [
+          String(object.dbId),
+          object,
+        ]),
+    );
 
-      return {
-        ...state,
-        pending: false,
-        error: null,
+  return {
+    ...state,
+    pending: false,
+    error: null,
 
-        sequenceObjects: state.sequenceObjects.map((group) => {
-          if (String(group.subPlanId) !== String(subPlanId)) {
+    sequenceObjects:
+      state.sequenceObjects.map(
+        (group) => {
+          if (
+            String(
+              group.subPlanId,
+            ) !==
+            String(subPlanId)
+          ) {
             return group;
           }
 
-          const objects = group.objects
+          const objects = (
+            group.objects || []
+          )
             .map((object) => {
-              const updated = updatedMap.get(String(object.dbId));
+              const updated =
+                object?.dbId != null
+                  ? updateByDbId.get(
+                      String(
+                        object.dbId,
+                      ),
+                    )
+                  : null;
 
-              return updated
-                ? {
-                    ...object,
-                    sortDatetime: updated.sortDatetime,
-                  }
-                : object;
+              if (!updated) {
+                return object;
+              }
+
+              return {
+                ...object,
+
+                sortDatetime:
+                  updated.sortDatetime,
+              };
             })
             .sort(
-              (a, b) =>
-                new Date(a.sortDatetime || 0).getTime() -
-                new Date(b.sortDatetime || 0).getTime(),
+              (first, second) =>
+                new Date(
+                  first.sortDatetime,
+                ).getTime() -
+                new Date(
+                  second.sortDatetime,
+                ).getTime(),
             );
 
           return {
             ...group,
             objects,
           };
-        }),
-      };
-    }
+        },
+      ),
+  };
+}
 
     case type.UPDATE_SEQUENCE_OBJECT_FIELDS_REQUEST:
       return {
