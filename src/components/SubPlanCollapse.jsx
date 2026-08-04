@@ -37,9 +37,16 @@ const getRgbColor = (color) => {
   return `rgb(${color.r ?? 0}, ${color.g ?? 0}, ${color.b ?? 0})`;
 };
 
-const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
+const SubPlanCollapse = ({
+  plan,
+  activeSimulationItem,
+  isOwner = false,
+  readOnly = false,
+}) => {
   const dispatch = useDispatch();
   const { message } = App.useApp();
+
+  const canEdit = isOwner === true && readOnly !== true;
 
   const projectId = useSelector((state) => state.sequence.projectId || "");
   const subPlans = useSelector((state) => state.sequence.subPlans);
@@ -94,6 +101,10 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   }, [activeSimulationItem, currentSubPlans]);
 
   const handleDragEnd = ({ active, over }) => {
+    if (!canEdit) {
+      return;
+    }
+
     if (!over || String(active.id) === String(over.id)) {
       return;
     }
@@ -142,11 +153,19 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   };
 
   const handleEdit = (subPlan) => {
+    if (!canEdit) {
+      return;
+    }
+
     setSelectedSubPlan(subPlan);
     setIsEditFormOpen(true);
   };
 
   const handleAssignObject = async (subPlan) => {
+    if (!canEdit) {
+      return;
+    }
+
     try {
       const tcapi = await WorkspaceAPI.connect(window.parent);
 
@@ -485,6 +504,10 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   };
 
   const handleAutoAssign = async (subPlan) => {
+    if (!canEdit) {
+      return;
+    }
+
     try {
       const tcapi = await WorkspaceAPI.connect(window.parent);
 
@@ -1001,6 +1024,10 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
   };
 
   const handleSortByDate = (subPlan) => {
+    if (!canEdit) {
+      return;
+    }
+
     const currentGroup = sequenceObjects.find(
       (group) => group && String(group.subPlanId) === String(subPlan.id),
     );
@@ -1261,40 +1288,67 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
     };
   }, []);
 
-  const items = currentSubPlans.map((subPlan) => ({
-    key: String(subPlan.id),
-    label: (
-      <SortableHeader
-        plan={subPlan}
-        onEdit={() => handleEdit(subPlan)}
-        onDelete={(item) => {
-          dispatch(
-            DeleteSubPlanRequest({
-              planId: plan.id,
-              subPlanId: item.id,
-            }),
-          );
-        }}
-        onAssignObject={() => handleAssignObject(subPlan)}
-        onAutoAssign={() => handleAutoAssign(subPlan)}
-        onSimulation={() => handleSimulation(subPlan)}
-        onSortByDate={() => handleSortByDate(subPlan)}
-        onHighlightObject={() => handleHighlightObject(subPlan)}
-      />
-    ),
-    children: (
-      <SequenceObjectCollapse
-        subPlan={subPlan}
-        activeSimulationItem={activeSimulationItem}
-        displayIndexMap={displayIndexMap}
-      />
-    ),
-    style: {
-      background: getRgbColor(subPlan.color),
-      borderRadius: 0,
-      marginBottom: 4,
-    },
-  }));
+  const items = currentSubPlans.map((subPlan) => {
+    const currentGroup = sequenceObjects.find(
+      (group) => group && String(group.subPlanId) === String(subPlan.id),
+    );
+
+    const objectCount = Array.isArray(currentGroup?.objects)
+      ? currentGroup.objects.length
+      : 0;
+
+    return {
+      key: String(subPlan.id),
+
+      label: (
+        <SortableHeader
+          plan={subPlan}
+          objectCount={objectCount}
+          isOwner={canEdit}
+          onEdit={canEdit ? () => handleEdit(subPlan) : undefined}
+          onDelete={
+            canEdit
+              ? (item) => {
+                  if (!item?.id) {
+                    return;
+                  }
+
+                  dispatch(
+                    DeleteSubPlanRequest({
+                      planId: plan.id,
+                      subPlanId: item.id,
+                    }),
+                  );
+                }
+              : undefined
+          }
+          onAssignObject={
+            canEdit ? () => handleAssignObject(subPlan) : undefined
+          }
+          onAutoAssign={canEdit ? () => handleAutoAssign(subPlan) : undefined}
+          onSimulation={() => handleSimulation(subPlan)}
+          onSortByDate={canEdit ? () => handleSortByDate(subPlan) : undefined}
+          onHighlightObject={() => handleHighlightObject(subPlan)}
+        />
+      ),
+
+      children: (
+        <SequenceObjectCollapse
+          subPlan={subPlan}
+          activeSimulationItem={activeSimulationItem}
+          displayIndexMap={displayIndexMap}
+          isOwner={canEdit}
+        />
+      ),
+
+      style: {
+        background: getRgbColor(subPlan.color),
+
+        borderRadius: 0,
+        marginBottom: 4,
+      },
+    };
+  });
 
   if (!currentSubPlans.length) {
     return (
@@ -1304,20 +1358,25 @@ const SubPlanCollapse = ({ plan, activeSimulationItem }) => {
 
   return (
     <>
-      <SubPlanModal
-        plan={selectedSubPlan}
-        title="Edit Sub Plan"
-        open={isEditFormOpen}
-        onCancel={() => setIsEditFormOpen(false)}
-        buttonName="Modify"
-        isEditing={true}
-      />
+      {canEdit && (
+        <SubPlanModal
+          plan={selectedSubPlan}
+          title="Edit Sub Plan"
+          open={isEditFormOpen}
+          onCancel={() => {
+            setIsEditFormOpen(false);
+            setSelectedSubPlan(null);
+          }}
+          buttonName="Modify"
+          isEditing
+        />
+      )}
 
       <Spin spinning={loading}>
         <DndContext
-          sensors={sensors}
+          sensors={canEdit ? sensors : []}
           collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
+          onDragEnd={canEdit ? handleDragEnd : undefined}
         >
           <SortableContext
             items={currentSubPlans.map((x) => String(x.id))}

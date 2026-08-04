@@ -29,6 +29,8 @@ import {
   UpdateSequenceObjectSortDatesFailure,
   UpdateSequenceObjectFieldsSuccess,
   UpdateSequenceObjectFieldsFailure,
+  CopySubPlansSuccess,
+  CopySubPlansFailure,
 } from "./action";
 
 import * as actionType from "./actionTypes";
@@ -56,6 +58,8 @@ import {
   updateSequenceObjectSortDates,
   updateSequenceObjectFields,
 } from "../../services/sequenceObjectService";
+import { copySubPlans } from "../../services/copySubPlanService";
+
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
 import { extractRuntimeObjectProperties } from "../../utils/runtimeObjectProperties";
@@ -572,6 +576,55 @@ function* createSubPlanSaga(action) {
       CreateSubPlanFailure(
         getErrorMessage(error, "Failed to create sub plan."),
       ),
+    );
+  }
+}
+
+function* copySubPlansSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const projectId = payload.projectId ?? payload.trimbleProjectId;
+
+    const targetPlanId = payload.targetPlanId ?? payload.planId;
+
+    const sourceSubPlans =
+      payload.sourceSubPlans ?? payload.subPlansToCopy ?? [];
+
+    if (!projectId) {
+      throw new Error("Trimble project ID is required.");
+    }
+
+    if (!targetPlanId) {
+      throw new Error("Target Plan ID is required.");
+    }
+
+    if (!Array.isArray(sourceSubPlans) || sourceSubPlans.length === 0) {
+      throw new Error("No SubPlans were provided for copying.");
+    }
+
+    const createdSubPlans = yield call(copySubPlans, {
+      trimbleProjectId: projectId,
+
+      targetPlanId,
+
+      sourceSubPlans,
+    });
+
+    yield put(
+      CopySubPlansSuccess({
+        projectId: String(projectId),
+
+        targetPlanId,
+
+        subPlans: createdSubPlans,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to copy SubPlans:", error);
+
+    yield put(
+      CopySubPlansFailure(getErrorMessage(error, "Failed to copy SubPlans.")),
     );
   }
 }
@@ -1171,6 +1224,7 @@ function* sequenceSaga() {
     actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_REQUEST,
     updateSequenceObjectFieldsSaga,
   );
+  yield takeLatest(actionType.COPY_SUBPLANS_REQUEST, copySubPlansSaga);
 }
 
 export default sequenceSaga;

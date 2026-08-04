@@ -1,12 +1,5 @@
-import React, {
-  useMemo,
-  useState,
-} from "react";
-import {
-  Button,
-  Dropdown,
-  Popconfirm,
-} from "antd";
+import React, { useMemo, useState } from "react";
+import { Button, Dropdown, Popconfirm,  Badge,} from "antd";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
@@ -23,12 +16,7 @@ import {
   SortAscendingOutlined,
 } from "@ant-design/icons";
 
-const MenuButton = ({
-  icon,
-  children,
-  danger = false,
-  onClick,
-}) => (
+const MenuButton = ({ icon, children, danger = false, onClick }) => (
   <Button
     size="small"
     type="text"
@@ -48,10 +36,9 @@ const MenuButton = ({
 );
 
 const SortableHeader = ({
+  objectCount = 0,
   plan,
-
   isOwner = false,
-
   onEdit,
   onDelete,
   onAddSubPlan,
@@ -62,15 +49,9 @@ const SortableHeader = ({
   onHighlightObject,
   onSimulation,
 }) => {
-  const [
-    dropdownOpen,
-    setDropdownOpen,
-  ] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const [
-    deleteConfirmOpen,
-    setDeleteConfirmOpen,
-  ] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const {
     attributes,
@@ -92,9 +73,7 @@ const SortableHeader = ({
     setDropdownOpen(false);
   };
 
-  const executeAction = (
-    callback,
-  ) => {
+  const executeAction = (callback) => {
     closeDropdown();
     callback?.(plan);
   };
@@ -110,14 +89,8 @@ const SortableHeader = ({
         key: "runSimulation",
         label: (
           <MenuButton
-            icon={
-              <PlayCircleOutlined />
-            }
-            onClick={() =>
-              executeAction(
-                onSimulation,
-              )
-            }
+            icon={<PlayCircleOutlined />}
+            onClick={() => executeAction(onSimulation)}
           >
             Run Simulation
           </MenuButton>
@@ -130,14 +103,8 @@ const SortableHeader = ({
         key: "highlightObjects",
         label: (
           <MenuButton
-            icon={
-              <SelectOutlined />
-            }
-            onClick={() =>
-              executeAction(
-                onHighlightObject,
-              )
-            }
+            icon={<SelectOutlined />}
+            onClick={() => executeAction(onHighlightObject)}
           >
             Highlight
           </MenuButton>
@@ -153,9 +120,7 @@ const SortableHeader = ({
       return items;
     }
 
-    if (
-      items.length > 0
-    ) {
+    if (items.length > 0) {
       items.push({
         type: "divider",
       });
@@ -163,16 +128,11 @@ const SortableHeader = ({
 
     if (onAssignObject) {
       items.push({
-        key:
-          "assignMultipleAssemblies",
+        key: "assignMultipleAssemblies",
         label: (
           <MenuButton
             icon={<PlusOutlined />}
-            onClick={() =>
-              executeAction(
-                onAssignObject,
-              )
-            }
+            onClick={() => executeAction(onAssignObject)}
           >
             Assign Multiple Assemblies
           </MenuButton>
@@ -182,16 +142,11 @@ const SortableHeader = ({
 
     if (onAutoAssign) {
       items.push({
-        key:
-          "assignPickedAssemblies",
+        key: "assignPickedAssemblies",
         label: (
           <MenuButton
             icon={<PlusOutlined />}
-            onClick={() =>
-              executeAction(
-                onAutoAssign,
-              )
-            }
+            onClick={() => executeAction(onAutoAssign)}
           >
             Assign Picked Assemblies In Order
           </MenuButton>
@@ -204,14 +159,8 @@ const SortableHeader = ({
         key: "createSubPlan",
         label: (
           <MenuButton
-            icon={
-              <FolderAddOutlined />
-            }
-            onClick={() =>
-              executeAction(
-                onAddSubPlan,
-              )
-            }
+            icon={<FolderAddOutlined />}
+            onClick={() => executeAction(onAddSubPlan)}
           >
             Create Sub Plan
           </MenuButton>
@@ -224,14 +173,8 @@ const SortableHeader = ({
         key: "sortByDate",
         label: (
           <MenuButton
-            icon={
-              <SortAscendingOutlined />
-            }
-            onClick={() =>
-              executeAction(
-                onSortByDate,
-              )
-            }
+            icon={<SortAscendingOutlined />}
+            onClick={() => executeAction(onSortByDate)}
           >
             Sort By Date
           </MenuButton>
@@ -245,11 +188,7 @@ const SortableHeader = ({
         label: (
           <MenuButton
             icon={<CopyOutlined />}
-            onClick={() =>
-              executeAction(
-                onCopySubPlan,
-              )
-            }
+            onClick={() => executeAction(onCopySubPlan)}
           >
             Copy Sub Plan
           </MenuButton>
@@ -257,9 +196,7 @@ const SortableHeader = ({
       });
     }
 
-    const hasEditActions =
-      Boolean(onEdit) ||
-      Boolean(onDelete);
+    const hasEditActions = Boolean(onEdit) || Boolean(onDelete);
 
     if (hasEditActions) {
       items.push({
@@ -273,11 +210,7 @@ const SortableHeader = ({
         label: (
           <MenuButton
             icon={<EditOutlined />}
-            onClick={() =>
-              executeAction(
-                onEdit,
-              )
-            }
+            onClick={() => executeAction(onEdit)}
           >
             Edit
           </MenuButton>
@@ -294,26 +227,18 @@ const SortableHeader = ({
             description="Are you sure?"
             okText="Yes"
             cancelText="No"
-            open={
-              deleteConfirmOpen
-            }
+            open={deleteConfirmOpen}
             onOpenChange={(open) => {
-              setDeleteConfirmOpen(
-                open,
-              );
+              setDeleteConfirmOpen(open);
 
               if (open) {
-                setDropdownOpen(
-                  true,
-                );
+                setDropdownOpen(true);
               }
             }}
             onConfirm={(event) => {
               event?.stopPropagation?.();
 
-              setDeleteConfirmOpen(
-                false,
-              );
+              setDeleteConfirmOpen(false);
 
               closeDropdown();
 
@@ -322,9 +247,7 @@ const SortableHeader = ({
             onCancel={(event) => {
               event?.stopPropagation?.();
 
-              setDeleteConfirmOpen(
-                false,
-              );
+              setDeleteConfirmOpen(false);
 
               closeDropdown();
             }}
@@ -332,13 +255,9 @@ const SortableHeader = ({
             <div>
               <MenuButton
                 danger
-                icon={
-                  <DeleteOutlined />
-                }
+                icon={<DeleteOutlined />}
                 onClick={() => {
-                  setDeleteConfirmOpen(
-                    true,
-                  );
+                  setDeleteConfirmOpen(true);
                 }}
               >
                 Delete
@@ -366,23 +285,17 @@ const SortableHeader = ({
   ]);
 
   const style = {
-    transform:
-      CSS.Transform.toString(
-        transform,
-      ),
+    transform: CSS.Transform.toString(transform),
 
     transition,
 
-    opacity: isDragging
-      ? 0.5
-      : 1,
+    opacity: isDragging ? 0.5 : 1,
 
     display: "flex",
 
     alignItems: "center",
 
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
 
     width: "100%",
 
@@ -390,10 +303,7 @@ const SortableHeader = ({
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-    >
+    <div ref={setNodeRef} style={style}>
       <div
         style={{
           display: "flex",
@@ -411,40 +321,53 @@ const SortableHeader = ({
               event.stopPropagation();
             }}
             style={{
-              cursor: isDragging
-                ? "grabbing"
-                : "grab",
+              cursor: isDragging ? "grabbing" : "grab",
 
-              display:
-                "inline-flex",
+              display: "inline-flex",
 
-              alignItems:
-                "center",
+              alignItems: "center",
 
               flexShrink: 0,
 
-              touchAction:
-                "none",
+              touchAction: "none",
             }}
           >
             <MenuOutlined />
           </span>
         )}
 
-        <span
-          title={plan?.name}
+        <div
           style={{
-            overflow: "hidden",
-            textOverflow:
-              "ellipsis",
-            whiteSpace:
-              "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
             minWidth: 0,
+            flex: 1,
           }}
         >
-          {plan?.name ||
-            "Unnamed Plan"}
-        </span>
+          <span
+            title={plan?.name}
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {plan?.name || "Unnamed Plan"}
+          </span>
+
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: 12,
+              opacity: 0.65,
+              fontWeight: 500,
+            }}
+          >
+            ({objectCount})
+          </span>
+        </div>
       </div>
 
       {menuItems.length > 0 && (
@@ -462,22 +385,15 @@ const SortableHeader = ({
             placement="bottomRight"
             destroyOnHidden
             onOpenChange={(open) => {
-              if (
-                !open &&
-                deleteConfirmOpen
-              ) {
+              if (!open && deleteConfirmOpen) {
                 return;
               }
 
-              setDropdownOpen(
-                open,
-              );
+              setDropdownOpen(open);
             }}
             menu={{
               items: menuItems,
-              onClick: ({
-                domEvent,
-              }) => {
+              onClick: ({ domEvent }) => {
                 domEvent.stopPropagation();
               },
             }}
@@ -485,9 +401,7 @@ const SortableHeader = ({
             <Button
               type="text"
               size="small"
-              icon={
-                <MoreOutlined />
-              }
+              icon={<MoreOutlined />}
               onClick={(event) => {
                 event.stopPropagation();
               }}
@@ -499,6 +413,4 @@ const SortableHeader = ({
   );
 };
 
-export default React.memo(
-  SortableHeader,
-);
+export default React.memo(SortableHeader);

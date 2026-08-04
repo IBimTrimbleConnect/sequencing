@@ -49,6 +49,15 @@ const DEFAULT_PROJECT_FORMATTING = {
   massDecimals: 2,
 };
 
+/*
+ * Màu mặc định của các object chưa chạy simulation.
+ */
+const SIMULATION_BACKGROUND_COLOR = {
+  r: 210,
+  g: 210,
+  b: 210,
+};
+
 
 const normalizeUnit = (unit) =>
   String(unit || "")
@@ -274,6 +283,21 @@ export default function Simulation() {
 
   const [showGrid, setShowGrid] =
     useState(false);
+
+  /*
+   * Transparency chung của toàn bộ model.
+   *
+   * viewer.setOpacity sử dụng thang 0 → 100:
+   * 0   = model rõ hoàn toàn.
+   * 100 = model trong suốt hoàn toàn.
+   *
+   * Các object đã chạy simulation được setObjectState
+   * về opacity 100 và tô màu theo SubPlan.
+   */
+  const [
+    modelTransparency,
+    setModelTransparency,
+  ] = useState(0);
 
   /*
    * sequenceObjects chỉ lưu Internal Object ID trong obj.id.
@@ -1143,63 +1167,7 @@ export default function Simulation() {
       [getTcapi],
     );
 
-  const colorObjectInTrimble =
-    useCallback(
-      async (item) => {
-        if (
-          item?.modelId == null ||
-          item?.runtimeId == null
-        ) {
-          return;
-        }
 
-        const subPlan =
-          subPlans.find(
-            (subPlanItem) =>
-              String(
-                subPlanItem.id,
-              ) ===
-              String(
-                item.subPlanId,
-              ),
-          );
-
-        if (!subPlan?.color) {
-          return;
-        }
-
-        const tcapi =
-          await getTcapi();
-
-        await tcapi.viewer.setObjectState(
-          {
-            modelObjectIds: [
-              {
-                modelId:
-                  item.modelId,
-
-                objectRuntimeIds: [
-                  item.runtimeId,
-                ],
-              },
-            ],
-          },
-          {
-            color: {
-              r: subPlan.color.r,
-              g: subPlan.color.g,
-              b: subPlan.color.b,
-            },
-
-            visible: true,
-          },
-        );
-      },
-      [
-        getTcapi,
-        subPlans,
-      ],
-    );
 
   const gotoCamera =
     useCallback(
@@ -1295,142 +1263,290 @@ export default function Simulation() {
    * Nhờ vậy khi showGrid hoặc sequenceObjects thay đổi,
    * function không tự chạy lại thông qua useEffect.
    */
-  const isolateObjectsInTrimble =
+  const buildGridSelector =
+    useCallback(async () => {
+      const grids =
+        await getGridObjects();
+
+      return {
+        modelObjectIds: (
+          grids || []
+        )
+          .filter(
+            (group) =>
+              group?.modelId != null,
+          )
+          .map((group) => ({
+            modelId:
+              group.modelId,
+
+            objectRuntimeIds: (
+              group.objects || []
+            )
+              .map(
+                (gridObject) =>
+                  gridObject?.id,
+              )
+              .filter(
+                (runtimeId) =>
+                  runtimeId != null,
+              ),
+          }))
+          .filter(
+            (group) =>
+              group.objectRuntimeIds
+                .length > 0,
+          ),
+      };
+    }, [getGridObjects]);
+
+  /*
+   * Áp dụng màu và trạng thái rõ hoàn toàn
+   * cho toàn bộ object đã chạy simulation.
+   *
+   * Object được gom theo Model + SubPlan để
+   * mỗi SubPlan nhận đúng màu.
+   */
+  const applyCompletedObjectStates =
     useCallback(
       async (
-        objects,
+        completedItems,
         includeGrid = false,
       ) => {
-        if (!objects?.length) {
+        const tcapi =
+          await getTcapi();
+
+        const stateGroups =
+          new Map();
+
+        for (
+          const item of
+          completedItems || []
+        ) {
+          if (
+            item?.modelId == null ||
+            item?.runtimeId == null
+          ) {
+            continue;
+          }
+
+          const subPlan =
+            subPlans.find(
+              (subPlanItem) =>
+                String(
+                  subPlanItem.id,
+                ) ===
+                String(
+                  item.subPlanId,
+                ),
+            );
+
+          const groupKey = [
+            String(item.modelId),
+            String(item.subPlanId),
+          ].join("::");
+
+          if (
+            !stateGroups.has(
+              groupKey,
+            )
+          ) {
+            stateGroups.set(
+              groupKey,
+              {
+                modelId:
+                  item.modelId,
+
+                runtimeIds:
+                  new Set(),
+
+                color:
+                  subPlan?.color ||
+                  null,
+              },
+            );
+          }
+
+          stateGroups
+            .get(groupKey)
+            .runtimeIds.add(
+              item.runtimeId,
+            );
+        }
+
+        for (
+          const group of
+          stateGroups.values()
+        ) {
+          const selector = {
+            modelObjectIds: [
+              {
+                modelId:
+                  group.modelId,
+
+                objectRuntimeIds: [
+                  ...group.runtimeIds,
+                ],
+              },
+            ],
+          };
+
+          const objectState = {
+            visible: true,
+
+            /*
+             * Object đã chạy luôn rõ hoàn toàn.
+             */
+            opacity: 100,
+          };
+
+          if (group.color) {
+            objectState.color = {
+              r:
+                group.color.r,
+
+              g:
+                group.color.g,
+
+              b:
+                group.color.b,
+            };
+          }
+
+          await tcapi.viewer.setObjectState(
+            selector,
+            objectState,
+          );
+        }
+
+        /*
+         * Grid luôn rõ hoàn toàn khi được bật.
+         */
+        if (includeGrid) {
+          const gridSelector =
+            await buildGridSelector();
+
+          if (
+            gridSelector.modelObjectIds
+              .length > 0
+          ) {
+            await tcapi.viewer.setObjectState(
+              gridSelector,
+              {
+                visible: true,
+                opacity: 100,
+              },
+            );
+          }
+        }
+      },
+      [
+        buildGridSelector,
+        getTcapi,
+        subPlans,
+      ],
+    );
+
+  /*
+   * Kết hợp:
+   *
+   * 1. setOpacity(transparency):
+   *    áp dụng transparency chung cho toàn viewer.
+   *
+   * 2. setObjectState(selector, state):
+   *    object đã chạy được đưa về rõ 100%
+   *    và tô màu theo SubPlan.
+   */
+  const applySimulationTransparency =
+    useCallback(
+      async (
+        currentIndex,
+        includeGrid = false,
+        transparency = 0,
+      ) => {
+        if (
+          !items.length ||
+          currentIndex < 0 ||
+          currentIndex >=
+            items.length
+        ) {
           return;
         }
 
         const tcapi =
           await getTcapi();
 
-        const isolateObjects =
-          objects
-            .filter(
-              (group) =>
-                group?.modelId !=
-                  null &&
-                Array.isArray(
-                  group.entityIds,
-                ) &&
-                group.entityIds
-                  .length > 0,
-            )
-            .map((group) => ({
-              modelId:
-                group.modelId,
-
-              entityIds: [
-                ...new Set(
-                  group.entityIds,
-                ),
-              ],
-            }));
-
-        if (
-          !isolateObjects.length
-        ) {
-          return;
-        }
-
-        const modelMap =
-          new Map(
-            isolateObjects.map(
-              (group) => [
-                String(
-                  group.modelId,
-                ),
-                group,
-              ],
+        const safeTransparency =
+          Math.max(
+            0,
+            Math.min(
+              100,
+              Number(
+                transparency,
+              ) || 0,
             ),
           );
 
-        if (includeGrid) {
-          const grids =
-            await getGridObjects();
-
-          (grids || []).forEach(
-            (group) => {
-              if (
-                group?.modelId ==
-                null
-              ) {
-                return;
-              }
-
-              const gridIds = (
-                group.objects || []
-              )
-                .map(
-                  (gridObject) =>
-                    gridObject.id,
-                )
-                .filter(
-                  (gridId) =>
-                    gridId != null,
-                );
-
-              if (!gridIds.length) {
-                return;
-              }
-
-              const modelKey =
-                String(
-                  group.modelId,
-                );
-
-              if (
-                modelMap.has(
-                  modelKey,
-                )
-              ) {
-                const target =
-                  modelMap.get(
-                    modelKey,
-                  );
-
-                target.entityIds = [
-                  ...new Set([
-                    ...target.entityIds,
-                    ...gridIds,
-                  ]),
-                ];
-              } else {
-                const target = {
-                  modelId:
-                    group.modelId,
-
-                  entityIds: [
-                    ...new Set(
-                      gridIds,
-                    ),
-                  ],
-                };
-
-                isolateObjects.push(
-                  target,
-                );
-
-                modelMap.set(
-                  modelKey,
-                  target,
-                );
-              }
-            },
+        const completedItems =
+          items.slice(
+            0,
+            currentIndex + 1,
           );
-        }
 
-        await tcapi.viewer.isolateEntities(
-          isolateObjects,
+        /*
+         * Reset trạng thái từ lần chạy trước.
+         */
+        await tcapi.viewer.setObjectState(
+          undefined,
+          {
+            visible: "reset",
+            color: "reset",
+            opacity: 100,
+          },
+        );
+
+        /*
+         * Ban đầu toàn bộ model có màu xám nhạt.
+         * Các object đã chạy sẽ được đổi sang màu SubPlan
+         * trong applyCompletedObjectStates().
+         */
+        await tcapi.viewer.setObjectState(
+          undefined,
+          {
+            visible: true,
+            color:
+              SIMULATION_BACKGROUND_COLOR,
+          },
+        );
+
+        /*
+         * Áp dụng transparency chung cho toàn bộ viewer.
+         *
+         * 0   = rõ hoàn toàn.
+         * 100 = trong suốt hoàn toàn.
+         */
+        await tcapi.viewer.setOpacity(
+          safeTransparency,
+        );
+
+        /*
+         * Khôi phục các object đã chạy:
+         * - visible
+         * - object opacity 100%
+         * - màu của SubPlan
+         *
+         * Các object chưa chạy vẫn giữ màu xám nhạt
+         * và transparency chung của viewer.
+         */
+        await applyCompletedObjectStates(
+          completedItems,
+          includeGrid,
         );
       },
       [
+        applyCompletedObjectStates,
         getTcapi,
-        getGridObjects,
+        items,
       ],
     );
 
@@ -1501,18 +1617,15 @@ export default function Simulation() {
               safeIndex,
             );
 
-          await isolateObjectsInTrimble(
-            accumulatedObjects,
+          await applySimulationTransparency(
+            safeIndex,
             showGrid,
+            modelTransparency,
           );
 
           await gotoCamera(
             item,
             accumulatedObjects,
-          );
-
-          await colorObjectInTrimble(
-            item,
           );
 
           await selectObjectInTrimble(
@@ -1530,9 +1643,9 @@ export default function Simulation() {
         dispatch,
         showGrid,
         buildAccumulatedObjects,
-        isolateObjectsInTrimble,
+        applySimulationTransparency,
+        modelTransparency,
         gotoCamera,
-        colorObjectInTrimble,
         selectObjectInTrimble,
       ],
     );
@@ -1565,17 +1678,13 @@ export default function Simulation() {
         }
 
         try {
-          const accumulatedObjects =
-            buildAccumulatedObjects(
-              index,
-            );
-
           /*
            * Truyền checked trực tiếp vì setShowGrid là async.
            */
-          await isolateObjectsInTrimble(
-            accumulatedObjects,
+          await applySimulationTransparency(
+            index,
             checked,
+            modelTransparency,
           );
         } catch (error) {
           console.error(
@@ -1587,8 +1696,72 @@ export default function Simulation() {
       [
         items.length,
         index,
-        buildAccumulatedObjects,
-        isolateObjectsInTrimble,
+        applySimulationTransparency,
+        modelTransparency,
+      ],
+    );
+
+  const handleTransparencyChange =
+    useCallback(
+      async (value) => {
+        const nextTransparency =
+          Math.max(
+            0,
+            Math.min(
+              100,
+              Number(value) || 0,
+            ),
+          );
+
+        setModelTransparency(
+          nextTransparency,
+        );
+
+        /*
+         * Chưa chạy simulation thì chỉ lưu giá trị slider.
+         */
+        if (
+          !simulationActivatedRef.current
+        ) {
+          return;
+        }
+
+        if (
+          !items.length ||
+          index < 0 ||
+          index >= items.length
+        ) {
+          return;
+        }
+
+        try {
+          await applySimulationTransparency(
+            index,
+            showGrid,
+            nextTransparency,
+          );
+
+          const currentItem =
+            items[index];
+
+          if (currentItem) {
+            await selectObjectInTrimble(
+              currentItem,
+            );
+          }
+        } catch (error) {
+          console.error(
+            "Update simulation transparency failed:",
+            error,
+          );
+        }
+      },
+      [
+        applySimulationTransparency,
+        index,
+        items,
+        selectObjectInTrimble,
+        showGrid,
       ],
     );
 
@@ -1695,6 +1868,33 @@ export default function Simulation() {
       clearInterval(
         intervalRef.current,
       );
+
+      const tcapi =
+        tcapiRef.current;
+
+      if (!tcapi) {
+        return;
+      }
+
+      Promise.all([
+        tcapi.viewer.setOpacity(
+          0,
+        ),
+
+        tcapi.viewer.setObjectState(
+          undefined,
+          {
+            visible: "reset",
+            color: "reset",
+            opacity: 100,
+          },
+        ),
+      ]).catch((error) => {
+        console.error(
+          "Reset simulation viewer state failed:",
+          error,
+        );
+      });
     };
   }, []);
 
@@ -2197,6 +2397,39 @@ export default function Simulation() {
               tooltip={{
                 formatter: (value) =>
                   `${value} ms`,
+              }}
+            />
+          </div>
+
+          {/* MODEL TRANSPARENCY */}
+          <div
+            style={{
+              marginTop: 12,
+            }}
+          >
+            <span>
+              Model transparency:{" "}
+              {modelTransparency}%
+            </span>
+
+            <Slider
+              min={0}
+              max={100}
+              step={5}
+              value={
+                modelTransparency
+              }
+              marks={{
+                0: "Opaque",
+                50: "50%",
+                100: "100%",
+              }}
+              onChange={
+                handleTransparencyChange
+              }
+              tooltip={{
+                formatter: (value) =>
+                  `${value}% transparent`,
               }}
             />
           </div>

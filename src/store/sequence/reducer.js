@@ -31,12 +31,12 @@ const reducers = (state = initialState, action) => {
     case type.SET_OBJECTS_REQUEST:
     case type.UPLOAD_TEMPLATE_REQUEST:
     case type.SELECT_OBJECTS_REQUEST:
+    case type.COPY_SUBPLANS_REQUEST:
       return {
         ...state,
         pending: true,
         error: null,
       };
-
     case type.CREATE_PLAN_SUCCESS: {
       const newPlan = action.payload?.newPlan;
 
@@ -278,6 +278,40 @@ const reducers = (state = initialState, action) => {
 
         selectedObjects: [],
         selectedGroup: null,
+      };
+    }
+
+    case type.COPY_SUBPLANS_SUCCESS: {
+      const copiedSubPlans = Array.isArray(action.payload?.subPlans)
+        ? action.payload.subPlans
+        : [];
+
+      return {
+        ...state,
+        pending: false,
+        error: null,
+
+        subPlans: [...state.subPlans, ...copiedSubPlans].sort((first, second) =>
+          String(first.sortDatetime || "").localeCompare(
+            String(second.sortDatetime || ""),
+          ),
+        ),
+
+        /*
+         * Create an empty sequence-object group
+         * for each newly copied SubPlan.
+         */
+        sequenceObjects: [
+          ...state.sequenceObjects,
+
+          ...copiedSubPlans.map((subPlan) => ({
+            planId: subPlan.planId,
+
+            subPlanId: subPlan.id,
+
+            objects: [],
+          })),
+        ],
       };
     }
 
@@ -525,6 +559,7 @@ const reducers = (state = initialState, action) => {
     case type.SET_OBJECTS_FAILURE:
     case type.UPLOAD_TEMPLATE_FAILURE:
     case type.SELECT_OBJECTS_FAILURE:
+    case type.COPY_SUBPLANS_FAILURE:
       return {
         ...state,
         pending: false,

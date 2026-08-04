@@ -362,32 +362,45 @@ const Main = ({ isOwner = false }) => {
 
   const collapseItems = useMemo(
     () =>
-      plans.map((plan) => ({
-        key: String(plan.id),
+      plans.map((plan) => {
+        const objectCount = sequenceObjects
+          .filter((group) => String(group?.planId) === String(plan.id))
+          .reduce(
+            (total, group) =>
+              total +
+              (Array.isArray(group?.objects) ? group.objects.length : 0),
+            0,
+          );
 
-        label: (
-          <SortableHeader
-            plan={plan}
-            isOwner={isOwner}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            onAddSubPlan={handleAddSubPlan}
-            onCopySubPlan={handleCopySubPlan}
-            onHighlightObject={handleHighlightObject}
-          />
-        ),
+        return {
+          key: String(plan.id),
 
-        children: (
-          <SubPlanCollapse
-            plan={plan}
-            activeSimulationItem={activeSimulationItem}
-            isOwner={isOwner}
-            readOnly={!isOwner}
-          />
-        ),
-      })),
+          label: (
+            <SortableHeader
+              plan={plan}
+              objectCount={objectCount}
+              isOwner={isOwner}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onAddSubPlan={handleAddSubPlan}
+              onCopySubPlan={handleCopySubPlan}
+              onHighlightObject={handleHighlightObject}
+            />
+          ),
+
+          children: (
+            <SubPlanCollapse
+              plan={plan}
+              activeSimulationItem={activeSimulationItem}
+              isOwner={isOwner}
+              readOnly={!isOwner}
+            />
+          ),
+        };
+      }),
     [
       plans,
+      sequenceObjects,
       activeSimulationItem,
       isOwner,
       handleEdit,

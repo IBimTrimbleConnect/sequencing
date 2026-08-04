@@ -1,56 +1,100 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
-import { Button, Modal, Select, Space, message } from "antd";
+import {
+  Button,
+  Modal,
+  Select,
+  Space,
+  message,
+} from "antd";
 
-import { useDispatch, useSelector } from "react-redux";
+import {
+  useDispatch,
+  useSelector,
+} from "react-redux";
 
-import { CopySequenceRequest } from "../store/sequence/action";
+import {
+  CopySubPlansRequest,
+} from "../store/sequence/action";
 
-const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
+const CopySubPlanModal = ({
+  selectedPlan,
+  open,
+  onCancel,
+}) => {
   const dispatch = useDispatch();
 
-  const plans = useSelector((state) => state.sequence.plans || []);
+  const plans = useSelector(
+    (state) =>
+      state.sequence.plans || [],
+  );
 
-  const subPlans = useSelector((state) => state.sequence.subPlans || []);
+  const subPlans = useSelector(
+    (state) =>
+      state.sequence.subPlans || [],
+  );
 
-  const projectId = useSelector((state) => state.sequence.projectId || "");
+  const projectId = useSelector(
+    (state) =>
+      state.sequence.projectId || "",
+  );
 
-  const loading = useSelector((state) => state.sequence.pending);
+  const loading = useSelector(
+    (state) =>
+      state.sequence.pending,
+  );
 
-  const [sourcePlanId, setSourcePlanId] = useState(null);
+  const [
+    sourcePlanId,
+    setSourcePlanId,
+  ] = useState(null);
 
-  /*
-   * Only show plans other than
-   * the current target plan.
-   */
   const sourcePlanOptions = useMemo(
     () =>
       plans
         .filter(
           (plan) =>
-            plan?.id != null && String(plan.id) !== String(selectedPlan?.id),
+            plan?.id != null &&
+            String(plan.id) !==
+              String(
+                selectedPlan?.id,
+              ),
         )
         .map((plan) => ({
-          label: plan.name || "Unnamed Plan",
+          label:
+            plan.name ||
+            "Unnamed Plan",
 
-          value: String(plan.id),
+          value:
+            String(plan.id),
         })),
-    [plans, selectedPlan?.id],
+    [
+      plans,
+      selectedPlan?.id,
+    ],
   );
 
-  /*
-   * Get all SubPlans belonging
-   * to the selected source Plan.
-   */
   const sourceSubPlans = useMemo(() => {
     if (!sourcePlanId) {
       return [];
     }
 
     return subPlans.filter(
-      (subPlan) => String(subPlan?.planId) === String(sourcePlanId),
+      (subPlan) =>
+        String(
+          subPlan?.planId,
+        ) ===
+        String(sourcePlanId),
     );
-  }, [sourcePlanId, subPlans]);
+  }, [
+    sourcePlanId,
+    subPlans,
+  ]);
 
   const closeModal = useCallback(() => {
     setSourcePlanId(null);
@@ -64,20 +108,30 @@ const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
   }, [open]);
 
   const handleCopy = useCallback(() => {
+    if (loading) {
+      return;
+    }
+
     if (!projectId) {
-      message.error("Unable to retrieve the current Trimble project ID.");
+      message.error(
+        "Unable to retrieve the current Trimble project ID.",
+      );
 
       return;
     }
 
     if (!selectedPlan?.id) {
-      message.error("Unable to retrieve the target Plan.");
+      message.error(
+        "Unable to retrieve the target Plan.",
+      );
 
       return;
     }
 
     if (!sourcePlanId) {
-      message.warning("Please select a source Plan.");
+      message.warning(
+        "Please select a source Plan.",
+      );
 
       return;
     }
@@ -90,38 +144,61 @@ const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
       return;
     }
 
-    /*
-     * Keep sourceSubPlanId.
-     * It is required to copy Sequence Objects
-     * from the source SubPlan to the new SubPlan.
-     */
-    const subPlansToCopy = sourceSubPlans.map((subPlan) => ({
-      sourceSubPlanId: subPlan.id,
+    const sourceSubPlansPayload =
+      sourceSubPlans.map(
+        (subPlan) => ({
+          sourceSubPlanId:
+            subPlan.id,
 
-      name: subPlan.name,
+          name:
+            String(
+              subPlan.name || "",
+            ).trim(),
 
-      color: subPlan.color || null,
+          color:
+            subPlan.color || null,
+        }),
+      );
 
-      sortDatetime: subPlan.sortDatetime || subPlan.sort_datetime || null,
-    }));
+    const invalidSubPlan =
+      sourceSubPlansPayload.find(
+        (subPlan) =>
+          !subPlan.name,
+      );
+
+    if (invalidSubPlan) {
+      message.error(
+        "One or more source SubPlans do not have a valid name.",
+      );
+
+      return;
+    }
 
     dispatch(
-      CopySequenceRequest({
-        projectId,
-        targetPlanId: selectedPlan.id,
+      CopySubPlansRequest({
+        projectId:
+          String(projectId),
 
-        subPlansToCopy: sourceSubPlans.map((sp) => ({
-          sourceSubPlanId: sp.id,
-          name: sp.name,
-          color: sp.color,
-        })),
+        sourcePlanId,
+
+        targetPlanId:
+          selectedPlan.id,
+
+        sourceSubPlans:
+          sourceSubPlansPayload,
       }),
     );
 
+    /*
+     * Có thể đóng ngay sau khi dispatch.
+     * Nếu muốn chỉ đóng sau khi copy thành công,
+     * hãy đóng modal trong effect theo COPY_SUBPLANS_SUCCESS.
+     */
     closeModal();
   }, [
     closeModal,
     dispatch,
+    loading,
     projectId,
     selectedPlan?.id,
     sourcePlanId,
@@ -162,13 +239,20 @@ const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
           placeholder="Select source Plan"
           value={sourcePlanId}
           loading={loading}
-          disabled={loading || !selectedPlan?.id}
+          disabled={
+            loading ||
+            !selectedPlan?.id
+          }
           allowClear
           showSearch
           optionFilterProp="label"
-          options={sourcePlanOptions}
+          options={
+            sourcePlanOptions
+          }
           onChange={(value) => {
-            setSourcePlanId(value || null);
+            setSourcePlanId(
+              value || null,
+            );
           }}
         />
 
@@ -179,15 +263,23 @@ const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
               opacity: 0.65,
             }}
           >
-            {sourceSubPlans.length} SubPlan
-            {sourceSubPlans.length === 1 ? "" : "s"} will be copied.
+            {sourceSubPlans.length}{" "}
+            SubPlan
+            {sourceSubPlans.length === 1
+              ? ""
+              : "s"}{" "}
+            will be copied.
           </div>
         )}
 
         <Button
           type="primary"
           block
-          disabled={!sourcePlanId || !sourceSubPlans.length}
+          disabled={
+            loading ||
+            !sourcePlanId ||
+            !sourceSubPlans.length
+          }
           loading={loading}
           onClick={handleCopy}
         >
@@ -198,4 +290,6 @@ const CopySubPlanModal = ({ selectedPlan, open, onCancel }) => {
   );
 };
 
-export default React.memo(CopySubPlanModal);
+export default React.memo(
+  CopySubPlanModal,
+);

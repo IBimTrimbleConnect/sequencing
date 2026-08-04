@@ -370,3 +370,32 @@ export const UpdateSequenceObjectFieldsFailure = (payload) => ({
   type: actionType.UPDATE_SEQUENCE_OBJECT_FIELDS_FAILURE,
   payload,
 });
+export function CopySubPlansRequest(
+  payload,
+) {
+  return {
+    type:
+      actionType.COPY_SUBPLANS_REQUEST,
+    payload,
+  };
+}
+
+export function CopySubPlansSuccess(
+  payload,
+) {
+  return {
+    type:
+      actionType.COPY_SUBPLANS_SUCCESS,
+    payload,
+  };
+}
+
+export function CopySubPlansFailure(
+  payload,
+) {
+  return {
+    type:
+      actionType.COPY_SUBPLANS_FAILURE,
+    payload,
+  };
+}

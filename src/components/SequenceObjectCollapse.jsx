@@ -57,6 +57,10 @@ import {
   getDisplayMassUnit,
   normalizeProjectFormatting,
 } from "../utils/projectFormatting";
+import dayjs from "dayjs";
+import customParseFormat from "dayjs/plugin/customParseFormat";
+
+dayjs.extend(customParseFormat);
 
 /*
  * Supabase stores stable object references:
@@ -377,7 +381,7 @@ const SortableSubItem = React.memo(
               <Button
                 size="small"
                 type="text"
-                disabled={!assignDate}
+                disabled={!assignDate && !dateStep}
                 icon={<EditOutlined />}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -1174,33 +1178,58 @@ const SequenceObjectCollapse = ({
 
   const handleAssignDate = useCallback(
     (date, dateStep) => {
-      if (!isOwner || !date) {
+      if (!isOwner) {
         return;
       }
 
       const step = Number(dateStep) || 0;
+      if (!date && step <= 0) {
+        return;
+      }
 
       const selectedKeys = new Set(
         selectedIds.map((item) => getObjectKey(item)),
       );
 
+      if (!selectedKeys.size) {
+        return;
+      }
+
       let dateCount = 0;
 
-      const updated = currentObjects.map((obj) => {
-        const key = getObjectKey(obj);
+      const updated = currentObjects.map((object) => {
+        const key = getObjectKey(object);
 
         if (!selectedKeys.has(key)) {
-          return obj;
+          return object;
         }
 
-        const nextDate = date.add(dateCount, "day");
+        let nextDate = null;
 
-        dateCount += step;
+        if (date) {
+          nextDate = date.add(dateCount, "day");
+
+          dateCount += step;
+        } else {
+          const currentAssignedDate = object.assignedDate;
+
+          if (!currentAssignedDate) {
+            return object;
+          }
+
+          const next = dayjs(currentAssignedDate);
+
+          if (!next.isValid()) {
+            return object;
+          }
+
+          nextDate = next.add(step, "day");
+        }
 
         return {
-          ...obj,
+          ...object,
           assignedDate: nextDate.format("YYYY-MM-DD"),
-          date: nextDate.format("DD-MM-YYYY"),
+          date: nextDate.format("YYYY-MM-DD"),
         };
       });
 
@@ -1263,6 +1292,60 @@ const SequenceObjectCollapse = ({
     });
   }, [currentObjects, isOwner, selectedIds, updateObjects]);
 
+  const getCameraTargetObjects = useCallback(
+    (triggerItem) => {
+      const triggerKey = getObjectKey(triggerItem);
+
+      const selectedKeySet = new Set(
+        selectedIds.map((object) => getObjectKey(object)),
+      );
+
+      if (selectedKeySet.has(triggerKey)) {
+        return currentObjects.filter((object) =>
+          selectedKeySet.has(getObjectKey(object)),
+        );
+      }
+
+      return currentObjects.filter(
+        (object) => getObjectKey(object) === triggerKey,
+      );
+    },
+    [currentObjects, selectedIds],
+  );
+
+  const updateSelectedObjectCameras = useCallback(
+    (triggerItem, camera) => {
+      if (!isOwner) {
+        return;
+      }
+
+      const targetObjects = getCameraTargetObjects(triggerItem);
+
+      if (!targetObjects.length) {
+        return;
+      }
+
+      const targetKeySet = new Set(
+        targetObjects.map((object) => getObjectKey(object)),
+      );
+
+      const newObjects = currentObjects.map((object) =>
+        targetKeySet.has(getObjectKey(object))
+          ? {
+              ...object,
+              camera,
+            }
+          : object,
+      );
+
+      updateObjects(newObjects);
+
+      setSelectedIds(
+        newObjects.filter((object) => targetKeySet.has(getObjectKey(object))),
+      );
+    },
+    [currentObjects, getCameraTargetObjects, isOwner, updateObjects],
+  );
   const handleAddCamera = useCallback(
     async (item) => {
       if (!isOwner) {
@@ -1273,49 +1356,20 @@ const SequenceObjectCollapse = ({
         const tcapi =
           tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
 
+        tcapiRef.current = tcapi;
+
         const camera = await tcapi.viewer.getCamera();
 
         if (!camera) {
           return;
         }
 
-        const newObjects = currentObjects.map((obj) => {
-          if (!isSameObject(obj, item)) {
-            return obj;
-          }
-
-          return {
-            ...obj,
-            camera,
-          };
-        });
-
-        updateObjects(newObjects);
+        updateSelectedObjectCameras(item, camera);
       } catch (error) {
         console.error("Save camera failed:", error);
       }
     },
-    [currentObjects, isOwner, updateObjects],
-  );
-
-  const updateObjectCamera = useCallback(
-    (item, camera) => {
-      if (!isOwner) {
-        return;
-      }
-
-      const newObjects = currentObjects.map((obj) =>
-        isSameObject(obj, item)
-          ? {
-              ...obj,
-              camera,
-            }
-          : obj,
-      );
-
-      updateObjects(newObjects);
-    },
-    [currentObjects, isOwner, updateObjects],
+    [isOwner, updateSelectedObjectCameras],
   );
 
   const handleChangeCamera = useCallback(
@@ -1328,18 +1382,20 @@ const SequenceObjectCollapse = ({
         const tcapi =
           tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
 
+        tcapiRef.current = tcapi;
+
         const camera = await tcapi.viewer.getCamera();
 
         if (!camera) {
           return;
         }
 
-        updateObjectCamera(item, camera);
+        updateSelectedObjectCameras(item, camera);
       } catch (error) {
         console.error("Change camera failed:", error);
       }
     },
-    [isOwner, updateObjectCamera],
+    [isOwner, updateSelectedObjectCameras],
   );
 
   const handleDeleteCamera = useCallback(
@@ -1349,12 +1405,12 @@ const SequenceObjectCollapse = ({
       }
 
       try {
-        updateObjectCamera(item, null);
+        updateSelectedObjectCameras(item, null);
       } catch (error) {
         console.error("Delete camera failed:", error);
       }
     },
-    [isOwner, updateObjectCamera],
+    [isOwner, updateSelectedObjectCameras],
   );
 
   const handleZoomToSelected = useCallback(async () => {
