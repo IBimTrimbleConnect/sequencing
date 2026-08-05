@@ -49,6 +49,83 @@ const DEFAULT_PROJECT_FORMATTING = {
   massDecimals: 2,
 };
 
+const normalizeRgbColor = (color) => {
+  if (!color) {
+    return null;
+  }
+
+  if (typeof color === "string") {
+    const normalized = color
+      .trim()
+      .replace(/^#/, "");
+
+    if (/^[0-9a-fA-F]{3}$/.test(normalized)) {
+      return {
+        r: Number.parseInt(
+          normalized[0] + normalized[0],
+          16,
+        ),
+        g: Number.parseInt(
+          normalized[1] + normalized[1],
+          16,
+        ),
+        b: Number.parseInt(
+          normalized[2] + normalized[2],
+          16,
+        ),
+      };
+    }
+
+    if (/^[0-9a-fA-F]{6}$/.test(normalized)) {
+      return {
+        r: Number.parseInt(
+          normalized.slice(0, 2),
+          16,
+        ),
+        g: Number.parseInt(
+          normalized.slice(2, 4),
+          16,
+        ),
+        b: Number.parseInt(
+          normalized.slice(4, 6),
+          16,
+        ),
+      };
+    }
+
+    return null;
+  }
+
+  if (typeof color === "object") {
+    const r = Number(color.r);
+    const g = Number(color.g);
+    const b = Number(color.b);
+
+    if (
+      Number.isFinite(r) &&
+      Number.isFinite(g) &&
+      Number.isFinite(b)
+    ) {
+      return {
+        r: Math.max(
+          0,
+          Math.min(255, r),
+        ),
+        g: Math.max(
+          0,
+          Math.min(255, g),
+        ),
+        b: Math.max(
+          0,
+          Math.min(255, b),
+        ),
+      };
+    }
+  }
+
+  return null;
+};
+
 
 const normalizeUnit = (unit) =>
   String(unit || "")
@@ -276,12 +353,9 @@ export default function Simulation() {
     useState(false);
 
   /*
-   * sequenceObjects chỉ lưu Internal Object ID trong obj.id.
-   * items sẽ chứa Runtime ID đã được resolve từ Viewer.
+   * modelId và runtimeId đã được hydrate trong saga.
+   * Simulation chỉ đọc dữ liệu runtime từ Redux.
    */
-  const [items, setItems] = useState([]);
-  const [resolvingRuntimeIds, setResolvingRuntimeIds] =
-    useState(false);
 
 
   const parseDate = useCallback((value) => {
@@ -428,46 +502,58 @@ export default function Simulation() {
           return;
         }
 
-        const objects = group.objects || [];
+        const objects = Array.isArray(
+          group.objects,
+        )
+          ? group.objects
+          : [];
 
         objects.forEach(
           (obj, objectIndex) => {
-            /*
-             * obj.id là Internal Object ID.
-             * Không sử dụng nó trực tiếp với setSelection,
-             * isolateEntities hoặc setObjectState.
-             */
-            const objectId = obj.id;
-
             const modelId =
-              obj.modelId ??
-              group.modelId;
+              obj?.modelId ??
+              group?.modelId ??
+              null;
+
+            const runtimeId =
+              obj?.runtimeId ??
+              null;
+
+            const externalId =
+              obj?.externalId ??
+              obj?.external_id ??
+              null;
 
             const planId = String(
-              obj.planId ??
-                group.planId ??
+              obj?.planId ??
+                group?.planId ??
                 "",
             );
 
             const subPlanId = String(
-              obj.subPlanId ??
-                group.subPlanId ??
+              obj?.subPlanId ??
+                group?.subPlanId ??
                 "",
             );
 
             const simulationDate =
-              obj.assignedDate ||
-              obj.date;
+              obj?.assignedDate ||
+              obj?.date;
 
             const parsedDate =
               parseDate(
                 simulationDate,
               );
 
+            /*
+             * Runtime ID đã được hydrate trong saga.
+             * Simulation không convert lại external_id.
+             */
             if (
-              objectId == null ||
               modelId == null ||
-              !parsedDate
+              runtimeId == null ||
+              !parsedDate ||
+              obj?.objectAvailable === false
             ) {
               return;
             }
@@ -481,8 +567,10 @@ export default function Simulation() {
             result.push({
               ...obj,
 
-              objectId,
               modelId,
+              runtimeId,
+              externalId,
+
               planId,
               subPlanId,
 
@@ -494,20 +582,21 @@ export default function Simulation() {
 
               planName:
                 plan?.name ||
-                group.planName ||
+                group?.planName ||
                 `Plan ${groupIndex + 1}`,
 
               name:
-                obj.asmPos ||
-                obj.name ||
-                obj.objectName ||
+                obj?.asmPos ||
+                obj?.name ||
+                obj?.objectName ||
                 `Object ${objectIndex + 1}`,
 
               /*
-               * Giữ id là Internal Object ID để Redux/UI
-               * nhận diện object ổn định.
+               * Giữ externalId để Redux/UI nhận diện ổn định.
+               * Viewer luôn sử dụng runtimeId.
                */
-              id: String(objectId),
+              objectId:
+                externalId,
 
               simulationDate:
                 parsedDate.format(
@@ -548,7 +637,7 @@ export default function Simulation() {
   // FILTER ITEMS
   // =====================================================
 
-  const filteredItems = useMemo(() => {
+  const items = useMemo(() => {
     const selectedPlanSet = new Set(
       selectedPlanIds.map((id) =>
         String(id),
@@ -751,241 +840,7 @@ export default function Simulation() {
       return tcapiRef.current;
     }, []);
 
-  /*
-   * Resolve Internal Object IDs -> Runtime IDs.
-   *
-   * Mỗi model chỉ gọi convertToObjectRuntimeIds một lần.
-   * Runtime ID không được lưu lâu dài trong Redux vì có thể
-   * thay đổi khi model được reload.
-   */
-  useEffect(() => {
-    let cancelled = false;
 
-    const resolveRuntimeIds = async () => {
-      setPlaying(false);
-
-      clearInterval(
-        intervalRef.current,
-      );
-
-      setIndex(0);
-
-      if (!filteredItems.length) {
-        setItems([]);
-        setResolvingRuntimeIds(false);
-        return;
-      }
-
-      setResolvingRuntimeIds(true);
-      setItems([]);
-
-      try {
-        const tcapi = await getTcapi();
-        const modelGroups = new Map();
-
-        filteredItems.forEach(
-          (item, itemIndex) => {
-            if (
-              item?.modelId == null ||
-              item?.objectId == null
-            ) {
-              return;
-            }
-
-            const modelKey = String(
-              item.modelId,
-            );
-
-            if (!modelGroups.has(modelKey)) {
-              modelGroups.set(modelKey, {
-                modelId: item.modelId,
-                entries: [],
-              });
-            }
-
-            modelGroups
-              .get(modelKey)
-              .entries.push({
-                item,
-                itemIndex,
-              });
-          },
-        );
-
-        const resolvedByIndex = new Map();
-
-        for (const group of modelGroups.values()) {
-          /*
-           * Loại objectId trùng trước khi convert.
-           */
-          const uniqueObjectIds = [];
-          const uniqueObjectIdKeys =
-            new Set();
-
-          group.entries.forEach(
-            ({ item }) => {
-              const objectIdKey =
-                String(item.objectId);
-
-              if (
-                uniqueObjectIdKeys.has(
-                  objectIdKey,
-                )
-              ) {
-                return;
-              }
-
-              uniqueObjectIdKeys.add(
-                objectIdKey,
-              );
-
-              uniqueObjectIds.push(
-                item.objectId,
-              );
-            },
-          );
-
-          if (!uniqueObjectIds.length) {
-            continue;
-          }
-
-          let runtimeIds = [];
-
-          try {
-            runtimeIds =
-              await tcapi.viewer.convertToObjectRuntimeIds(
-                group.modelId,
-                uniqueObjectIds,
-              );
-          } catch (error) {
-            console.error(
-              "convertToObjectRuntimeIds failed:",
-              {
-                modelId: group.modelId,
-                objectIds: uniqueObjectIds,
-                error,
-              },
-            );
-
-            continue;
-          }
-
-          const runtimeIdMap = new Map();
-
-          uniqueObjectIds.forEach(
-            (objectId, objectIndex) => {
-              const runtimeId =
-                runtimeIds?.[objectIndex];
-
-              if (runtimeId == null) {
-                console.warn(
-                  "Runtime ID was not found:",
-                  {
-                    modelId:
-                      group.modelId,
-                    objectId,
-                  },
-                );
-
-                return;
-              }
-
-              runtimeIdMap.set(
-                String(objectId),
-                runtimeId,
-              );
-            },
-          );
-
-          group.entries.forEach(
-            ({ item, itemIndex }) => {
-              const runtimeId =
-                runtimeIdMap.get(
-                  String(
-                    item.objectId,
-                  ),
-                );
-
-              if (runtimeId == null) {
-                return;
-              }
-
-              resolvedByIndex.set(
-                itemIndex,
-                {
-                  ...item,
-                  runtimeId,
-                },
-              );
-            },
-          );
-        }
-
-        if (cancelled) {
-          return;
-        }
-
-        const resolvedItems =
-          filteredItems
-            .map((item, itemIndex) =>
-              resolvedByIndex.get(
-                itemIndex,
-              ),
-            )
-            .filter(Boolean);
-
-        const nextItems =
-          resolvedItems.map(
-            (item, itemIndex) => ({
-              ...item,
-
-              value:
-                resolvedItems.length === 1
-                  ? 0
-                  : Math.round(
-                      (itemIndex /
-                        (resolvedItems.length -
-                          1)) *
-                        100,
-                    ),
-            }),
-          );
-
-        setItems(nextItems);
-
-        if (
-          filteredItems.length > 0 &&
-          nextItems.length === 0
-        ) {
-          console.warn(
-            "No simulation object could be converted to a Runtime ID.",
-          );
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error(
-            "Resolve simulation Runtime IDs failed:",
-            error,
-          );
-
-          setItems([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setResolvingRuntimeIds(false);
-        }
-      }
-    };
-
-    resolveRuntimeIds();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    filteredItems,
-    getTcapi,
-  ]);
 
   /*
    * Lấy Project Unit Setting một lần khi component load.
@@ -1164,7 +1019,12 @@ export default function Simulation() {
               ),
           );
 
-        if (!subPlan?.color) {
+        const color =
+          normalizeRgbColor(
+            subPlan?.color,
+          );
+
+        if (!color) {
           return;
         }
 
@@ -1185,19 +1045,39 @@ export default function Simulation() {
             ],
           },
           {
-            color: {
-              r: subPlan.color.r,
-              g: subPlan.color.g,
-              b: subPlan.color.b,
-            },
-
+            color,
             visible: true,
+            opacity: 1,
           },
         );
       },
       [
         getTcapi,
         subPlans,
+      ],
+    );
+
+  const colorAccumulatedObjects =
+    useCallback(
+      async (toIndex) => {
+        const completedItems =
+          items.slice(
+            0,
+            toIndex + 1,
+          );
+
+        for (
+          const completedItem of
+          completedItems
+        ) {
+          await colorObjectInTrimble(
+            completedItem,
+          );
+        }
+      },
+      [
+        items,
+        colorObjectInTrimble,
       ],
     );
 
@@ -1484,11 +1364,15 @@ export default function Simulation() {
               item.modelId,
 
             id: String(
-              item.objectId,
+              item.externalId ??
+                item.objectId ??
+                "",
             ),
 
             objectId:
-              item.objectId,
+              item.externalId ??
+              item.objectId ??
+              null,
 
             runtimeId:
               item.runtimeId,
@@ -1511,8 +1395,8 @@ export default function Simulation() {
             accumulatedObjects,
           );
 
-          await colorObjectInTrimble(
-            item,
+          await colorAccumulatedObjects(
+            safeIndex,
           );
 
           await selectObjectInTrimble(
@@ -1532,7 +1416,7 @@ export default function Simulation() {
         buildAccumulatedObjects,
         isolateObjectsInTrimble,
         gotoCamera,
-        colorObjectInTrimble,
+        colorAccumulatedObjects,
         selectObjectInTrimble,
       ],
     );
@@ -1695,6 +1579,29 @@ export default function Simulation() {
       clearInterval(
         intervalRef.current,
       );
+
+      const tcapi =
+        tcapiRef.current;
+
+      if (!tcapi) {
+        return;
+      }
+
+      Promise.resolve(
+        tcapi.viewer.setObjectState(
+          undefined,
+          {
+            visible: "reset",
+            color: "reset",
+            opacity: 1,
+          },
+        ),
+      ).catch((error) => {
+        console.error(
+          "Reset simulation viewer state failed:",
+          error,
+        );
+      });
     };
   }, []);
 
@@ -2031,14 +1938,9 @@ export default function Simulation() {
         <div>
           Please select at least one plan
         </div>
-      ) : resolvingRuntimeIds ? (
+) : !items.length ? (
         <div>
-          Resolving model object IDs...
-        </div>
-      ) : !items.length ? (
-        <div>
-          No objects match the selected plans and date range,
-          or their Runtime IDs could not be resolved
+          No available objects match the selected plans and date range
         </div>
       ) : (
         <>

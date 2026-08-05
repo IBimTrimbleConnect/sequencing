@@ -1,7 +1,6 @@
-import React, { useMemo, useState } from "react";
-import { Button, Dropdown, Popconfirm,  Badge,} from "antd";
-import { useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import React, { useCallback, useMemo, useState } from "react";
+
+import { Badge, Button, Dropdown, Popconfirm } from "antd";
 
 import {
   CopyOutlined,
@@ -16,29 +15,41 @@ import {
   SortAscendingOutlined,
 } from "@ant-design/icons";
 
-const MenuButton = ({ icon, children, danger = false, onClick }) => (
-  <Button
-    size="small"
-    type="text"
-    danger={danger}
-    icon={icon}
-    onClick={(event) => {
-      event.stopPropagation();
-      onClick?.();
-    }}
-    style={{
-      width: "100%",
-      justifyContent: "flex-start",
-    }}
-  >
-    {children}
-  </Button>
-);
+import { useSortable } from "@dnd-kit/sortable";
+
+import { CSS } from "@dnd-kit/utilities";
+
+const MenuButton = ({ icon, children, danger = false, onClick }) => {
+  const handleClick = (event) => {
+    event.stopPropagation();
+
+    onClick?.();
+  };
+
+  return (
+    <Button
+      size="small"
+      type="text"
+      danger={danger}
+      icon={icon}
+      onClick={handleClick}
+      style={{
+        width: "100%",
+        display: "flex",
+        justifyContent: "flex-start",
+        alignItems: "center",
+      }}
+    >
+      {children}
+    </Button>
+  );
+};
 
 const SortableHeader = ({
-  objectCount = 0,
   plan,
+  objectCount = 0,
   isOwner = false,
+
   onEdit,
   onDelete,
   onAddSubPlan,
@@ -61,166 +72,170 @@ const SortableHeader = ({
     transition,
     isDragging,
   } = useSortable({
-    id: String(plan.id),
+    id: String(plan?.id ?? ""),
 
-    /*
-     * Only Owner can reorder Plans.
-     */
     disabled: !isOwner,
   });
 
-  const closeDropdown = () => {
+  const closeDropdown = useCallback(() => {
     setDropdownOpen(false);
-  };
+  }, []);
 
-  const executeAction = (callback) => {
-    closeDropdown();
-    callback?.(plan);
-  };
+  const executeAction = useCallback(
+    (callback) => {
+      closeDropdown();
+
+      callback?.(plan);
+    },
+    [closeDropdown, plan],
+  );
+
+  const createMenuItem = useCallback(
+    ({ key, icon, label, callback, danger = false }) => ({
+      key,
+
+      label: (
+        <MenuButton
+          icon={icon}
+          danger={danger}
+          onClick={() => {
+            executeAction(callback);
+          }}
+        >
+          {label}
+        </MenuButton>
+      ),
+    }),
+    [executeAction],
+  );
 
   const menuItems = useMemo(() => {
-    const items = [];
+    const viewerItems = [];
 
-    /*
-     * Available to both Owner and Viewer.
-     */
     if (onSimulation) {
-      items.push({
-        key: "runSimulation",
-        label: (
-          <MenuButton
-            icon={<PlayCircleOutlined />}
-            onClick={() => executeAction(onSimulation)}
-          >
-            Run Simulation
-          </MenuButton>
-        ),
-      });
+      viewerItems.push(
+        createMenuItem({
+          key: "runSimulation",
+
+          icon: <PlayCircleOutlined />,
+
+          label: "Run Simulation",
+
+          callback: onSimulation,
+        }),
+      );
     }
 
     if (onHighlightObject) {
-      items.push({
-        key: "highlightObjects",
-        label: (
-          <MenuButton
-            icon={<SelectOutlined />}
-            onClick={() => executeAction(onHighlightObject)}
-          >
-            Highlight
-          </MenuButton>
-        ),
-      });
+      viewerItems.push(
+        createMenuItem({
+          key: "highlightObjects",
+
+          icon: <SelectOutlined />,
+
+          label: "Highlight",
+
+          callback: onHighlightObject,
+        }),
+      );
     }
 
-    /*
-     * Editing and deleting features
-     * are visible only to Owner.
-     */
     if (!isOwner) {
-      return items;
+      return viewerItems;
     }
 
-    if (items.length > 0) {
-      items.push({
-        type: "divider",
-      });
-    }
+    const ownerItems = [];
 
     if (onAssignObject) {
-      items.push({
-        key: "assignMultipleAssemblies",
-        label: (
-          <MenuButton
-            icon={<PlusOutlined />}
-            onClick={() => executeAction(onAssignObject)}
-          >
-            Assign Multiple Assemblies
-          </MenuButton>
-        ),
-      });
+      ownerItems.push(
+        createMenuItem({
+          key: "assignMultipleAssemblies",
+
+          icon: <PlusOutlined />,
+
+          label: "Assign Multiple Assemblies",
+
+          callback: onAssignObject,
+        }),
+      );
     }
 
     if (onAutoAssign) {
-      items.push({
-        key: "assignPickedAssemblies",
-        label: (
-          <MenuButton
-            icon={<PlusOutlined />}
-            onClick={() => executeAction(onAutoAssign)}
-          >
-            Assign Picked Assemblies In Order
-          </MenuButton>
-        ),
-      });
+      ownerItems.push(
+        createMenuItem({
+          key: "assignPickedAssemblies",
+
+          icon: <PlusOutlined />,
+
+          label: "Assign Picked Assemblies In Order",
+
+          callback: onAutoAssign,
+        }),
+      );
     }
 
     if (onAddSubPlan) {
-      items.push({
-        key: "createSubPlan",
-        label: (
-          <MenuButton
-            icon={<FolderAddOutlined />}
-            onClick={() => executeAction(onAddSubPlan)}
-          >
-            Create Sub Plan
-          </MenuButton>
-        ),
-      });
+      ownerItems.push(
+        createMenuItem({
+          key: "createSubPlan",
+
+          icon: <FolderAddOutlined />,
+
+          label: "Create Sub Plan",
+
+          callback: onAddSubPlan,
+        }),
+      );
     }
 
     if (onSortByDate) {
-      items.push({
-        key: "sortByDate",
-        label: (
-          <MenuButton
-            icon={<SortAscendingOutlined />}
-            onClick={() => executeAction(onSortByDate)}
-          >
-            Sort By Date
-          </MenuButton>
-        ),
-      });
+      ownerItems.push(
+        createMenuItem({
+          key: "sortByDate",
+
+          icon: <SortAscendingOutlined />,
+
+          label: "Sort By Date",
+
+          callback: onSortByDate,
+        }),
+      );
     }
 
     if (onCopySubPlan) {
-      items.push({
-        key: "copySubPlan",
-        label: (
-          <MenuButton
-            icon={<CopyOutlined />}
-            onClick={() => executeAction(onCopySubPlan)}
-          >
-            Copy Sub Plan
-          </MenuButton>
-        ),
-      });
+      ownerItems.push(
+        createMenuItem({
+          key: "copySubPlan",
+
+          icon: <CopyOutlined />,
+
+          label: "Copy Sub Plan",
+
+          callback: onCopySubPlan,
+        }),
+      );
     }
 
-    const hasEditActions = Boolean(onEdit) || Boolean(onDelete);
-
-    if (hasEditActions) {
-      items.push({
-        type: "divider",
-      });
-    }
+    const editItems = [];
 
     if (onEdit) {
-      items.push({
-        key: "edit",
-        label: (
-          <MenuButton
-            icon={<EditOutlined />}
-            onClick={() => executeAction(onEdit)}
-          >
-            Edit
-          </MenuButton>
-        ),
-      });
+      editItems.push(
+        createMenuItem({
+          key: "edit",
+
+          icon: <EditOutlined />,
+
+          label: "Edit",
+
+          callback: onEdit,
+        }),
+      );
     }
 
     if (onDelete) {
-      items.push({
+      editItems.push({
         key: "delete",
+
         label: (
           <Popconfirm
             title="Delete"
@@ -268,10 +283,29 @@ const SortableHeader = ({
       });
     }
 
-    return items;
+    const result = [...viewerItems];
+
+    if (viewerItems.length && ownerItems.length) {
+      result.push({
+        type: "divider",
+      });
+    }
+
+    result.push(...ownerItems);
+
+    if (editItems.length && (viewerItems.length || ownerItems.length)) {
+      result.push({
+        type: "divider",
+      });
+    }
+
+    result.push(...editItems);
+
+    return result;
   }, [
-    plan,
+    createMenuItem,
     isOwner,
+    plan,
     onEdit,
     onDelete,
     onAddSubPlan,
@@ -282,28 +316,48 @@ const SortableHeader = ({
     onHighlightObject,
     onSimulation,
     deleteConfirmOpen,
+    closeDropdown,
   ]);
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
+  const handleDropdownChange = useCallback(
+    (open) => {
+      if (!open && deleteConfirmOpen) {
+        return;
+      }
 
-    transition,
+      setDropdownOpen(open);
+    },
+    [deleteConfirmOpen],
+  );
 
-    opacity: isDragging ? 0.5 : 1,
+  const handleStopPropagation = useCallback((event) => {
+    event.stopPropagation();
+  }, []);
 
-    display: "flex",
+  const containerStyle = useMemo(
+    () => ({
+      transform: CSS.Transform.toString(transform),
 
-    alignItems: "center",
+      transition,
 
-    justifyContent: "space-between",
+      opacity: isDragging ? 0.5 : 1,
 
-    width: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
 
-    minWidth: 0,
-  };
+      width: "100%",
+      minWidth: 0,
+    }),
+    [transform, transition, isDragging],
+  );
+
+  const safeObjectCount = Number.isFinite(Number(objectCount))
+    ? Math.max(0, Number(objectCount))
+    : 0;
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={containerStyle}>
       <div
         style={{
           display: "flex",
@@ -317,9 +371,7 @@ const SortableHeader = ({
           <span
             {...attributes}
             {...listeners}
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
+            onClick={handleStopPropagation}
             style={{
               cursor: isDragging ? "grabbing" : "grab",
 
@@ -340,7 +392,7 @@ const SortableHeader = ({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 8,
             minWidth: 0,
             flex: 1,
           }}
@@ -349,32 +401,24 @@ const SortableHeader = ({
             title={plan?.name}
             style={{
               overflow: "hidden",
+
               textOverflow: "ellipsis",
+
               whiteSpace: "nowrap",
+
               minWidth: 0,
             }}
           >
             {plan?.name || "Unnamed Plan"}
           </span>
 
-          <span
-            style={{
-              flexShrink: 0,
-              fontSize: 12,
-              opacity: 0.65,
-              fontWeight: 500,
-            }}
-          >
-            ({objectCount})
-          </span>
+          <span>[{objectCount}]</span>
         </div>
       </div>
 
       {menuItems.length > 0 && (
         <div
-          onClick={(event) => {
-            event.stopPropagation();
-          }}
+          onClick={handleStopPropagation}
           style={{
             flexShrink: 0,
           }}
@@ -384,15 +428,10 @@ const SortableHeader = ({
             trigger={["click"]}
             placement="bottomRight"
             destroyOnHidden
-            onOpenChange={(open) => {
-              if (!open && deleteConfirmOpen) {
-                return;
-              }
-
-              setDropdownOpen(open);
-            }}
+            onOpenChange={handleDropdownChange}
             menu={{
               items: menuItems,
+
               onClick: ({ domEvent }) => {
                 domEvent.stopPropagation();
               },
@@ -402,9 +441,7 @@ const SortableHeader = ({
               type="text"
               size="small"
               icon={<MoreOutlined />}
-              onClick={(event) => {
-                event.stopPropagation();
-              }}
+              onClick={handleStopPropagation}
             />
           </Dropdown>
         </div>

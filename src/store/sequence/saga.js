@@ -62,7 +62,10 @@ import { copySubPlans } from "../../services/copySubPlanService";
 
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
-import { extractRuntimeObjectProperties } from "../../utils/runtimeObjectProperties";
+import {
+  hydrateSequenceObjects,
+} from "../../services/trimbleRuntimeService";
+
 
 function getErrorMessage(error, fallback) {
   return error?.message || error?.details || error?.hint || fallback;
@@ -94,10 +97,17 @@ function* getPlansSaga(action) {
       call(getSequenceObjectsByProject, projectId),
     ]);
 
-    const hydratedObjects = yield call(hydrateSequenceObjects, {
-      tcapi,
-      objects: sequenceObjectRows,
-    });
+    const hydratedObjects =
+      yield call(
+        hydrateSequenceObjects,
+        {
+          tcapi,
+
+          objects:
+            sequenceObjectRows ||
+            [],
+        },
+      );
 
     const objectsBySubPlan = new Map();
 
@@ -117,7 +127,9 @@ function* getPlansSaga(action) {
       objectsBySubPlan.get(key).push(object);
     }
 
-    const sequenceObjects = subPlans.map((subPlan) => ({
+    const sequenceObjects =
+      (subPlans || []).map(
+        (subPlan) => ({
       planId: subPlan.planId,
 
       subPlanId: subPlan.id,
@@ -129,7 +141,8 @@ function* getPlansSaga(action) {
           subPlanId: subPlan.id,
         }),
       ),
-    }));
+        }),
+      );
 
     yield put(
       GetPlanSuccess({
@@ -139,8 +152,12 @@ function* getPlansSaga(action) {
 
         currentUser,
 
-        plans,
-        subPlans,
+        plans:
+          plans || [],
+
+        subPlans:
+          subPlans || [],
+
         sequenceObjects,
       }),
     );
@@ -151,250 +168,6 @@ function* getPlansSaga(action) {
       GetPlanFailure(error?.message || "Failed to load sequencing data."),
     );
   }
-}
-
-const getStableModelId = (object) =>
-  object?.modelId ??
-  object?.modelExternalId ??
-  object?.model_external_id ??
-  null;
-
-const getStableExternalId = (object) =>
-  object?.externalId ??
-  object?.external_id ??
-  object?.objectId ??
-  object?.id ??
-  null;
-
-const createRuntimeObjectKey = (modelId, externalId) =>
-  `${String(modelId)}::${String(externalId)}`;
-
-const createUnavailableObject = ({ object, modelId, externalId }) => ({
-  ...object,
-
-  modelId,
-  modelExternalId:
-    object?.modelExternalId ?? object?.model_external_id ?? modelId,
-
-  externalId,
-
-  /*
-   * Keep id as stable external object ID.
-   */
-  id: externalId,
-
-  runtimeId: null,
-
-  asmPos: object?.asmPos || "",
-
-  asmName: object?.asmName || "",
-
-  name: object?.name || "",
-
-  positionCode: object?.positionCode || "",
-
-  rawWeight: object?.rawWeight ?? null,
-
-  weight: object?.rawWeight ?? object?.weight ?? null,
-
-  rawLength: object?.rawLength ?? null,
-
-  length: object?.rawLength ?? object?.length ?? null,
-
-  rawCog: object?.rawCog ?? null,
-
-  cog: object?.rawCog ?? object?.cog ?? null,
-
-  objectAvailable: false,
-});
-
-async function hydrateSequenceObjects({ tcapi, objects }) {
-  if (!Array.isArray(objects) || objects.length === 0) {
-    return [];
-  }
-
-  const modelGroups = new Map();
-
-  for (const object of objects) {
-    const modelId = getStableModelId(object);
-
-    const externalId = getStableExternalId(object);
-
-    if (modelId == null || externalId == null) {
-      continue;
-    }
-
-    const modelKey = String(modelId);
-
-    if (!modelGroups.has(modelKey)) {
-      modelGroups.set(modelKey, {
-        modelId,
-        entries: [],
-      });
-    }
-
-    modelGroups.get(modelKey).entries.push({
-      source: object,
-      externalId,
-    });
-  }
-
-  const hydratedMap = new Map();
-
-  for (const group of modelGroups.values()) {
-    /*
-     * Remove duplicated external IDs before
-     * requesting Trimble Connect.
-     */
-    const uniqueEntries = [
-      ...new Map(
-        group.entries.map((entry) => [String(entry.externalId), entry]),
-      ).values(),
-    ];
-
-    const externalIds = uniqueEntries.map((entry) => entry.externalId);
-
-    let runtimeIds = [];
-
-    try {
-      runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
-        group.modelId,
-        externalIds,
-      );
-    } catch (error) {
-      console.error("Failed to resolve runtime IDs:", {
-        modelId: group.modelId,
-        externalIds,
-        error,
-      });
-
-      for (const entry of uniqueEntries) {
-        hydratedMap.set(
-          createRuntimeObjectKey(group.modelId, entry.externalId),
-          createUnavailableObject({
-            object: entry.source,
-            modelId: group.modelId,
-            externalId: entry.externalId,
-          }),
-        );
-      }
-
-      continue;
-    }
-
-    const availableEntries = [];
-
-    uniqueEntries.forEach((entry, index) => {
-      const runtimeId = runtimeIds?.[index];
-
-      if (runtimeId == null) {
-        hydratedMap.set(
-          createRuntimeObjectKey(group.modelId, entry.externalId),
-          createUnavailableObject({
-            object: entry.source,
-            modelId: group.modelId,
-            externalId: entry.externalId,
-          }),
-        );
-
-        return;
-      }
-
-      availableEntries.push({
-        ...entry,
-        runtimeId,
-      });
-    });
-
-    if (!availableEntries.length) {
-      continue;
-    }
-
-    let propertyItems = [];
-
-    try {
-      propertyItems = await tcapi.viewer.getObjectProperties(
-        group.modelId,
-        availableEntries.map((entry) => entry.runtimeId),
-      );
-    } catch (error) {
-      console.error("Failed to load object properties:", {
-        modelId: group.modelId,
-        runtimeIds: availableEntries.map((entry) => entry.runtimeId),
-        error,
-      });
-
-      propertyItems = [];
-    }
-
-    availableEntries.forEach((entry, index) => {
-      const propertyItem = propertyItems?.[index];
-
-      const runtimeProperties = propertyItem
-        ? extractRuntimeObjectProperties(propertyItem)
-        : {
-            asmPos: "",
-            asmName: "",
-            name: "",
-            positionCode: "",
-            rawWeight: null,
-            weight: null,
-            rawLength: null,
-            length: null,
-            rawCog: null,
-            cog: null,
-          };
-
-      hydratedMap.set(createRuntimeObjectKey(group.modelId, entry.externalId), {
-        ...entry.source,
-
-        modelId: group.modelId,
-
-        modelExternalId:
-          entry.source?.modelExternalId ??
-          entry.source?.model_external_id ??
-          group.modelId,
-
-        externalId: entry.externalId,
-
-        /*
-         * Keep id as stable external ID.
-         */
-        id: entry.externalId,
-
-        runtimeId: entry.runtimeId,
-
-        ...runtimeProperties,
-
-        objectAvailable: Boolean(propertyItem),
-      });
-    });
-  }
-
-  /*
-   * Return objects in Supabase order.
-   */
-  return objects.map((object) => {
-    const modelId = getStableModelId(object);
-
-    const externalId = getStableExternalId(object);
-
-    if (modelId == null || externalId == null) {
-      return {
-        ...object,
-        objectAvailable: false,
-      };
-    }
-
-    return (
-      hydratedMap.get(createRuntimeObjectKey(modelId, externalId)) ||
-      createUnavailableObject({
-        object,
-        modelId,
-        externalId,
-      })
-    );
-  });
 }
 
 function* updateSequenceObjectSortDatesSaga(action) {
@@ -779,120 +552,215 @@ function* copySequenceSaga(action) {
 /*                              SEQUENCE OBJECTS                              */
 /* -------------------------------------------------------------------------- */
 
-const getSequenceObjectKey = (object) => {
-  const modelExternalId =
-    object?.modelExternalId ?? object?.model_external_id ?? object?.modelId;
-
-  const externalId =
-    object?.externalId ?? object?.external_id ?? object?.objectId ?? object?.id;
-
-  return `${String(modelExternalId)}::${String(externalId)}`;
-};
+const getSequenceObjectKey = (object) =>
+  String(
+    object?.externalId ??
+      object?.external_id ??
+      object?.objectId ??
+      "",
+  );
 
 function* setObjectsSaga(action) {
   try {
-    const payload = action.payload || {};
+    const payload =
+      action.payload || {};
 
-    const projectId = payload.projectId ?? payload.trimbleProjectId;
+    const projectId =
+      payload.projectId ??
+      payload.trimbleProjectId;
 
-    const planId = payload.planId;
-    const subPlanId = payload.subPlanId;
+    const planId =
+      payload.planId;
 
-    const runtimeObjects = Array.isArray(payload.objects)
-      ? payload.objects
-      : [];
+    const subPlanId =
+      payload.subPlanId;
+
+    const runtimeObjects =
+      Array.isArray(payload.objects)
+        ? payload.objects
+        : [];
 
     if (!projectId) {
-      throw new Error("Trimble project ID is required.");
+      throw new Error(
+        "Trimble project ID is required.",
+      );
     }
 
     if (!subPlanId) {
-      throw new Error("SubPlan ID is required.");
+      throw new Error(
+        "SubPlan ID is required.",
+      );
     }
 
-    const savedObjects = yield call(replaceSequenceObjectsForSubPlan, {
-      trimbleProjectId: projectId,
-      subPlanId,
-      objects: runtimeObjects,
-    });
+    const savedObjects =
+      yield call(
+        replaceSequenceObjectsForSubPlan,
+        {
+          trimbleProjectId:
+            projectId,
 
-    const runtimeMap = new Map(
-      runtimeObjects.map((object) => [getSequenceObjectKey(object), object]),
-    );
+          subPlanId,
 
-    const mergedObjects = savedObjects.map((savedObject) => {
-      const runtimeObject = runtimeMap.get(getSequenceObjectKey(savedObject));
+          objects:
+            runtimeObjects,
+        },
+      );
 
-      return {
-        ...savedObject,
-        ...runtimeObject,
+    /*
+     * Runtime object lookup uses external_id only.
+     */
+    const runtimeMap =
+      new Map(
+        runtimeObjects
+          .map((object) => [
+            getSequenceObjectKey(
+              object,
+            ),
+            object,
+          ])
+          .filter(
+            ([key]) =>
+              key !== "",
+          ),
+      );
 
-        dbId: savedObject.dbId,
+    const mergedObjects =
+      savedObjects.map(
+        (savedObject) => {
+          const runtimeObject =
+            runtimeMap.get(
+              getSequenceObjectKey(
+                savedObject,
+              ),
+            );
 
-        modelExternalId:
-          savedObject.modelExternalId ??
-          runtimeObject?.modelExternalId ??
-          runtimeObject?.modelId,
+          return {
+            ...savedObject,
+            ...runtimeObject,
 
-        externalId:
-          savedObject.externalId ??
-          runtimeObject?.externalId ??
-          runtimeObject?.id,
+            dbId:
+              savedObject.dbId,
 
-        modelId: runtimeObject?.modelId ?? null,
+            externalId:
+              savedObject.externalId ??
+              savedObject.external_id ??
+              runtimeObject?.externalId ??
+              runtimeObject?.external_id ??
+              runtimeObject?.objectId ??
+              null,
 
-        runtimeId: runtimeObject?.runtimeId ?? null,
+            /*
+             * Runtime-only values.
+             * These fields are not persisted to Supabase.
+             */
+            modelId:
+              runtimeObject?.modelId ??
+              null,
 
-        id: runtimeObject?.id ?? savedObject.externalId,
+            runtimeId:
+              runtimeObject?.runtimeId ??
+              null,
 
-        planId: runtimeObject?.planId ?? planId,
+            id:
+              runtimeObject?.runtimeId ??
+              runtimeObject?.id ??
+              null,
 
-        subPlanId,
+            planId:
+              runtimeObject?.planId ??
+              planId,
 
-        asmPos: runtimeObject?.asmPos ?? "",
+            subPlanId,
 
-        asmName: runtimeObject?.asmName ?? runtimeObject?.name ?? "",
+            asmPos:
+              runtimeObject?.asmPos ??
+              "",
 
-        name: runtimeObject?.name ?? runtimeObject?.asmName ?? "",
+            asmName:
+              runtimeObject?.asmName ??
+              runtimeObject?.name ??
+              "",
 
-        positionCode: runtimeObject?.positionCode ?? "",
+            name:
+              runtimeObject?.name ??
+              runtimeObject?.asmName ??
+              "",
 
-        rawWeight: runtimeObject?.rawWeight ?? runtimeObject?.weight ?? null,
+            positionCode:
+              runtimeObject?.positionCode ??
+              "",
 
-        weight: runtimeObject?.weight ?? runtimeObject?.rawWeight ?? null,
+            rawWeight:
+              runtimeObject?.rawWeight ??
+              runtimeObject?.weight ??
+              null,
 
-        rawLength: runtimeObject?.rawLength ?? runtimeObject?.length ?? null,
+            weight:
+              runtimeObject?.weight ??
+              runtimeObject?.rawWeight ??
+              null,
 
-        length: runtimeObject?.length ?? runtimeObject?.rawLength ?? null,
+            rawLength:
+              runtimeObject?.rawLength ??
+              runtimeObject?.length ??
+              null,
 
-        rawCog: runtimeObject?.rawCog ?? runtimeObject?.cog ?? null,
+            length:
+              runtimeObject?.length ??
+              runtimeObject?.rawLength ??
+              null,
 
-        cog: runtimeObject?.cog ?? runtimeObject?.rawCog ?? null,
+            rawCog:
+              runtimeObject?.rawCog ??
+              runtimeObject?.cog ??
+              null,
 
-        distance: runtimeObject?.distance ?? 0,
+            cog:
+              runtimeObject?.cog ??
+              runtimeObject?.rawCog ??
+              null,
 
-        center: runtimeObject?.center ?? [0, 0, 0],
+            distance:
+              runtimeObject?.distance ??
+              0,
 
-        camera: runtimeObject?.camera ?? null,
+            center:
+              runtimeObject?.center ??
+              [0, 0, 0],
 
-        objectAvailable: runtimeObject?.objectAvailable ?? true,
-      };
-    });
+            camera:
+              runtimeObject?.camera ??
+              savedObject?.camera ??
+              null,
+
+            objectAvailable:
+              runtimeObject?.objectAvailable ??
+              true,
+          };
+        },
+      );
 
     yield put(
       SetObjectsSuccess({
         projectId,
         planId,
         subPlanId,
-        objects: mergedObjects,
+        objects:
+          mergedObjects,
       }),
     );
   } catch (error) {
-    console.error("Failed to save sequence objects:", error);
+    console.error(
+      "Failed to save sequence objects:",
+      error,
+    );
 
     yield put(
       SetObjectsFailure(
-        getErrorMessage(error, "Failed to save sequence objects."),
+        getErrorMessage(
+          error,
+          "Failed to save sequence objects.",
+        ),
       ),
     );
   }

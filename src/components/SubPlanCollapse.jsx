@@ -33,10 +33,101 @@ import { createUtcSortDate, getMovedItemSortDatetime } from "../utils/sortDate";
 
 const math = require("mathjs");
 
-const getRgbColor = (color) => {
-  if (!color) return undefined;
-  return `rgb(${color.r ?? 0}, ${color.g ?? 0}, ${color.b ?? 0})`;
+const normalizeRgbColor = (color) => {
+  if (!color) {
+    return null;
+  }
+
+  if (typeof color === "string") {
+    const normalized = color
+      .trim()
+      .replace(/^#/, "");
+
+    if (/^[0-9a-fA-F]{3}$/.test(normalized)) {
+      return {
+        r: Number.parseInt(
+          normalized[0] + normalized[0],
+          16,
+        ),
+        g: Number.parseInt(
+          normalized[1] + normalized[1],
+          16,
+        ),
+        b: Number.parseInt(
+          normalized[2] + normalized[2],
+          16,
+        ),
+      };
+    }
+
+    if (/^[0-9a-fA-F]{6}$/.test(normalized)) {
+      return {
+        r: Number.parseInt(
+          normalized.slice(0, 2),
+          16,
+        ),
+        g: Number.parseInt(
+          normalized.slice(2, 4),
+          16,
+        ),
+        b: Number.parseInt(
+          normalized.slice(4, 6),
+          16,
+        ),
+      };
+    }
+
+    return null;
+  }
+
+  if (typeof color === "object") {
+    const r = Number(color.r);
+    const g = Number(color.g);
+    const b = Number(color.b);
+
+    if (
+      Number.isFinite(r) &&
+      Number.isFinite(g) &&
+      Number.isFinite(b)
+    ) {
+      return {
+        r: Math.max(0, Math.min(255, r)),
+        g: Math.max(0, Math.min(255, g)),
+        b: Math.max(0, Math.min(255, b)),
+      };
+    }
+  }
+
+  return null;
 };
+
+const getRgbColor = (color) => {
+  const rgb = normalizeRgbColor(color);
+
+  if (!rgb) {
+    return undefined;
+  }
+
+  return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+};
+
+const getExternalId = (object) =>
+  object?.externalId ??
+  object?.external_id ??
+  object?.objectId ??
+  null;
+
+const getRuntimeId = (object) =>
+  object?.runtimeId ??
+  object?.objectRuntimeId ??
+  null;
+
+const getObjectKey = (object) =>
+  String(
+    object?.dbId ??
+      getExternalId(object) ??
+      "",
+  );
 
 const SubPlanCollapse = ({
   plan,
@@ -169,123 +260,180 @@ const SubPlanCollapse = ({
     }
 
     try {
-      const tcapi = await WorkspaceAPI.connect(window.parent);
+      const tcapi =
+        await WorkspaceAPI.connect(
+          window.parent,
+        );
 
-      // const settings = await tcapi.project.getSettings();
-      // const formatting = settings?.formatting || {};
+      const selections =
+        await tcapi.viewer.getSelection();
 
-      const selections = await tcapi.viewer.getSelection();
+      if (!selections?.length) {
+        message.info(
+          "Please select at least one object.",
+        );
 
-      if (!selections?.length) return;
+        return;
+      }
 
-      tcapi.viewer.activateTool("pointMarkup");
+      tcapi.viewer.activateTool(
+        "pointMarkup",
+      );
 
       const onMessage = async (event) => {
-        if (event.data.event !== "viewer.onMarkupChanged") return;
+        if (
+          event.data.event !==
+          "viewer.onMarkupChanged"
+        ) {
+          return;
+        }
 
-        window.removeEventListener("message", onMessage);
+        window.removeEventListener(
+          "message",
+          onMessage,
+        );
 
         try {
-          const start = event.data?.data?.data?.markup?.start;
+          const startPoint =
+            event.data?.data?.data
+              ?.markup?.start;
 
-          if (!start) {
+          if (!startPoint) {
             return;
           }
 
           const refPoint = [
-            Number(start.positionX),
-            Number(start.positionY),
-            Number(start.positionZ),
+            Number(
+              startPoint.positionX,
+            ),
+            Number(
+              startPoint.positionY,
+            ),
+            Number(
+              startPoint.positionZ,
+            ),
           ];
 
-          const newAddedSequenceObjects = [];
+          const existingExternalIds =
+            new Set();
 
-          const createObjectKey = (modelId, objectId) =>
-            `${String(modelId)}::${String(objectId)}`;
+          sequenceObjects.forEach(
+            (group) => {
+              (
+                group?.objects || []
+              ).forEach((object) => {
+                const externalId =
+                  getExternalId(
+                    object,
+                  );
 
-          const existingObjectKeys = new Set();
+                if (
+                  externalId != null
+                ) {
+                  existingExternalIds.add(
+                    String(
+                      externalId,
+                    ),
+                  );
+                }
+              });
+            },
+          );
 
-          sequenceObjects.forEach((group) => {
-            (group?.objects || []).forEach((obj) => {
-              const existingModelId =
-                obj?.modelExternalId ?? obj?.model_external_id ?? obj?.modelId;
+          const newExternalIds =
+            new Set();
 
-              const existingObjectId =
-                obj?.externalId ?? obj?.external_id ?? obj?.id;
-
-              if (existingModelId == null || existingObjectId == null) {
-                return;
-              }
-
-              existingObjectKeys.add(
-                createObjectKey(existingModelId, existingObjectId),
-              );
-            });
-          });
-
-          const newObjectKeys = new Set();
-
-          await tcapi.viewer.activateTool("selection");
+          const newObjects = [];
 
           let duplicateCount = 0;
 
-          for (const selection of selections) {
-            const objBoxes = await tcapi.viewer.getObjectBoundingBoxes(
-              selection.modelId,
-              selection.objectRuntimeIds,
-            );
+          await tcapi.viewer.activateTool(
+            "selection",
+          );
 
-            const items = await tcapi.viewer.getObjectProperties(
-              selection.modelId,
-              selection.objectRuntimeIds,
-            );
+          for (
+            const selection of
+            selections
+          ) {
+            const runtimeIds =
+              selection.objectRuntimeIds ||
+              [];
 
-            for (let i = 0; i < objBoxes.length; i++) {
-              const box = objBoxes[i];
-              let runtimeId = box?.id ?? selection.objectRuntimeIds?.[i];
+            if (!runtimeIds.length) {
+              continue;
+            }
 
-              if (runtimeId == null) {
-                continue;
-              }
-
-              const objectIds = await tcapi.viewer.convertToObjectIds(
+            const [
+              objectIds,
+              boundingBoxes,
+              propertyItems,
+            ] = await Promise.all([
+              tcapi.viewer.convertToObjectIds(
                 selection.modelId,
-                [runtimeId],
-              );
+                runtimeIds,
+              ),
 
-              const objectId = objectIds?.[0];
+              tcapi.viewer.getObjectBoundingBoxes(
+                selection.modelId,
+                runtimeIds,
+              ),
 
-              const objectKey = createObjectKey(selection.modelId, objectId);
+              tcapi.viewer.getObjectProperties(
+                selection.modelId,
+                runtimeIds,
+              ),
+            ]);
+
+            for (
+              let index = 0;
+              index < runtimeIds.length;
+              index += 1
+            ) {
+              const runtimeId =
+                runtimeIds[index];
+
+              const externalId =
+                objectIds?.[index];
 
               if (
-                existingObjectKeys.has(objectKey) ||
-                newObjectKeys.has(objectKey)
+                externalId == null
               ) {
-                duplicateCount++;
                 continue;
               }
 
-              newObjectKeys.add(objectKey);
+              const externalKey =
+                String(externalId);
 
-              const center = math.divide(
-                math.add(
-                  [
-                    Number(1000 * box.boundingBox.min.x).toFixed(0),
-                    Number(1000 * box.boundingBox.min.y).toFixed(0),
-                    Number(1000 * box.boundingBox.min.z).toFixed(0),
-                  ],
-                  [
-                    Number(1000 * box.boundingBox.max.x).toFixed(0),
-                    Number(1000 * box.boundingBox.max.y).toFixed(0),
-                    Number(1000 * box.boundingBox.max.z).toFixed(0),
-                  ],
-                ),
-                2,
+              if (
+                existingExternalIds.has(
+                  externalKey,
+                ) ||
+                newExternalIds.has(
+                  externalKey,
+                )
+              ) {
+                duplicateCount += 1;
+                continue;
+              }
+
+              newExternalIds.add(
+                externalKey,
               );
 
-              const properties = items[i]?.properties || [];
+              const box =
+                boundingBoxes?.[index];
 
-              let asmName = items[i]?.product?.name || "";
+              const propertyItem =
+                propertyItems?.[index];
+
+              const properties =
+                propertyItem?.properties ||
+                [];
+
+              let asmName =
+                propertyItem?.product
+                  ?.name || "";
+
               let asmPos = "";
               let positionCode = "";
               let weight = 0;
@@ -295,33 +443,43 @@ const SubPlanCollapse = ({
               let cogY = null;
               let cogZ = null;
 
-              const isCompleted = () =>
-                asmPos !== "" &&
-                positionCode !== "" &&
-                weight !== 0 &&
-                asmName !== "" &&
-                asmLength !== 0 &&
-                cogX !== null &&
-                cogY !== null &&
-                cogZ !== null;
+              for (
+                const property of
+                properties
+              ) {
+                for (
+                  const asmProperty of
+                  property.properties ||
+                  []
+                ) {
+                  const name =
+                    String(
+                      asmProperty.name ||
+                        "",
+                    ).trim();
 
-              for (const property of properties) {
-                for (const asmProperty of property.properties || []) {
-                  if (isCompleted()) {
-                    break;
-                  }
+                  const upperName =
+                    name.toUpperCase();
 
-                  const name = String(asmProperty.name || "").trim();
-                  const upperName = name.toUpperCase();
-                  const value = asmProperty.value;
+                  const value =
+                    asmProperty.value;
 
                   if (
                     !asmPos &&
-                    (name === "Assembly/Cast unit Mark" ||
-                      upperName === "ASSEMBLY_POS")
+                    (
+                      name ===
+                        "Assembly/Cast unit Mark" ||
+                      upperName ===
+                        "ASSEMBLY_POS"
+                    )
                   ) {
-                    asmPos = String(value || "")
-                      .replace("(?)", "")
+                    asmPos = String(
+                      value || "",
+                    )
+                      .replace(
+                        "(?)",
+                        "",
+                      )
                       .trim();
 
                     continue;
@@ -329,165 +487,323 @@ const SubPlanCollapse = ({
 
                   if (
                     !positionCode &&
-                    (name === "Assembly/Cast unit position code" ||
-                      upperName === "ASSEMBLY_POSITION_CODE")
+                    (
+                      name ===
+                        "Assembly/Cast unit position code" ||
+                      upperName ===
+                        "ASSEMBLY_POSITION_CODE"
+                    )
                   ) {
-                    positionCode = String(value || "").trim();
+                    positionCode =
+                      String(
+                        value || "",
+                      ).trim();
+
                     continue;
                   }
 
                   if (
                     !weight &&
-                    upperName.includes("WEIGHT") &&
+                    upperName.includes(
+                      "WEIGHT",
+                    ) &&
                     value != null
                   ) {
-                    weight = Number(value);
+                    weight =
+                      Number(value);
+
                     continue;
                   }
 
-                  if (!asmName && upperName.includes("NAME") && value != null) {
-                    asmName = String(value).trim();
+                  if (
+                    !asmName &&
+                    upperName.includes(
+                      "NAME",
+                    ) &&
+                    value != null
+                  ) {
+                    asmName =
+                      String(
+                        value,
+                      ).trim();
+
                     continue;
                   }
 
                   if (
                     !asmLength &&
-                    upperName.includes("LENGTH") &&
+                    upperName.includes(
+                      "LENGTH",
+                    ) &&
                     value != null
                   ) {
-                    asmLength = Number(value).toFixed(0);
+                    asmLength =
+                      Number(
+                        value,
+                      ).toFixed(0);
+
+                    continue;
                   }
 
                   if (
                     cogX === null &&
-                    (upperName.includes("GRAVITY X") ||
-                      upperName.includes("GRAVITYX") ||
-                      upperName.includes("OX"))
+                    (
+                      upperName.includes(
+                        "GRAVITY X",
+                      ) ||
+                      upperName.includes(
+                        "GRAVITYX",
+                      ) ||
+                      upperName.includes(
+                        "OX",
+                      )
+                    )
                   ) {
-                    cogX = Number(value).toFixed(0);
+                    cogX =
+                      Number(
+                        value,
+                      ).toFixed(0);
+
                     continue;
                   }
 
                   if (
                     cogY === null &&
-                    (upperName.includes("GRAVITY Y") ||
-                      upperName.includes("GRAVITYY") ||
-                      upperName.includes("OY"))
+                    (
+                      upperName.includes(
+                        "GRAVITY Y",
+                      ) ||
+                      upperName.includes(
+                        "GRAVITYY",
+                      ) ||
+                      upperName.includes(
+                        "OY",
+                      )
+                    )
                   ) {
-                    cogY = Number(value).toFixed(0);
+                    cogY =
+                      Number(
+                        value,
+                      ).toFixed(0);
+
                     continue;
                   }
 
                   if (
                     cogZ === null &&
-                    (upperName.includes("GRAVITY Z") ||
-                      upperName.includes("GRAVITYZ") ||
-                      upperName.includes("OZ"))
+                    (
+                      upperName.includes(
+                        "GRAVITY Z",
+                      ) ||
+                      upperName.includes(
+                        "GRAVITYZ",
+                      ) ||
+                      upperName.includes(
+                        "OZ",
+                      )
+                    )
                   ) {
-                    cogZ = Number(value).toFixed(0);
+                    cogZ =
+                      Number(
+                        value,
+                      ).toFixed(0);
                   }
-                }
-
-                if (isCompleted()) {
-                  break;
                 }
               }
 
-              const distance = math.distance(refPoint, center);
+              let center = [
+                0,
+                0,
+                0,
+              ];
 
-              newAddedSequenceObjects.push({
-                modelId: selection.modelId,
-                modelExternalId: selection.modelId,
-                externalId: objectId,
+              if (box?.boundingBox) {
+                center = math.divide(
+                  math.add(
+                    [
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .min.x,
+                      ).toFixed(0),
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .min.y,
+                      ).toFixed(0),
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .min.z,
+                      ).toFixed(0),
+                    ],
+                    [
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .max.x,
+                      ).toFixed(0),
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .max.y,
+                      ).toFixed(0),
+                      Number(
+                        1000 *
+                          box.boundingBox
+                            .max.z,
+                      ).toFixed(0),
+                    ],
+                  ),
+                  2,
+                );
+              }
+
+              const distance =
+                math.distance(
+                  refPoint,
+                  center,
+                );
+
+              newObjects.push({
+                externalId,
+                modelId:
+                  selection.modelId,
                 runtimeId,
-                subPlanId: subPlan.id,
-                planId: plan.id,
-                id: objectId,
-                cog: [cogX, cogY, cogZ],
 
-                distance: math.round(distance),
-                center,
+                /*
+                 * Existing UI expects id to be
+                 * the current Runtime ID.
+                 */
+                id: runtimeId,
+
+                planId:
+                  plan.id,
+
+                subPlanId:
+                  subPlan.id,
 
                 asmPos,
-                date: dayjs().format("DD-MM-YYYY"),
+
+                assignedDate:
+                  dayjs().format(
+                    "YYYY-MM-DD",
+                  ),
+
+                date:
+                  dayjs().format(
+                    "YYYY-MM-DD",
+                  ),
+
+                positionCode,
+
+                cog:
+                  cogX !== null &&
+                  cogY !== null &&
+                  cogZ !== null
+                    ? [
+                        cogX,
+                        cogY,
+                        cogZ,
+                      ]
+                    : null,
 
                 weight,
+                length:
+                  asmLength,
+                name:
+                  asmName,
 
-                length: asmLength,
+                distance:
+                  math.round(
+                    distance,
+                  ),
 
-                name: asmName,
-                positionCode,
+                center,
+
+                objectAvailable:
+                  true,
               });
             }
           }
 
-          await tcapi.markup.removeMarkups(undefined);
+          await tcapi.markup.removeMarkups(
+            undefined,
+          );
 
-          if (duplicateCount > 0) {
+          if (
+            duplicateCount > 0
+          ) {
             message.warning(
-              `${duplicateCount} object(s) have already been existing in the plan.`,
+              `${duplicateCount} object(s) already exist in the sequence.`,
             );
           }
 
-          if (!newAddedSequenceObjects.length) {
+          if (!newObjects.length) {
             return;
           }
 
-          newAddedSequenceObjects.sort(
-            (a, b) => Number(a.distance) - Number(b.distance),
+          newObjects.sort(
+            (first, second) =>
+              Number(
+                first.distance,
+              ) -
+              Number(
+                second.distance,
+              ),
           );
 
           const existingObjects =
             sequenceObjects.find(
               (group) =>
-                group && String(group.subPlanId) === String(subPlan.id),
-            )?.objects ?? [];
-
-          const newObjects = [...existingObjects, ...newAddedSequenceObjects];
-
-          const newAssignedObjects = newObjects.map((object) => ({
-            asmPos: object.asmPos,
-            date: object.date,
-            assignedDate: object.assignedDate ?? object.date,
-            id: object.id,
-            externalId: object.externalId ?? object.id,
-            modelId: object.modelId,
-            modelExternalId: object.modelExternalId ?? object.modelId,
-            runtimeId: object.runtimeId,
-            planId: object.planId,
-            subPlanId: object.subPlanId,
-            positionCode: object.positionCode,
-            cog: object.cog,
-
-            weight: object.weight,
-
-            length: object.length,
-
-            name: object.name,
-
-            distance: object.distance,
-            center: object.center,
-            camera: object.camera,
-          }));
+                String(
+                  group?.subPlanId,
+                ) ===
+                String(
+                  subPlan.id,
+                ),
+            )?.objects || [];
 
           dispatch(
             SetObjectsRequest({
               projectId,
-              planId: plan.id,
-              subPlanId: subPlan.id,
-              objects: newAssignedObjects,
+              planId:
+                plan.id,
+
+              subPlanId:
+                subPlan.id,
+
+              objects: [
+                ...existingObjects,
+                ...newObjects,
+              ],
             }),
           );
         } catch (error) {
-          console.error("Assign object failed:", error);
-          message.error("Assign object failed.");
+          console.error(
+            "Assign object failed:",
+            error,
+          );
+
+          message.error(
+            "Assign object failed.",
+          );
         }
       };
 
-      window.addEventListener("message", onMessage);
+      window.addEventListener(
+        "message",
+        onMessage,
+      );
     } catch (error) {
-      console.error("Start assign object failed:", error);
-      message.error("Cannot start assigning objects.");
+      console.error(
+        "Start assign object failed:",
+        error,
+      );
+
+      message.error(
+        "Cannot start assigning objects.",
+      );
     }
   };
 
@@ -511,83 +827,129 @@ const SubPlanCollapse = ({
     }
 
     try {
-      const tcapi = await WorkspaceAPI.connect(window.parent);
-
-      // const settings = await tcapi.project.getSettings();
-      // const formatting = settings?.formatting || {};
-
-      const selections = await tcapi.viewer.getSelection();
-
-      if (!selections?.length) return;
-
-      const createObjectKey = (modelId, objectId) =>
-        `${String(modelId)}::${String(objectId)}`;
-
-      const existingObjectKeys = new Set();
-
-      sequenceObjects.forEach((group) => {
-        (group?.objects || []).forEach((obj) => {
-          const existingModelId =
-            obj?.modelExternalId ?? obj?.model_external_id ?? obj?.modelId;
-
-          const existingObjectId =
-            obj?.externalId ?? obj?.external_id ?? obj?.id;
-
-          if (existingModelId == null || existingObjectId == null) {
-            return;
-          }
-
-          existingObjectKeys.add(
-            createObjectKey(existingModelId, existingObjectId),
-          );
-        });
-      });
-
-      const newObjectKeys = new Set();
-
-      const newAddedSequenceObjects = [];
-      let duplicateCount = 0;
-
-      for (const selection of selections) {
-        const items = await tcapi.viewer.getObjectProperties(
-          selection.modelId,
-          selection.objectRuntimeIds,
+      const tcapi =
+        await WorkspaceAPI.connect(
+          window.parent,
         );
 
-        for (let i = 0; i < items.length; i++) {
-          const runtimeId = selection.objectRuntimeIds?.[i];
+      const selections =
+        await tcapi.viewer.getSelection();
 
-          if (runtimeId == null) {
-            continue;
-          }
+      if (!selections?.length) {
+        message.info(
+          "Please select at least one object.",
+        );
 
-          const objectIds = await tcapi.viewer.convertToObjectIds(
+        return;
+      }
+
+      const existingExternalIds =
+        new Set();
+
+      sequenceObjects.forEach(
+        (group) => {
+          (
+            group?.objects || []
+          ).forEach((object) => {
+            const externalId =
+              getExternalId(
+                object,
+              );
+
+            if (
+              externalId != null
+            ) {
+              existingExternalIds.add(
+                String(
+                  externalId,
+                ),
+              );
+            }
+          });
+        },
+      );
+
+      const newExternalIds =
+        new Set();
+
+      const newObjects = [];
+
+      let duplicateCount = 0;
+
+      for (
+        const selection of
+        selections
+      ) {
+        const runtimeIds =
+          selection.objectRuntimeIds ||
+          [];
+
+        if (!runtimeIds.length) {
+          continue;
+        }
+
+        const [
+          objectIds,
+          propertyItems,
+        ] = await Promise.all([
+          tcapi.viewer.convertToObjectIds(
             selection.modelId,
-            [runtimeId],
-          );
+            runtimeIds,
+          ),
 
-          const objectId = objectIds?.[0];
+          tcapi.viewer.getObjectProperties(
+            selection.modelId,
+            runtimeIds,
+          ),
+        ]);
 
-          const objectKey = createObjectKey(selection.modelId, objectId);
+        for (
+          let index = 0;
+          index < runtimeIds.length;
+          index += 1
+        ) {
+          const runtimeId =
+            runtimeIds[index];
+
+          const externalId =
+            objectIds?.[index];
 
           if (
-            existingObjectKeys.has(objectKey) ||
-            newObjectKeys.has(objectKey)
+            externalId == null
           ) {
-            console.warn("Object has already been assigned.", {
-              modelId: selection.modelId,
-              objectId,
-            });
-
-            duplicateCount++;
             continue;
           }
 
-          newObjectKeys.add(objectKey);
+          const externalKey =
+            String(externalId);
 
-          const properties = items[i]?.properties || [];
+          if (
+            existingExternalIds.has(
+              externalKey,
+            ) ||
+            newExternalIds.has(
+              externalKey,
+            )
+          ) {
+            duplicateCount += 1;
+            continue;
+          }
 
-          let asmName = items[i]?.product?.name || "";
+          newExternalIds.add(
+            externalKey,
+          );
+
+          const propertyItem =
+            propertyItems?.[index];
+
+          const properties =
+            propertyItem?.properties ||
+            [];
+
+          let asmName =
+            propertyItem?.product
+              ?.name || "";
+
           let asmPos = "";
           let positionCode = "";
           let weight = 0;
@@ -597,33 +959,43 @@ const SubPlanCollapse = ({
           let cogY = null;
           let cogZ = null;
 
-          const isCompleted = () =>
-            asmPos !== "" &&
-            positionCode !== "" &&
-            weight !== 0 &&
-            asmName !== "" &&
-            asmLength !== 0 &&
-            cogX !== null &&
-            cogY !== null &&
-            cogZ !== null;
+          for (
+            const property of
+            properties
+          ) {
+            for (
+              const asmProperty of
+              property.properties ||
+              []
+            ) {
+              const name =
+                String(
+                  asmProperty.name ||
+                    "",
+                ).trim();
 
-          for (const property of properties) {
-            for (const asmProperty of property.properties || []) {
-              if (isCompleted()) {
-                break;
-              }
+              const upperName =
+                name.toUpperCase();
 
-              const name = String(asmProperty.name || "").trim();
-              const upperName = name.toUpperCase();
-              const value = asmProperty.value;
-              console.log(upperName, value);
+              const value =
+                asmProperty.value;
+
               if (
                 !asmPos &&
-                (name === "Assembly/Cast unit Mark" ||
-                  upperName === "ASSEMBLY_POS")
+                (
+                  name ===
+                    "Assembly/Cast unit Mark" ||
+                  upperName ===
+                    "ASSEMBLY_POS"
+                )
               ) {
-                asmPos = String(value || "")
-                  .replace("(?)", "")
+                asmPos = String(
+                  value || "",
+                )
+                  .replace(
+                    "(?)",
+                    "",
+                  )
                   .trim();
 
                 continue;
@@ -631,152 +1003,241 @@ const SubPlanCollapse = ({
 
               if (
                 !positionCode &&
-                (name === "Assembly/Cast unit position code" ||
-                  upperName === "ASSEMBLY_POSITION_CODE")
+                (
+                  name ===
+                    "Assembly/Cast unit position code" ||
+                  upperName ===
+                    "ASSEMBLY_POSITION_CODE"
+                )
               ) {
-                positionCode = String(value || "").trim();
+                positionCode =
+                  String(
+                    value || "",
+                  ).trim();
+
                 continue;
               }
 
-              if (!weight && upperName.includes("WEIGHT") && value != null) {
-                weight = Number(value);
+              if (
+                !weight &&
+                upperName.includes(
+                  "WEIGHT",
+                ) &&
+                value != null
+              ) {
+                weight =
+                  Number(value);
+
                 continue;
               }
 
-              if (!asmName && upperName.includes("NAME") && value != null) {
-                asmName = String(value).trim();
+              if (
+                !asmName &&
+                upperName.includes(
+                  "NAME",
+                ) &&
+                value != null
+              ) {
+                asmName =
+                  String(
+                    value,
+                  ).trim();
+
                 continue;
               }
 
-              if (!asmLength && upperName.includes("LENGTH") && value != null) {
-                asmLength = Number(value).toFixed(0);
+              if (
+                !asmLength &&
+                upperName.includes(
+                  "LENGTH",
+                ) &&
+                value != null
+              ) {
+                asmLength =
+                  Number(
+                    value,
+                  ).toFixed(0);
 
                 continue;
               }
 
               if (
                 cogX === null &&
-                (upperName.includes("GRAVITY X") ||
-                  upperName.includes("GRAVITYX") ||
-                  upperName.includes("OX"))
+                (
+                  upperName.includes(
+                    "GRAVITY X",
+                  ) ||
+                  upperName.includes(
+                    "GRAVITYX",
+                  ) ||
+                  upperName.includes(
+                    "OX",
+                  )
+                )
               ) {
-                cogX = Number(value).toFixed(0);
+                cogX =
+                  Number(
+                    value,
+                  ).toFixed(0);
+
                 continue;
               }
 
               if (
                 cogY === null &&
-                (upperName.includes("GRAVITY Y") ||
-                  upperName.includes("GRAVITYY") ||
-                  upperName.includes("OY"))
+                (
+                  upperName.includes(
+                    "GRAVITY Y",
+                  ) ||
+                  upperName.includes(
+                    "GRAVITYY",
+                  ) ||
+                  upperName.includes(
+                    "OY",
+                  )
+                )
               ) {
-                cogY = Number(value).toFixed(0);
+                cogY =
+                  Number(
+                    value,
+                  ).toFixed(0);
+
                 continue;
               }
 
               if (
                 cogZ === null &&
-                (upperName.includes("GRAVITY Z") ||
-                  upperName.includes("GRAVITYZ") ||
-                  upperName.includes("OZ"))
+                (
+                  upperName.includes(
+                    "GRAVITY Z",
+                  ) ||
+                  upperName.includes(
+                    "GRAVITYZ",
+                  ) ||
+                  upperName.includes(
+                    "OZ",
+                  )
+                )
               ) {
-                cogZ = Number(value).toFixed(0);
+                cogZ =
+                  Number(
+                    value,
+                  ).toFixed(0);
               }
-            }
-
-            if (isCompleted()) {
-              break;
             }
           }
 
-          const cog =
-            cogX !== null && cogY !== null && cogZ !== null
-              ? [cogX, cogY, cogZ]
-              : null;
+          newObjects.push({
+            externalId,
 
-          newAddedSequenceObjects.push({
-            modelId: selection.modelId,
-            modelExternalId: selection.modelId,
-            externalId: objectId,
+            modelId:
+              selection.modelId,
+
             runtimeId,
-            subPlanId: subPlan.id,
-            planId: plan.id,
-            id: objectId,
 
-            distance: 0,
-            center: [0, 0, 0],
+            id:
+              runtimeId,
+
+            planId:
+              plan.id,
+
+            subPlanId:
+              subPlan.id,
 
             asmPos,
-            date: dayjs().format("DD-MM-YYYY"),
 
-            cog,
+            assignedDate:
+              dayjs().format(
+                "YYYY-MM-DD",
+              ),
+
+            date:
+              dayjs().format(
+                "YYYY-MM-DD",
+              ),
+
+            positionCode,
+
+            cog:
+              cogX !== null &&
+              cogY !== null &&
+              cogZ !== null
+                ? [
+                    cogX,
+                    cogY,
+                    cogZ,
+                  ]
+                : null,
 
             weight,
+            length:
+              asmLength,
 
-            length: asmLength,
+            name:
+              asmName,
 
-            name: asmName,
-            positionCode,
+            distance: 0,
+
+            center: [
+              0,
+              0,
+              0,
+            ],
+
+            objectAvailable:
+              true,
           });
         }
       }
 
-      if (duplicateCount > 0) {
+      if (
+        duplicateCount > 0
+      ) {
         message.warning(
-          `${duplicateCount} object(s) have already been existing in the plan.`,
+          `${duplicateCount} object(s) already exist in the sequence.`,
         );
       }
 
-      if (!newAddedSequenceObjects.length) {
+      if (!newObjects.length) {
         return;
       }
 
       const existingObjects =
         sequenceObjects.find(
-          (group) => group && String(group.subPlanId) === String(subPlan.id),
-        )?.objects ?? [];
+          (group) =>
+            String(
+              group?.subPlanId,
+            ) ===
+            String(
+              subPlan.id,
+            ),
+        )?.objects || [];
 
-      const newObjects = [...existingObjects, ...newAddedSequenceObjects];
-
-      const newAssignedObjects = newObjects.map((object) => ({
-        asmPos: object.asmPos,
-        date: object.date,
-        assignedDate: object.assignedDate ?? object.date,
-        id: object.id,
-        externalId: object.externalId ?? object.id,
-        modelId: object.modelId,
-        modelExternalId: object.modelExternalId ?? object.modelId,
-        runtimeId: object.runtimeId,
-        planId: object.planId,
-        subPlanId: object.subPlanId,
-        positionCode: object.positionCode,
-
-        cog:
-          Array.isArray(object.cog) && object.cog.length === 3
-            ? object.cog
-            : null,
-
-        weight: object.weight,
-
-        length: object.length,
-
-        name: object.name,
-
-        distance: object.distance ?? 0,
-        center: object.center ?? [0, 0, 0],
-        camera: object.camera,
-      }));
       dispatch(
         SetObjectsRequest({
           projectId,
-          planId: plan.id,
-          subPlanId: subPlan.id,
-          objects: newAssignedObjects,
+
+          planId:
+            plan.id,
+
+          subPlanId:
+            subPlan.id,
+
+          objects: [
+            ...existingObjects,
+            ...newObjects,
+          ],
         }),
       );
     } catch (error) {
-      console.error("Auto assign failed:", error);
-      message.error("Auto assign failed.");
+      console.error(
+        "Auto assign failed:",
+        error,
+      );
+
+      message.error(
+        "Auto assign failed.",
+      );
     }
   };
 
@@ -810,218 +1271,222 @@ const SubPlanCollapse = ({
     }
 
     try {
-      const tcapi = await WorkspaceAPI.connect(window.parent);
-      const subPlanId = String(subPlan.id);
+      const tcapi =
+        await WorkspaceAPI.connect(
+          window.parent,
+        );
 
-      /*
-       * Gom Internal Object ID theo modelId.
-       * obj.id hiện đang lưu Internal Object ID sau khi gọi convertToObjectIds().
-       */
-      const modelGroups = new Map();
+      const subPlanId =
+        String(subPlan.id);
 
-      for (const group of sequenceObjects) {
-        if (!group) {
-          continue;
-        }
-
-        const groupSubPlanId = String(group.subPlanId ?? "");
-
-        for (const obj of group.objects || []) {
-          const objSubPlanId = String(obj.subPlanId ?? groupSubPlanId);
-
-          if (objSubPlanId !== subPlanId) {
-            continue;
-          }
-
-          const objectId = obj.id;
-          const modelId = obj.modelId ?? group.modelId;
-          const parsedDate = parseDate(obj.assignedDate || obj.date);
-
-          if (objectId == null || modelId == null || !parsedDate) {
-            continue;
-          }
-
-          const modelKey = String(modelId);
-
-          if (!modelGroups.has(modelKey)) {
-            modelGroups.set(modelKey, {
-              modelId,
-              objects: [],
-            });
-          }
-
-          modelGroups.get(modelKey).objects.push({
-            objectId,
-            simulationTime: parsedDate.valueOf(),
-            camera: obj.camera,
-          });
-        }
-      }
-
-      if (!modelGroups.size) {
-        message.warning("No valid objects found for simulation.");
-        return;
-      }
-
-      /*
-       * Convert Internal Object IDs -> Runtime IDs theo từng model.
-       * Convert một lần cho cả model thay vì gọi API cho từng object.
-       */
       const items = [];
 
-      for (const group of modelGroups.values()) {
-        const uniqueObjectMap = new Map();
-
-        for (const object of group.objects) {
-          const objectKey = String(object.objectId);
-
-          if (!uniqueObjectMap.has(objectKey)) {
-            uniqueObjectMap.set(objectKey, object);
-          }
-        }
-
-        const uniqueObjects = [...uniqueObjectMap.values()];
-        const objectIds = uniqueObjects.map((object) => object.objectId);
-
-        let runtimeIds = [];
-
-        try {
-          runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
-            group.modelId,
-            objectIds,
+      for (
+        const group of
+        sequenceObjects
+      ) {
+        const groupSubPlanId =
+          String(
+            group?.subPlanId ??
+              "",
           );
-        } catch (error) {
-          console.error("Failed to convert object IDs to runtime IDs:", {
-            modelId: group.modelId,
-            objectIds,
-            error,
-          });
 
-          continue;
-        }
+        for (
+          const object of
+          group?.objects || []
+        ) {
+          const objectSubPlanId =
+            String(
+              object?.subPlanId ??
+                groupSubPlanId,
+            );
 
-        uniqueObjects.forEach((object, index) => {
-          const runtimeId = runtimeIds?.[index];
+          if (
+            objectSubPlanId !==
+            subPlanId
+          ) {
+            continue;
+          }
 
-          if (runtimeId == null) {
-            console.warn("Runtime ID was not found:", {
-              modelId: group.modelId,
-              objectId: object.objectId,
-            });
+          const modelId =
+            object?.modelId;
 
-            return;
+          const runtimeId =
+            getRuntimeId(
+              object,
+            );
+
+          const parsedDate =
+            parseDate(
+              object?.assignedDate ||
+                object?.date,
+            );
+
+          if (
+            modelId == null ||
+            runtimeId == null ||
+            !parsedDate ||
+            object?.objectAvailable ===
+              false
+          ) {
+            continue;
           }
 
           items.push({
-            modelId: group.modelId,
-            objectId: object.objectId,
+            modelId,
             runtimeId,
-            simulationTime: object.simulationTime,
-            camera: object.camera,
+
+            externalId:
+              getExternalId(
+                object,
+              ),
+
+            simulationTime:
+              parsedDate.valueOf(),
+
+            camera:
+              object?.camera,
           });
-        });
+        }
       }
 
       if (!items.length) {
-        message.warning("Cannot convert the selected objects to runtime IDs.");
+        message.warning(
+          "No available objects found for simulation.",
+        );
+
         return;
       }
 
-      /*
-       * Sắp xếp theo ngày thi công.
-       * Khi cùng ngày, giữ thứ tự hiện tại.
-       */
-      items.sort((a, b) => a.simulationTime - b.simulationTime);
+      items.sort(
+        (first, second) =>
+          first.simulationTime -
+          second.simulationTime,
+      );
 
-      const color = subPlan.color;
-      const DELAY_MS = 200;
-
-      /*
-       * Lưu các Runtime ID đã xuất hiện theo từng model
-       * để isolate theo kiểu tích lũy.
-       */
-      const accumulatedModelMap = new Map();
-
-      for (let index = 0; index < items.length; index += 1) {
-        const item = items[index];
-        const modelKey = String(item.modelId);
-
-        if (!accumulatedModelMap.has(modelKey)) {
-          accumulatedModelMap.set(modelKey, {
-            modelId: item.modelId,
-            entityIds: new Set(),
-          });
-        }
-
-        accumulatedModelMap.get(modelKey).entityIds.add(item.runtimeId);
-
-        const accumulatedObjects = [...accumulatedModelMap.values()].map(
-          (group) => ({
-            modelId: group.modelId,
-            entityIds: [...group.entityIds],
-          }),
+      const color =
+        normalizeRgbColor(
+          subPlan.color,
         );
 
-        /*
-         * Isolate toàn bộ object đã chạy đến bước hiện tại.
-         */
-        await tcapi.viewer.isolateEntities(accumulatedObjects);
+      const accumulatedModelMap =
+        new Map();
 
-        /*
-         * Tô màu object hiện tại.
-         */
+      for (
+        let index = 0;
+        index < items.length;
+        index += 1
+      ) {
+        const item =
+          items[index];
+
+        const modelKey =
+          String(
+            item.modelId,
+          );
+
+        if (
+          !accumulatedModelMap.has(
+            modelKey,
+          )
+        ) {
+          accumulatedModelMap.set(
+            modelKey,
+            {
+              modelId:
+                item.modelId,
+
+              entityIds:
+                new Set(),
+            },
+          );
+        }
+
+        accumulatedModelMap
+          .get(modelKey)
+          .entityIds.add(
+            item.runtimeId,
+          );
+
+        const accumulatedObjects = [
+          ...accumulatedModelMap.values(),
+        ].map((group) => ({
+          modelId:
+            group.modelId,
+
+          entityIds: [
+            ...group.entityIds,
+          ],
+        }));
+
+        await tcapi.viewer.isolateEntities(
+          accumulatedObjects,
+        );
+
         if (color) {
           await tcapi.viewer.setObjectState(
             {
               modelObjectIds: [
                 {
-                  modelId: item.modelId,
-                  objectRuntimeIds: [item.runtimeId],
+                  modelId:
+                    item.modelId,
+
+                  objectRuntimeIds: [
+                    item.runtimeId,
+                  ],
                 },
               ],
             },
             {
-              color: {
-                r: color.r ?? 0,
-                g: color.g ?? 0,
-                b: color.b ?? 0,
-              },
+              color,
               visible: true,
+              opacity: 1,
             },
           );
         }
 
-        /*
-         * Highlight object hiện tại.
-         */
         await tcapi.viewer.setSelection(
           {
             modelObjectIds: [
               {
-                modelId: item.modelId,
-                objectRuntimeIds: [item.runtimeId],
+                modelId:
+                  item.modelId,
+
+                objectRuntimeIds: [
+                  item.runtimeId,
+                ],
               },
             ],
           },
           "set",
         );
 
-        /*
-         * Di chuyển camera nếu object đã lưu camera.
-         */
         if (item.camera) {
-          await tcapi.viewer.setCamera(item.camera, {
-            animationTime: 1000,
-          });
+          await tcapi.viewer.setCamera(
+            item.camera,
+            {
+              animationTime:
+                1000,
+            },
+          );
         }
 
-        if (index < items.length - 1) {
-          await sleep(DELAY_MS);
+        if (
+          index <
+          items.length - 1
+        ) {
+          await sleep(200);
         }
       }
     } catch (error) {
-      console.error("handleSimulation error:", error);
-      message.error("Simulation failed.");
+      console.error(
+        "handleSimulation error:",
+        error,
+      );
+
+      message.error(
+        "Simulation failed.",
+      );
     }
   };
 
@@ -1105,10 +1570,10 @@ const SubPlanCollapse = ({
 
       subPlanId: subPlan.id,
 
-      modelExternalId:
-        object?.modelExternalId ?? object?.model_external_id ?? object?.modelId,
-
-      externalId: object?.externalId ?? object?.external_id ?? object?.id,
+      externalId:
+        getExternalId(
+          object,
+        ),
 
       sortDatetime: createUtcSortDate(baseDate, index),
     }));
@@ -1116,7 +1581,7 @@ const SubPlanCollapse = ({
     const invalidObject = updates.find(
       (object) =>
         !object.dbId &&
-        (object.modelExternalId == null || object.externalId == null),
+        object.externalId == null,
     );
 
     if (invalidObject) {
@@ -1152,170 +1617,90 @@ const SubPlanCollapse = ({
         return;
       }
 
-      const tcapi = await WorkspaceAPI.connect(window.parent);
-
-      const currentGroup = sequenceObjects.find(
-        (group) => group && String(group.subPlanId) === String(subPlan.id),
-      );
-
-      const objects = currentGroup?.objects || [];
-
-      if (!objects.length) {
-        await tcapi.viewer.setSelection(
-          {
-            modelObjectIds: [],
-          },
-          "set",
+      const tcapi =
+        await WorkspaceAPI.connect(
+          window.parent,
         );
 
-        return;
-      }
+      const currentGroup =
+        sequenceObjects.find(
+          (group) =>
+            String(
+              group?.subPlanId,
+            ) ===
+            String(
+              subPlan.id,
+            ),
+        );
 
-      /*
-       * Runtime IDs that are already available
-       * can be sent directly to setSelection.
-       */
-      const runtimeGroups = new Map();
+      const runtimeGroups =
+        new Map();
 
-      /*
-       * Objects without runtimeId must be resolved
-       * from stable external object IDs.
-       */
-      const unresolvedGroups = new Map();
+      for (
+        const object of
+        currentGroup?.objects || []
+      ) {
+        const modelId =
+          object?.modelId;
 
-      for (const object of objects) {
-        const modelId = object?.modelId;
-
-        const runtimeId = object?.runtimeId;
-
-        const externalId =
-          object?.externalId ??
-          object?.external_id ??
-          object?.objectId ??
-          object?.id;
-
-        if (modelId == null) {
-          continue;
-        }
-
-        const modelKey = String(modelId);
-
-        /*
-         * Prefer the runtime ID resolved during hydration.
-         */
-        if (runtimeId != null && Number.isFinite(Number(runtimeId))) {
-          if (!runtimeGroups.has(modelKey)) {
-            runtimeGroups.set(modelKey, {
-              modelId,
-              runtimeIds: new Set(),
-            });
-          }
-
-          runtimeGroups.get(modelKey).runtimeIds.add(Number(runtimeId));
-
-          continue;
-        }
-
-        /*
-         * Do not convert external IDs to Number.
-         * Trimble external object IDs can be strings.
-         */
-        if (externalId == null || externalId === "") {
-          continue;
-        }
-
-        if (!unresolvedGroups.has(modelKey)) {
-          unresolvedGroups.set(modelKey, {
-            modelId,
-            externalIds: [],
-          });
-        }
-
-        unresolvedGroups.get(modelKey).externalIds.push(externalId);
-      }
-
-      /*
-       * Resolve objects that do not currently
-       * have a runtimeId.
-       */
-      for (const group of unresolvedGroups.values()) {
-        const uniqueExternalIds = [
-          ...new Map(
-            group.externalIds.map((externalId) => [
-              String(externalId),
-              externalId,
-            ]),
-          ).values(),
-        ];
-
-        if (!uniqueExternalIds.length) {
-          continue;
-        }
-
-        try {
-          const runtimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
-            group.modelId,
-            uniqueExternalIds,
+        const runtimeId =
+          getRuntimeId(
+            object,
           );
 
-          const validRuntimeIds = (runtimeIds || [])
-            .map(Number)
-            .filter(Number.isFinite);
-
-          if (!validRuntimeIds.length) {
-            console.warn("No runtime IDs were resolved:", {
-              modelId: group.modelId,
-              externalIds: uniqueExternalIds,
-            });
-
-            continue;
-          }
-
-          const modelKey = String(group.modelId);
-
-          if (!runtimeGroups.has(modelKey)) {
-            runtimeGroups.set(modelKey, {
-              modelId: group.modelId,
-              runtimeIds: new Set(),
-            });
-          }
-
-          const targetGroup = runtimeGroups.get(modelKey);
-
-          validRuntimeIds.forEach((runtimeId) => {
-            targetGroup.runtimeIds.add(runtimeId);
-          });
-        } catch (error) {
-          console.error("Failed to resolve runtime IDs:", {
-            modelId: group.modelId,
-            externalIds: uniqueExternalIds,
-            error,
-          });
+        if (
+          modelId == null ||
+          runtimeId == null ||
+          object?.objectAvailable ===
+            false
+        ) {
+          continue;
         }
+
+        const modelKey =
+          String(
+            modelId,
+          );
+
+        if (
+          !runtimeGroups.has(
+            modelKey,
+          )
+        ) {
+          runtimeGroups.set(
+            modelKey,
+            {
+              modelId,
+
+              runtimeIds:
+                new Set(),
+            },
+          );
+        }
+
+        runtimeGroups
+          .get(modelKey)
+          .runtimeIds.add(
+            runtimeId,
+          );
       }
 
-      const modelObjectIds = [...runtimeGroups.values()]
+      const modelObjectIds = [
+        ...runtimeGroups.values(),
+      ]
         .map((group) => ({
-          modelId: group.modelId,
+          modelId:
+            group.modelId,
 
-          objectRuntimeIds: [...group.runtimeIds],
+          objectRuntimeIds: [
+            ...group.runtimeIds,
+          ],
         }))
-        .filter((group) => group.objectRuntimeIds.length > 0);
-
-      console.log("Highlight modelObjectIds:", modelObjectIds);
-
-      if (!modelObjectIds.length) {
-        await tcapi.viewer.setSelection(
-          {
-            modelObjectIds: [],
-          },
-          "set",
+        .filter(
+          (group) =>
+            group.objectRuntimeIds
+              .length > 0,
         );
-
-        console.warn("No valid objects were found for highlighting.");
-
-        return;
-      }
 
       await tcapi.viewer.setSelection(
         {
@@ -1323,22 +1708,22 @@ const SubPlanCollapse = ({
         },
         "set",
       );
+
+      if (!modelObjectIds.length) {
+        message.info(
+          "No loaded objects are available for highlighting.",
+        );
+      }
     } catch (error) {
-      console.error("Failed to highlight objects:", error);
+      console.error(
+        "Failed to highlight objects:",
+        error,
+      );
+
+      message.error(
+        "Failed to highlight objects.",
+      );
     }
-  };
-
-  const getObjectKey = (obj) => {
-    const modelId = obj.modelId ?? obj.modelExternalId ?? obj.model_external_id;
-
-    const objectId =
-      obj.externalId ??
-      obj.external_id ??
-      obj.id ??
-      obj.runtimeId ??
-      obj.objectRuntimeId;
-
-    return `${String(modelId)}-${String(objectId)}`;
   };
 
   const getObjectDate = (obj) => {
@@ -1375,9 +1760,16 @@ const SubPlanCollapse = ({
       (group) => group && String(group.subPlanId) === String(subPlan.id),
     );
 
-    const objectCount = Array.isArray(currentGroup?.objects)
-      ? currentGroup.objects.length
-      : 0;
+    const objectCount =
+      Array.isArray(
+        currentGroup?.objects,
+      )
+        ? currentGroup.objects.filter(
+            (object) =>
+              object?.objectAvailable !==
+              false,
+          ).length
+        : 0;
 
     return {
       key: String(subPlan.id),

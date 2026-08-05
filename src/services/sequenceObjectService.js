@@ -1,31 +1,21 @@
-import { supabase } from "./supabase";
-import { createUtcSortDate } from "../utils/sortDate";
+import {
+  supabase,
+} from "./supabase";
 
-const OBJECT_COLUMNS = `
-  id,
-  trimble_project_id,
-  sub_plan_id,
-  model_external_id,
-  external_id,
-  assigned_date,
-  sort_datetime,
-  camera,
-  created_at,
-  updated_at
-`;
+import {
+  createUtcSortDate,
+} from "../utils/sortDate";
 
 function mapSequenceObject(row) {
   return {
-    dbId: row.id,
+    dbId:
+      row.id,
 
     trimbleProjectId:
       row.trimble_project_id,
 
     subPlanId:
       row.sub_plan_id,
-
-    modelExternalId:
-      row.model_external_id,
 
     externalId:
       row.external_id,
@@ -43,17 +33,11 @@ function mapSequenceObject(row) {
       row.camera ?? null,
 
     /*
-     * Runtime values are resolved later
-     * from Trimble Connect.
+     * Runtime-only fields.
      */
     modelId: null,
     runtimeId: null,
-
-    /*
-     * Keep the stable Trimble object ID.
-     */
-    id:
-      row.external_id ?? null,
+    id: null,
 
     asmPos: null,
     asmName: null,
@@ -72,85 +56,37 @@ function mapSequenceObject(row) {
   };
 }
 
-function getStableObjectReference(
+const OBJECT_COLUMNS = `
+  id,
+  trimble_project_id,
+  sub_plan_id,
+  external_id,
+  assigned_date,
+  sort_datetime,
+  camera,
+  created_at,
+  updated_at
+`;
+
+const normalizeExternalId = (
   object,
-) {
-  return {
-    dbId:
-      object?.dbId ??
-      object?.db_id ??
-      null,
-
-    subPlanId:
-      object?.subPlanId ??
-      object?.sub_plan_id ??
-      null,
-
-    modelExternalId:
-      object?.modelExternalId ??
-      object?.model_external_id ??
-      object?.modelId ??
-      null,
-
-    externalId:
-      object?.externalId ??
-      object?.external_id ??
-      object?.objectId ??
-      object?.id ??
-      null,
-  };
-}
-
-function applyObjectReference(
-  query,
-  object,
-) {
-  const reference =
-    getStableObjectReference(
-      object,
-    );
-
-  if (reference.dbId) {
-    return query.eq(
-      "id",
-      reference.dbId,
-    );
-  }
+) => {
+  const externalId =
+    object?.externalId ??
+    object?.external_id ??
+    object?.objectId;
 
   if (
-    !reference.modelExternalId ||
-    !reference.externalId
+    externalId == null ||
+    externalId === ""
   ) {
     throw new Error(
-      "Sequence object database ID or stable external IDs are required.",
+      "Object external ID is required.",
     );
   }
 
-  /*
-   * sub_plan_id is important because the same
-   * Trimble object may exist in different SubPlans.
-   */
-  if (reference.subPlanId) {
-    query = query.eq(
-      "sub_plan_id",
-      reference.subPlanId,
-    );
-  }
-
-  return query
-    .eq(
-      "model_external_id",
-      String(
-        reference.modelExternalId,
-      ),
-    )
-    .eq(
-      "external_id",
-      String(
-        reference.externalId,
-      ),
-    );
-}
+  return String(externalId);
+};
 
 function normalizeObjectRow({
   trimbleProjectId,
@@ -158,23 +94,6 @@ function normalizeObjectRow({
   object,
   sortDatetime,
 }) {
-  const reference =
-    getStableObjectReference(
-      object,
-    );
-
-  if (!reference.modelExternalId) {
-    throw new Error(
-      "Model external ID is required.",
-    );
-  }
-
-  if (!reference.externalId) {
-    throw new Error(
-      "Object external ID is required.",
-    );
-  }
-
   return {
     trimble_project_id:
       String(trimbleProjectId),
@@ -182,29 +101,25 @@ function normalizeObjectRow({
     sub_plan_id:
       subPlanId,
 
-    model_external_id:
-      String(
-        reference.modelExternalId,
-      ),
-
     external_id:
-      String(
-        reference.externalId,
+      normalizeExternalId(
+        object,
       ),
 
     assigned_date:
-      object?.assignedDate ??
-      object?.assigned_date ??
-      object?.date ??
+      object.assignedDate ??
+      object.assigned_date ??
+      object.date ??
       null,
 
     sort_datetime:
-      object?.sortDatetime ??
-      object?.sort_datetime ??
+      object.sortDatetime ??
+      object.sort_datetime ??
       sortDatetime,
 
     camera:
-      object?.camera ?? null,
+      object.camera ??
+      null,
   };
 }
 
@@ -217,18 +132,29 @@ export async function getSequenceObjectsByProject(
     );
   }
 
-  const { data, error } =
-    await supabase
-      .from("sequence_objects")
-      .select(OBJECT_COLUMNS)
-      .eq(
-        "trimble_project_id",
-        String(trimbleProjectId),
-      )
-      .order("sort_datetime", {
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "sequence_objects",
+    )
+    .select(
+      OBJECT_COLUMNS,
+    )
+    .eq(
+      "trimble_project_id",
+      String(
+        trimbleProjectId,
+      ),
+    )
+    .order(
+      "sort_datetime",
+      {
         ascending: true,
         nullsFirst: false,
-      });
+      },
+    );
 
   if (error) {
     throw error;
@@ -248,18 +174,27 @@ export async function getSequenceObjectsBySubPlan(
     );
   }
 
-  const { data, error } =
-    await supabase
-      .from("sequence_objects")
-      .select(OBJECT_COLUMNS)
-      .eq(
-        "sub_plan_id",
-        subPlanId,
-      )
-      .order("sort_datetime", {
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "sequence_objects",
+    )
+    .select(
+      OBJECT_COLUMNS,
+    )
+    .eq(
+      "sub_plan_id",
+      subPlanId,
+    )
+    .order(
+      "sort_datetime",
+      {
         ascending: true,
         nullsFirst: false,
-      });
+      },
+    );
 
   if (error) {
     throw error;
@@ -270,14 +205,6 @@ export async function getSequenceObjectsBySubPlan(
   );
 }
 
-/**
- * Replace all objects belonging to one SubPlan.
- *
- * This method persists:
- * - assigned_date
- * - sort_datetime
- * - camera
- */
 export async function replaceSequenceObjectsForSubPlan({
   trimbleProjectId,
   subPlanId,
@@ -301,24 +228,28 @@ export async function replaceSequenceObjectsForSubPlan({
     );
   }
 
-  const { error: deleteError } =
-    await supabase
-      .from("sequence_objects")
-      .delete()
-      .eq(
-        "sub_plan_id",
-        subPlanId,
-      );
+  const {
+    error: deleteError,
+  } = await supabase
+    .from(
+      "sequence_objects",
+    )
+    .delete()
+    .eq(
+      "sub_plan_id",
+      subPlanId,
+    );
 
   if (deleteError) {
     throw deleteError;
   }
 
-  if (objects.length === 0) {
+  if (!objects.length) {
     return [];
   }
 
-  const baseDate = new Date();
+  const baseDate =
+    new Date();
 
   const rows = objects.map(
     (object, index) =>
@@ -335,33 +266,37 @@ export async function replaceSequenceObjectsForSubPlan({
       }),
   );
 
-  const { data, error } =
-    await supabase
-      .from("sequence_objects")
-      .insert(rows)
-      .select(OBJECT_COLUMNS);
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "sequence_objects",
+    )
+    .insert(rows)
+    .select(
+      OBJECT_COLUMNS,
+    );
 
   if (error) {
     throw error;
   }
 
   return (data || [])
-    .map(mapSequenceObject)
-    .sort((first, second) =>
-      String(
-        first.sortDatetime || "",
-      ).localeCompare(
-        String(
-          second.sortDatetime || "",
-        ),
-      ),
+    .map(
+      mapSequenceObject,
+    )
+    .sort(
+      (first, second) =>
+        new Date(
+          first.sortDatetime,
+        ).getTime() -
+        new Date(
+          second.sortDatetime,
+        ).getTime(),
     );
 }
 
-/**
- * Copy sequence objects from source SubPlans
- * to newly created target SubPlans.
- */
 export async function copySequenceObjectsToSubPlans({
   trimbleProjectId,
   mappings,
@@ -378,49 +313,36 @@ export async function copySequenceObjectsToSubPlans({
     );
   }
 
-  if (mappings.length === 0) {
-    return [];
-  }
-
   const rowsToInsert = [];
-  const baseDate = new Date();
+  const baseDate =
+    new Date();
 
   let globalIndex = 0;
 
   for (const mapping of mappings) {
-    if (
-      !mapping?.sourceSubPlanId ||
-      !mapping?.targetSubPlanId
-    ) {
-      continue;
-    }
-
     const sourceObjects =
       await getSequenceObjectsBySubPlan(
         mapping.sourceSubPlanId,
       );
 
-    for (const object of sourceObjects) {
+    for (
+      const object of
+      sourceObjects
+    ) {
       rowsToInsert.push({
         trimble_project_id:
-          String(trimbleProjectId),
+          String(
+            trimbleProjectId,
+          ),
 
         sub_plan_id:
           mapping.targetSubPlanId,
 
-        model_external_id:
-          String(
-            object.modelExternalId,
-          ),
-
         external_id:
-          String(
-            object.externalId,
-          ),
+          object.externalId,
 
         assigned_date:
-          object.assignedDate ??
-          null,
+          object.assignedDate,
 
         sort_datetime:
           createUtcSortDate(
@@ -429,37 +351,48 @@ export async function copySequenceObjectsToSubPlans({
           ),
 
         camera:
-          object.camera ?? null,
+          object.camera ??
+          null,
       });
 
       globalIndex += 1;
     }
   }
 
-  if (rowsToInsert.length === 0) {
+  if (!rowsToInsert.length) {
     return [];
   }
 
-  const { data, error } =
-    await supabase
-      .from("sequence_objects")
-      .insert(rowsToInsert)
-      .select(OBJECT_COLUMNS);
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "sequence_objects",
+    )
+    .insert(
+      rowsToInsert,
+    )
+    .select(
+      OBJECT_COLUMNS,
+    );
 
   if (error) {
     throw error;
   }
 
   return (data || [])
-    .map(mapSequenceObject)
-    .sort((first, second) =>
-      String(
-        first.sortDatetime || "",
-      ).localeCompare(
-        String(
-          second.sortDatetime || "",
-        ),
-      ),
+    .map(
+      mapSequenceObject,
+    )
+    .sort(
+      (first, second) =>
+        new Date(
+          first.sortDatetime,
+        ).getTime() -
+        new Date(
+          second.sortDatetime,
+        ).getTime(),
     );
 }
 
@@ -472,16 +405,17 @@ export async function updateSequenceObjectSortDates(
     );
   }
 
-  if (objects.length === 0) {
+  if (!objects.length) {
     return [];
   }
 
   const updatedObjects = [];
 
   for (const object of objects) {
-    const date = new Date(
-      object?.sortDatetime,
-    );
+    const date =
+      new Date(
+        object?.sortDatetime,
+      );
 
     if (
       Number.isNaN(
@@ -493,37 +427,55 @@ export async function updateSequenceObjectSortDates(
       );
     }
 
-    let query = supabase
-      .from("sequence_objects")
-      .update({
-        sort_datetime:
-          date.toISOString(),
-      });
+    let query =
+      supabase
+        .from(
+          "sequence_objects",
+        )
+        .update({
+          sort_datetime:
+            date.toISOString(),
+        });
 
-    query = applyObjectReference(
-      query,
-      object,
-    );
+    if (object?.dbId) {
+      query = query.eq(
+        "id",
+        object.dbId,
+      );
+    } else {
+      query = query.eq(
+        "external_id",
+        normalizeExternalId(
+          object,
+        ),
+      );
 
-    const { data, error } =
-      await query
-        .select(OBJECT_COLUMNS)
-        .single();
+      if (object?.subPlanId) {
+        query = query.eq(
+          "sub_plan_id",
+          object.subPlanId,
+        );
+      }
+    }
+
+    const {
+      data,
+      error,
+    } = await query
+      .select(
+        OBJECT_COLUMNS,
+      )
+      .single();
 
     if (error) {
       throw error;
     }
 
-    updatedObjects.push({
-      ...mapSequenceObject(data),
-
-      /*
-       * Helps the reducer preserve the exact
-       * datetime requested by the UI.
-       */
-      requestedSortDatetime:
-        date.toISOString(),
-    });
+    updatedObjects.push(
+      mapSequenceObject(
+        data,
+      ),
+    );
   }
 
   return updatedObjects;
@@ -538,7 +490,7 @@ export async function updateSequenceObjectFields(
     );
   }
 
-  if (objects.length === 0) {
+  if (!objects.length) {
     return [];
   }
 
@@ -557,7 +509,8 @@ export async function updateSequenceObjectFields(
       )
     ) {
       updates.assigned_date =
-        changes.assignedDate || null;
+        changes.assignedDate ||
+        null;
     }
 
     if (
@@ -566,51 +519,63 @@ export async function updateSequenceObjectFields(
         "camera",
       )
     ) {
-      /*
-       * Add / Change Camera:
-       * updates.camera = camera object
-       *
-       * Delete Camera:
-       * updates.camera = null
-       */
       updates.camera =
-        changes.camera ?? null;
+        changes.camera ??
+        null;
     }
 
-    if (
-      !Object.keys(updates).length
-    ) {
+    if (!Object.keys(updates).length) {
       continue;
     }
 
-    let query = supabase
-      .from("sequence_objects")
-      .update(updates);
+    let query =
+      supabase
+        .from(
+          "sequence_objects",
+        )
+        .update(
+          updates,
+        );
 
-    query = applyObjectReference(
-      query,
-      object,
-    );
+    if (object?.dbId) {
+      query = query.eq(
+        "id",
+        object.dbId,
+      );
+    } else {
+      query = query.eq(
+        "external_id",
+        normalizeExternalId(
+          object,
+        ),
+      );
 
-    const { data, error } =
-      await query
-        .select(OBJECT_COLUMNS)
-        .single();
+      if (object?.subPlanId) {
+        query = query.eq(
+          "sub_plan_id",
+          object.subPlanId,
+        );
+      }
+    }
+
+    const {
+      data,
+      error,
+    } = await query
+      .select(
+        OBJECT_COLUMNS,
+      )
+      .single();
 
     if (error) {
       throw error;
     }
 
-    updatedObjects.push({
-      ...mapSequenceObject(data),
-
-      /*
-       * Required by reducer, especially when
-       * camera is intentionally set to null.
-       */
-      requestedChanges:
-        changes,
-    });
+    updatedObjects.push(
+      mapSequenceObject(
+        data,
+      ),
+    );
   }
 
   return updatedObjects;

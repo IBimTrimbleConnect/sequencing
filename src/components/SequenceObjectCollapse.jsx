@@ -62,39 +62,71 @@ import customParseFormat from "dayjs/plugin/customParseFormat";
 dayjs.extend(customParseFormat);
 
 /*
- * Supabase stores stable object references:
- * - modelExternalId / model_external_id
- * - externalId / external_id
+ * Supabase stores only the stable externalId.
  *
- * Runtime model IDs and runtime object IDs are resolved from Trimble Connect.
+ * Runtime values are hydrated in saga:
+ * - modelId
+ * - runtimeId
+ *
+ * Viewer operations must always use modelId + runtimeId.
  */
+const getExternalId = (object) =>
+  object?.externalId ??
+  object?.external_id ??
+  object?.objectId ??
+  null;
 
-const getInternalObjectId = (obj) =>
-  obj?.externalId ?? obj?.external_id ?? obj?.objectId ?? obj?.id ?? null;
+const getRuntimeId = (object) =>
+  object?.runtimeId ??
+  object?.objectRuntimeId ??
+  null;
 
-const getObjectModelId = (obj) =>
-  obj?.modelId ?? obj?.modelExternalId ?? obj?.model_external_id ?? null;
+const getObjectModelId = (object) =>
+  object?.modelId ?? null;
 
-const getStableModelId = (obj) =>
-  obj?.modelExternalId ?? obj?.model_external_id ?? obj?.modelId ?? null;
+const getObjectKey = (object) =>
+  String(
+    object?.dbId ??
+      getExternalId(object) ??
+      "",
+  );
 
-const getObjectKey = (obj) => {
-  const modelId = getStableModelId(obj);
-  const objectId = getInternalObjectId(obj);
+const getObjectDate = (object) =>
+  object?.assignedDate ??
+  object?.date ??
+  "";
 
-  return `${String(modelId)}-${String(objectId)}`;
-};
-
-const getObjectDate = (obj) => obj?.date || obj?.assignedDate || "";
-
-const isSameObject = (first, second) => {
+const isSameObject = (
+  first,
+  second,
+) => {
   if (!first || !second) {
     return false;
   }
 
+  const firstDbId =
+    first?.dbId;
+
+  const secondDbId =
+    second?.dbId;
+
+  if (
+    firstDbId != null &&
+    secondDbId != null
+  ) {
+    return (
+      String(firstDbId) ===
+      String(secondDbId)
+    );
+  }
+
   return (
-    String(getObjectModelId(first)) === String(getObjectModelId(second)) &&
-    String(getInternalObjectId(first)) === String(getInternalObjectId(second))
+    String(
+      getExternalId(first),
+    ) ===
+    String(
+      getExternalId(second),
+    )
   );
 };
 
@@ -534,7 +566,7 @@ const SortableSubItem = React.memo(
                 {`${displayIndex}:`}
               </span>
 
-              {item.asmPos || item.id}
+              {item.asmPos || getExternalId(item) || getRuntimeId(item)}
 
               {item.positionCode ? ` [${item.positionCode}]` : ""}
 
@@ -720,7 +752,17 @@ const SequenceObjectCollapse = ({
             object,
           );
 
-        if (modelId == null) {
+        const runtimeId =
+          getRuntimeId(
+            object,
+          );
+
+        if (
+          modelId == null ||
+          runtimeId == null ||
+          object?.objectAvailable ===
+            false
+        ) {
           return false;
         }
 
@@ -737,33 +779,61 @@ const SequenceObjectCollapse = ({
   const items = useMemo(() => {
     const result = [];
 
-    sequenceObjects.forEach((group) => {
-      const objects = group?.objects || [];
+    sequenceObjects.forEach(
+      (group) => {
+        const objects =
+          group?.objects || [];
 
-      objects.forEach((obj) => {
-        const objectId = getInternalObjectId(obj);
-        const modelId = getObjectModelId(obj);
+        objects.forEach(
+          (object) => {
+            const modelId =
+              getObjectModelId(
+                object,
+              );
 
-        if (
-          objectId == null ||
-          modelId == null ||
-          !loadedModelIdSet.has(
-            String(modelId),
-          )
-        ) {
-          return;
-        }
+            const runtimeId =
+              getRuntimeId(
+                object,
+              );
 
-        result.push({
-          ...obj,
-          objectId,
-          planId: obj.planId ?? group.planId ?? group.id,
-          subPlanId: obj.subPlanId ?? group.subPlanId,
-          modelId,
-          id: objectId,
-        });
-      });
-    });
+            const externalId =
+              getExternalId(
+                object,
+              );
+
+            if (
+              modelId == null ||
+              runtimeId == null ||
+              externalId == null ||
+              object?.objectAvailable ===
+                false ||
+              !loadedModelIdSet.has(
+                String(modelId),
+              )
+            ) {
+              return;
+            }
+
+            result.push({
+              ...object,
+
+              externalId,
+              runtimeId,
+              modelId,
+
+              planId:
+                object?.planId ??
+                group?.planId ??
+                group?.id,
+
+              subPlanId:
+                object?.subPlanId ??
+                group?.subPlanId,
+            });
+          },
+        );
+      },
+    );
 
     return result;
   }, [
@@ -800,96 +870,88 @@ const SequenceObjectCollapse = ({
   );
 
   /*
-   * Convert danh sách Internal Object ID sang Runtime ID theo từng model.
-   * Mỗi model chỉ gọi convertToObjectRuntimeIds một lần.
+   * Build Viewer selectors directly from hydrated runtime IDs.
+   * No conversion is performed inside this component.
    */
-  const resolveViewerModelObjects = useCallback(async (objects) => {
-    const tcapi =
-      tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
+  const resolveViewerModelObjects =
+    useCallback(
+      async (objects) => {
+        if (!objects?.length) {
+          return [];
+        }
 
-    tcapiRef.current = tcapi;
+        const modelGroups =
+          new Map();
 
-    if (!objects?.length) {
-      return [];
-    }
+        objects.forEach(
+          (object) => {
+            const modelId =
+              getObjectModelId(
+                object,
+              );
 
-    const modelGroups = new Map();
+            const runtimeId =
+              getRuntimeId(
+                object,
+              );
 
-    objects.forEach((item) => {
-      const objectId =
-        getInternalObjectId(item);
+            if (
+              modelId == null ||
+              runtimeId == null ||
+              object?.objectAvailable ===
+                false ||
+              !loadedModelIdSet.has(
+                String(modelId),
+              )
+            ) {
+              return;
+            }
 
-      const modelId =
-        getObjectModelId(item);
+            const modelKey =
+              String(modelId);
 
-      if (
-        modelId == null ||
-        objectId == null ||
-        !loadedModelIdSet.has(
-          String(modelId),
-        )
-      ) {
-        return;
-      }
+            if (
+              !modelGroups.has(
+                modelKey,
+              )
+            ) {
+              modelGroups.set(
+                modelKey,
+                {
+                  modelId,
+                  runtimeIds:
+                    new Set(),
+                },
+              );
+            }
 
-      const modelKey = String(modelId);
-
-      if (!modelGroups.has(modelKey)) {
-        modelGroups.set(modelKey, {
-          modelId,
-          objectIds: [],
-        });
-      }
-
-      modelGroups.get(modelKey).objectIds.push(objectId);
-    });
-
-    const modelObjectIds = [];
-
-    for (const group of modelGroups.values()) {
-      const objectIds = [
-        ...new Map(
-          group.objectIds.map((objectId) => [String(objectId), objectId]),
-        ).values(),
-      ];
-
-      if (!objectIds.length) {
-        continue;
-      }
-
-      let objectRuntimeIds = [];
-
-      try {
-        objectRuntimeIds = await tcapi.viewer.convertToObjectRuntimeIds(
-          group.modelId,
-          objectIds,
+            modelGroups
+              .get(modelKey)
+              .runtimeIds.add(
+                runtimeId,
+              );
+          },
         );
-      } catch (error) {
-        console.error("convertToObjectRuntimeIds failed:", {
-          modelId: group.modelId,
-          objectIds,
-          error,
-        });
 
-        continue;
-      }
+        return [
+          ...modelGroups.values(),
+        ]
+          .map((group) => ({
+            modelId:
+              group.modelId,
 
-      const validRuntimeIds = (objectRuntimeIds || []).filter(
-        (runtimeId) => runtimeId != null,
-      );
-
-      if (!validRuntimeIds.length) {
-        continue;
-      }
-
-      modelObjectIds.push({
-        modelId: group.modelId,
-        objectRuntimeIds: [...new Set(validRuntimeIds)],
-      });
-    }
-
-    return modelObjectIds;
-  }, [loadedModelIdSet]);
+            objectRuntimeIds: [
+              ...group.runtimeIds,
+            ],
+          }))
+          .filter(
+            (group) =>
+              group.objectRuntimeIds
+                .length > 0,
+          );
+      },
+      [loadedModelIdSet],
+    );
 
   const selectObjectsInViewer = useCallback(
     async (objects) => {
@@ -902,6 +964,13 @@ const SequenceObjectCollapse = ({
         const modelObjectIds = await resolveViewerModelObjects(objects);
 
         if (!modelObjectIds.length) {
+          await tcapi.viewer.setSelection(
+            {
+              modelObjectIds: [],
+            },
+            "set",
+          );
+
           return;
         }
 
@@ -930,14 +999,31 @@ const SequenceObjectCollapse = ({
 
       dispatch(
         SetActiveSimulationItem({
-          planId: item.planId,
+          planId:
+            item.planId,
 
-          subPlanId: item.subPlanId,
+          subPlanId:
+            item.subPlanId,
 
-          modelId: getObjectModelId(item),
+          modelId:
+            getObjectModelId(
+              item,
+            ),
 
-          id: getInternalObjectId(item),
-          objectId: getInternalObjectId(item),
+          runtimeId:
+            getRuntimeId(
+              item,
+            ),
+
+          id:
+            getExternalId(
+              item,
+            ),
+
+          objectId:
+            getExternalId(
+              item,
+            ),
         }),
       );
 
@@ -953,7 +1039,13 @@ const SequenceObjectCollapse = ({
           String(item.subPlanId) === String(activeSimulationItem.subPlanId) &&
           String(getObjectModelId(item)) ===
             String(activeSimulationItem.modelId) &&
-          String(item.id) === String(activeSimulationItem.id),
+          String(
+            getExternalId(item),
+          ) ===
+            String(
+              activeSimulationItem.objectId ??
+                activeSimulationItem.id,
+            ),
       );
     }
 
@@ -1002,25 +1094,44 @@ const SequenceObjectCollapse = ({
     changeIndex(currentIndex - 1);
   }, [getCurrentIndex, changeIndex]);
 
-  const setActiveItem = useCallback(
-    (item) => {
-      const objectId = getInternalObjectId(item);
+  const setActiveItem =
+    useCallback(
+      (item) => {
+        const externalId =
+          getExternalId(item);
 
-      dispatch(
-        SetActiveSimulationItem({
-          planId: item.planId,
+        dispatch(
+          SetActiveSimulationItem({
+            planId:
+              item.planId,
 
-          subPlanId: item.subPlanId || subPlan.id,
+            subPlanId:
+              item.subPlanId ||
+              subPlan.id,
 
-          modelId: getObjectModelId(item),
+            modelId:
+              getObjectModelId(
+                item,
+              ),
 
-          id: objectId,
-          objectId,
-        }),
-      );
-    },
-    [dispatch, subPlan.id],
-  );
+            runtimeId:
+              getRuntimeId(
+                item,
+              ),
+
+            id:
+              externalId,
+
+            objectId:
+              externalId,
+          }),
+        );
+      },
+      [
+        dispatch,
+        subPlan.id,
+      ],
+    );
 
   useEffect(() => {
     if (
@@ -1039,8 +1150,13 @@ const SequenceObjectCollapse = ({
       (item) =>
         String(getObjectModelId(item)) ===
           String(activeSimulationItem.modelId) &&
-        String(getInternalObjectId(item)) ===
-          String(activeSimulationItem.objectId ?? activeSimulationItem.id),
+        String(
+          getExternalId(item),
+        ) ===
+          String(
+            activeSimulationItem.objectId ??
+              activeSimulationItem.id,
+          ),
     );
 
     if (index === -1) {
@@ -1310,15 +1426,13 @@ const SequenceObjectCollapse = ({
                   dbId:
                     object.dbId,
 
-                  modelExternalId:
-                    object.modelExternalId ??
-                    object.model_external_id ??
-                    object.modelId,
+                  subPlanId:
+                    subPlan.id,
 
                   externalId:
-                    object.externalId ??
-                    object.external_id ??
-                    object.id,
+                    getExternalId(
+                      object,
+                    ),
 
                   sortDatetime:
                     object.sortDatetime,
