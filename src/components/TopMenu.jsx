@@ -50,6 +50,10 @@ const TopMenu = ({
 
   const plans = useSelector((state) => state.sequence.plans || []);
 
+  const creatingPlans = useSelector(
+    (state) => state.sequence.pending === true,
+  );
+
   const sequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects || [],
   );
@@ -89,45 +93,140 @@ const TopMenu = ({
 
   const [exporting, setExporting] = useState(false);
 
-  const planName = Form.useWatch("planName", form);
-
   const handleCreate = useCallback(async () => {
     try {
       if (!isOwner) {
-        message.error("Only the project owner can create a plan.");
+        message.error("Only the project owner can create Plans.");
+
         return;
       }
 
       if (!projectId) {
         message.error("Unable to retrieve the current Trimble project ID.");
+
         return;
       }
 
       const values = await form.validateFields();
 
-      dispatch(
-        CreatePlanRequest({
-          projectId,
-          name: values.planName.trim(),
+      const baseName = String(values.planName || "").trim();
+
+      const startIndex = Number(values.startIndex);
+
+      const quantity = Number(values.quantity);
+
+      if (!baseName) {
+        message.warning("Please enter the Plan name.");
+
+        return;
+      }
+
+      if (!Number.isInteger(startIndex) || startIndex < 0) {
+        message.warning(
+          "Start index must be a whole number greater than or equal to 0.",
+        );
+
+        return;
+      }
+
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
+        message.warning("Quantity must be between 1 and 100.");
+
+        return;
+      }
+
+      const existingPlanNames = new Set(
+        plans.map((plan) =>
+          String(plan?.name || "")
+            .trim()
+            .toLowerCase(),
+        ),
+      );
+
+      const newPlans = Array.from(
+        {
+          length: quantity,
+        },
+        (_, index) => ({
+          name: `${baseName} ${startIndex + index}`,
+
           color: values.color || null,
         }),
       );
 
+      const duplicatePlans = newPlans.filter((plan) =>
+        existingPlanNames.has(plan.name.toLowerCase()),
+      );
+
+      if (duplicatePlans.length) {
+        message.error(
+          `The following Plan name already exists: ${duplicatePlans
+            .map((plan) => plan.name)
+            .join(", ")}`,
+        );
+
+        return;
+      }
+
+      /*
+       * Dispatch one request per Plan.
+       *
+       * Cách này hoạt động với CreatePlanRequest hiện tại.
+       */
+      newPlans.forEach((newPlan) => {
+        dispatch(
+          CreatePlanRequest({
+            projectId,
+
+            name: newPlan.name,
+
+            color: newPlan.color,
+          }),
+        );
+      });
+
+      message.success(`${newPlans.length} Plan(s) are being created.`);
+
       form.resetFields();
+
+      form.setFieldsValue({
+        startIndex: 1,
+        quantity: 1,
+      });
+
       setIsModalOpen(false);
     } catch (error) {
       if (!error?.errorFields) {
-        console.error("Failed to create plan:", error);
+        console.error("Failed to create Plans:", error);
 
-        message.error(error?.message || "Unable to create the plan.");
+        message.error(error?.message || "Unable to create the Plans.");
       }
     }
-  }, [dispatch, form, isOwner, projectId]);
+  }, [dispatch, form, isOwner, plans, projectId]);
 
   const handleCancel = useCallback(() => {
     form.resetFields();
+
+    form.setFieldsValue({
+      planName: "Plan",
+      startIndex: plans.length + 1,
+      quantity: 1,
+    });
+
     setIsModalOpen(false);
-  }, [form]);
+  }, [form, plans.length]);
+
+  const handleOpenCreateModal = useCallback(() => {
+    form.resetFields();
+
+    form.setFieldsValue({
+      planName: "Plan",
+      startIndex: plans.length + 1,
+      quantity: 1,
+    });
+
+    setIsModalOpen(true);
+  }, [form, plans.length]);
 
   const handleHighlight = useCallback(async () => {
     try {
@@ -311,41 +410,24 @@ const TopMenu = ({
   }, [exportForm, exportWorkbook]);
 
   const handleRefreshModels = useCallback(async () => {
-    if (
-      typeof onRefreshModels !==
-      "function"
-    ) {
+    if (typeof onRefreshModels !== "function") {
       return;
     }
 
     try {
-      const loadedModelCount =
-        await onRefreshModels();
+      const loadedModelCount = await onRefreshModels();
 
-      if (
-        Number.isFinite(
-          Number(
-            loadedModelCount,
-          ),
-        )
-      ) {
+      if (Number.isFinite(Number(loadedModelCount))) {
         message.success(
           `${loadedModelCount} loaded model(s) found. Runtime objects are refreshing.`,
         );
       }
     } catch (error) {
-      console.error(
-        "Refresh loaded models failed:",
-        error,
-      );
+      console.error("Refresh loaded models failed:", error);
 
-      message.error(
-        error?.message ||
-          "Unable to refresh loaded models.",
-      );
+      message.error(error?.message || "Unable to refresh loaded models.");
     }
   }, [onRefreshModels]);
-
 
   return (
     <>
@@ -353,7 +435,7 @@ const TopMenu = ({
         <CreatePlanModal
           open={isModalOpen}
           form={form}
-          planName={planName}
+          loading={creatingPlans}
           onCreate={handleCreate}
           onCancel={handleCancel}
         />
@@ -386,22 +468,13 @@ const TopMenu = ({
 
         <Flex justify="flex-end">
           <Space size={4}>
-            <Tooltip
-              title={
-                refreshModelsError ||
-                "Refresh loaded models"
-              }
-            >
+            <Tooltip title={refreshModelsError || "Refresh loaded models"}>
               <Button
                 size="large"
                 type="text"
-                loading={
-                  refreshingModels
-                }
+                loading={refreshingModels}
                 disabled={
-                  refreshingModels ||
-                  typeof onRefreshModels !==
-                    "function"
+                  refreshingModels || typeof onRefreshModels !== "function"
                 }
                 icon={
                   !refreshingModels ? (
@@ -412,17 +485,14 @@ const TopMenu = ({
                     />
                   ) : null
                 }
-                onClick={
-                  handleRefreshModels
-                }
+                onClick={handleRefreshModels}
               />
             </Tooltip>
 
-            <Tooltip title="Create new plan">
+            <Tooltip title="Create multiple plans">
               <Button
                 size="large"
                 type="text"
-                enabled={isOwner}
                 disabled={!isOwner}
                 icon={
                   <FolderAddOutlined
@@ -431,7 +501,7 @@ const TopMenu = ({
                     }}
                   />
                 }
-                onClick={() => setIsModalOpen(true)}
+                onClick={handleOpenCreateModal}
               />
             </Tooltip>
 
