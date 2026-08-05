@@ -4,6 +4,7 @@ import {
   DownloadOutlined,
   FileSearchOutlined,
   FolderAddOutlined,
+  ReloadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useDispatch, useSelector } from "react-redux";
@@ -38,6 +39,9 @@ const TopMenu = ({
   projectId: projectIdProp = "",
   projectName: projectNameProp = "",
   userRole: userRoleProp = "",
+  onRefreshModels,
+  refreshingModels = false,
+  refreshModelsError = "",
 }) => {
   const dispatch = useDispatch();
 
@@ -306,6 +310,43 @@ const TopMenu = ({
     }
   }, [exportForm, exportWorkbook]);
 
+  const handleRefreshModels = useCallback(async () => {
+    if (
+      typeof onRefreshModels !==
+      "function"
+    ) {
+      return;
+    }
+
+    try {
+      const loadedModelCount =
+        await onRefreshModels();
+
+      if (
+        Number.isFinite(
+          Number(
+            loadedModelCount,
+          ),
+        )
+      ) {
+        message.success(
+          `${loadedModelCount} loaded model(s) found. Runtime objects are refreshing.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Refresh loaded models failed:",
+        error,
+      );
+
+      message.error(
+        error?.message ||
+          "Unable to refresh loaded models.",
+      );
+    }
+  }, [onRefreshModels]);
+
+
   return (
     <>
       {isOwner && (
@@ -345,6 +386,38 @@ const TopMenu = ({
 
         <Flex justify="flex-end">
           <Space size={4}>
+            <Tooltip
+              title={
+                refreshModelsError ||
+                "Refresh loaded models"
+              }
+            >
+              <Button
+                size="large"
+                type="text"
+                loading={
+                  refreshingModels
+                }
+                disabled={
+                  refreshingModels ||
+                  typeof onRefreshModels !==
+                    "function"
+                }
+                icon={
+                  !refreshingModels ? (
+                    <ReloadOutlined
+                      style={{
+                        fontSize: 22,
+                      }}
+                    />
+                  ) : null
+                }
+                onClick={
+                  handleRefreshModels
+                }
+              />
+            </Tooltip>
+
             <Tooltip title="Create new plan">
               <Button
                 size="large"

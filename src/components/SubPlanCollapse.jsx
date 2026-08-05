@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { Collapse, Empty, Spin, App } from "antd";
+import { Collapse, DatePicker, Empty, Modal, Spin, App } from "antd";
 import dayjs from "dayjs";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
@@ -152,6 +152,26 @@ const SubPlanCollapse = ({
   const [selectedSubPlan, setSelectedSubPlan] = React.useState(null);
   const [activeKeys, setActiveKeys] = React.useState([]);
 
+  const [
+    assignDateModalOpen,
+    setAssignDateModalOpen,
+  ] = React.useState(false);
+
+  const [
+    assignDate,
+    setAssignDate,
+  ] = React.useState(dayjs());
+
+  const [
+    pendingAssignMode,
+    setPendingAssignMode,
+  ] = React.useState(null);
+
+  const [
+    pendingAssignSubPlan,
+    setPendingAssignSubPlan,
+  ] = React.useState(null);
+
   const messageListenerRef = useRef(null);
   const keyListenerRef = useRef(null);
 
@@ -254,7 +274,7 @@ const SubPlanCollapse = ({
     setIsEditFormOpen(true);
   };
 
-  const handleAssignObject = async (subPlan) => {
+  const executeAssignObject = async (subPlan, selectedDate) => {
     if (!canEdit) {
       return;
     }
@@ -686,12 +706,12 @@ const SubPlanCollapse = ({
                 asmPos,
 
                 assignedDate:
-                  dayjs().format(
+                  selectedDate.format(
                     "YYYY-MM-DD",
                   ),
 
                 date:
-                  dayjs().format(
+                  selectedDate.format(
                     "YYYY-MM-DD",
                   ),
 
@@ -821,7 +841,7 @@ const SubPlanCollapse = ({
     console.log("Auto assign stopped");
   };
 
-  const handleAutoAssign = async (subPlan) => {
+  const executeAutoAssign = async (subPlan, selectedDate) => {
     if (!canEdit) {
       return;
     }
@@ -1147,12 +1167,12 @@ const SubPlanCollapse = ({
             asmPos,
 
             assignedDate:
-              dayjs().format(
+              selectedDate.format(
                 "YYYY-MM-DD",
               ),
 
             date:
-              dayjs().format(
+              selectedDate.format(
                 "YYYY-MM-DD",
               ),
 
@@ -1240,6 +1260,104 @@ const SubPlanCollapse = ({
       );
     }
   };
+
+  const openAssignDateModal = (
+    subPlan,
+    mode,
+  ) => {
+    if (!canEdit) {
+      return;
+    }
+
+    setPendingAssignSubPlan(
+      subPlan,
+    );
+
+    setPendingAssignMode(
+      mode,
+    );
+
+    setAssignDate(
+      dayjs(),
+    );
+
+    setAssignDateModalOpen(
+      true,
+    );
+  };
+
+  const closeAssignDateModal =
+    () => {
+      setAssignDateModalOpen(
+        false,
+      );
+
+      setPendingAssignMode(
+        null,
+      );
+
+      setPendingAssignSubPlan(
+        null,
+      );
+
+      setAssignDate(
+        dayjs(),
+      );
+    };
+
+  const confirmAssignDate =
+    async () => {
+      if (
+        !pendingAssignSubPlan ||
+        !pendingAssignMode
+      ) {
+        closeAssignDateModal();
+
+        return;
+      }
+
+      if (
+        !assignDate ||
+        !assignDate.isValid()
+      ) {
+        message.warning(
+          "Please select an assigned date.",
+        );
+
+        return;
+      }
+
+      const selectedSubPlan =
+        pendingAssignSubPlan;
+
+      const selectedMode =
+        pendingAssignMode;
+
+      const selectedDate =
+        assignDate.startOf(
+          "day",
+        );
+
+      closeAssignDateModal();
+
+      if (
+        selectedMode ===
+        "auto"
+      ) {
+        await executeAutoAssign(
+          selectedSubPlan,
+          selectedDate,
+        );
+
+        return;
+      }
+
+      await executeAssignObject(
+        selectedSubPlan,
+        selectedDate,
+      );
+    };
+
 
   const DATE_FORMATS = ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "YYYY/MM/DD"];
 
@@ -1797,9 +1915,23 @@ const SubPlanCollapse = ({
               : undefined
           }
           onAssignObject={
-            canEdit ? () => handleAssignObject(subPlan) : undefined
+            canEdit
+              ? () =>
+                  openAssignDateModal(
+                    subPlan,
+                    "manual",
+                  )
+              : undefined
           }
-          onAutoAssign={canEdit ? () => handleAutoAssign(subPlan) : undefined}
+          onAutoAssign={
+            canEdit
+              ? () =>
+                  openAssignDateModal(
+                    subPlan,
+                    "auto",
+                  )
+              : undefined
+          }
           onSimulation={() => handleSimulation(subPlan)}
           onSortByDate={canEdit ? () => handleSortByDate(subPlan) : undefined}
           onHighlightObject={() => handleHighlightObject(subPlan)}
@@ -1833,6 +1965,56 @@ const SubPlanCollapse = ({
 
   return (
     <>
+      {canEdit && (
+        <Modal
+          title={
+            pendingAssignMode ===
+            "auto"
+              ? "Assign Picked Assemblies"
+              : "Assign Multiple Assemblies"
+          }
+          open={
+            assignDateModalOpen
+          }
+          okText="Continue"
+          cancelText="Cancel"
+          onOk={
+            confirmAssignDate
+          }
+          onCancel={
+            closeAssignDateModal
+          }
+          destroyOnHidden
+          maskClosable={false}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <span>
+              Assigned Date
+            </span>
+
+            <DatePicker
+              value={assignDate}
+              format="DD-MM-YYYY"
+              allowClear={false}
+              style={{
+                width: "100%",
+              }}
+              onChange={(date) => {
+                setAssignDate(
+                  date,
+                );
+              }}
+            />
+          </div>
+        </Modal>
+      )}
+
       {canEdit && (
         <SubPlanModal
           plan={selectedSubPlan}

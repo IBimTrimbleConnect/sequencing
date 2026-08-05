@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 
-import { Badge, Button, Dropdown, Popconfirm } from "antd";
+import {Button, Dropdown, Popconfirm } from "antd";
 
 import {
   CopyOutlined,
@@ -412,7 +412,7 @@ const SortableHeader = ({
             {plan?.name || "Unnamed Plan"}
           </span>
 
-          <span>[{objectCount}]</span>
+          <span>[{safeObjectCount}]</span>
         </div>
       </div>
 

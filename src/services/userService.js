@@ -42,7 +42,12 @@ export async function checkTrimbleUser(trimbleEmail) {
     .toLowerCase();
 
   if (!email) {
-    throw new Error("Unable to retrieve the Trimble user email.");
+    return {
+      allowed: false,
+      reason: "Unable to retrieve the Trimble user email.",
+      user: null,
+      errorCode: "EMAIL_NOT_AVAILABLE",
+    };
   }
 
   const { data, error } = await supabase
@@ -52,62 +57,110 @@ export async function checkTrimbleUser(trimbleEmail) {
     .maybeSingle();
 
   if (error) {
-    throw error;
+    console.error("Check Trimble user failed:", error);
+
+    return {
+      allowed: false,
+      reason: "Unable to verify your license. Please try again later.",
+      user: null,
+      errorCode: "LICENSE_CHECK_FAILED",
+    };
   }
 
+  /*
+   * Email không tồn tại trong trimble_users:
+   * không cấp quyền Viewer mặc định.
+   */
   if (!data) {
     return {
-      allowed: true,
-      reason: null,
-      user: {
-        id: null,
-        trimbleEmail: email,
-        status: "active",
-        startDate: null,
-        endDate: null,
-        role: "viewer",
-        isOwner: false,
-        isViewer: true,
-        createdAt: null,
-        updatedAt: null,
-      },
+      allowed: false,
+
+      reason:
+        `The account '${email}' does not have a valid license. ` +
+        "Please purchase a license to continue.",
+
+      user: null,
+
+      errorCode: "LICENSE_NOT_FOUND",
     };
   }
 
   const user = mapUser(data);
+
   const today = getLocalDateString();
 
-  if (String(user.status).toLowerCase() !== "active") {
+  const normalizedStatus = String(user.status || "")
+    .trim()
+    .toLowerCase();
+
+  const normalizedRole = String(user.role || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedStatus !== "active") {
     return {
       allowed: false,
-      reason: "Your account is inactive.",
+      reason:
+        "Your license is inactive. Please purchase or renew your license.",
       user,
+      errorCode: "LICENSE_INACTIVE",
     };
   }
 
   if (user.startDate && today < user.startDate) {
     return {
       allowed: false,
-      reason: `Your account will be activated on ${user.startDate}.`,
+
+      reason: `Your license will be activated on ${user.startDate}.`,
+
       user,
+
+      errorCode: "LICENSE_NOT_STARTED",
     };
   }
 
   if (user.endDate && today > user.endDate) {
     return {
       allowed: false,
-      reason: `Your account expired on ${user.endDate}.`,
+
+      reason:
+        `Your license expired on ${user.endDate}. ` +
+        "Please renew your license to continue.",
+
       user,
+
+      errorCode: "LICENSE_EXPIRED",
+    };
+  }
+
+  /*
+   * Chỉ chấp nhận các role hợp lệ.
+   */
+  if (normalizedRole !== "owner" && normalizedRole !== "viewer") {
+    return {
+      allowed: false,
+
+      reason: "Your account does not have a valid application role.",
+
+      user,
+
+      errorCode: "INVALID_ROLE",
     };
   }
 
   return {
     allowed: true,
     reason: null,
+    errorCode: null,
+
     user: {
       ...user,
-      isOwner: String(user.role).toLowerCase() === "owner",
-      isViewer: String(user.role).toLowerCase() === "viewer",
+
+      role: normalizedRole,
+
+      isOwner: normalizedRole === "owner",
+
+      isViewer: normalizedRole === "viewer",
     },
   };
 }

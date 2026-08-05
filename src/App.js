@@ -1,30 +1,27 @@
-import {
-  Alert,
-  Layout,
-  Result,
-  Spin,
-  Button,
-} from "antd";
+import { Alert, Layout, Result, Spin, Button } from "antd";
 
 import TopMenu from "./components/TopMenu";
-import { GetPlanRequest } from "./store/sequence/action";
+import {
+  GetPlanRequest,
+  RefreshLoadedModelsRequest,
+} from "./store/sequence/action";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
 import React, {
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 
 import Main from "./components/Main";
 import Simulation from "./components/Simulation";
 import { checkTrimbleUser } from "./services/userService";
 
-import {
-  ShoppingCartOutlined,
-} from "@ant-design/icons";
+import { ShoppingCartOutlined } from "@ant-design/icons";
 
 const { Content, Footer } = Layout;
 
@@ -32,18 +29,13 @@ const MODEL_CHECK_INTERVAL_MS = 500;
 const MODEL_LOAD_TIMEOUT_MS = 60000;
 
 function getTrimbleApiUrl(locationValue) {
-  const location = String(
-    locationValue || "",
-  ).toUpperCase();
+  const location = String(locationValue || "").toUpperCase();
 
   if (location.includes("AUSTRALIA")) {
     return "https://app32.connect.trimble.com/tc/api/2.0";
   }
 
-  if (
-    location.includes("EUROPE") ||
-    location.includes("EU")
-  ) {
+  if (location.includes("EUROPE") || location.includes("EU")) {
     return "https://app21.connect.trimble.com/tc/api/2.0";
   }
 
@@ -70,10 +62,7 @@ function normalizeRole(role) {
 
 function sleep(milliseconds) {
   return new Promise((resolve) => {
-    window.setTimeout(
-      resolve,
-      milliseconds,
-    );
+    window.setTimeout(resolve, milliseconds);
   });
 }
 
@@ -84,42 +73,28 @@ function sleep(milliseconds) {
 async function waitForLoadedModels(
   tcapi,
   {
-    timeout =
-      MODEL_LOAD_TIMEOUT_MS,
+    timeout = MODEL_LOAD_TIMEOUT_MS,
 
-    interval =
-      MODEL_CHECK_INTERVAL_MS,
+    interval = MODEL_CHECK_INTERVAL_MS,
 
     isCancelled = () => false,
   } = {},
 ) {
   const startedAt = Date.now();
 
-  while (
-    Date.now() - startedAt <
-    timeout
-  ) {
+  while (Date.now() - startedAt < timeout) {
     if (isCancelled()) {
       return [];
     }
 
     try {
-      const loadedModels =
-        await tcapi.viewer.getModels(
-          "loaded",
-        );
+      const loadedModels = await tcapi.viewer.getModels("loaded");
 
-      if (
-        Array.isArray(loadedModels) &&
-        loadedModels.length > 0
-      ) {
+      if (Array.isArray(loadedModels) && loadedModels.length > 0) {
         return loadedModels;
       }
     } catch (error) {
-      console.warn(
-        "Unable to check loaded models:",
-        error,
-      );
+      console.warn("Unable to check loaded models:", error);
     }
 
     await sleep(interval);
@@ -131,59 +106,45 @@ async function waitForLoadedModels(
 export default function App() {
   const dispatch = useDispatch();
 
-  const [
-    projectId,
-    setProjectId,
-  ] = useState("");
+  const tcapiRef = useRef(null);
 
-  const [
-    projectName,
-    setProjectName,
-  ] = useState("");
 
-  const [
-    trimbleUser,
-    setTrimbleUser,
-  ] = useState(null);
+  const refreshingModels = useSelector(
+    (state) =>
+      state.sequence?.refreshingModels === true,
+  );
 
-  const [
-    loadedModels,
-    setLoadedModels,
-  ] = useState([]);
+  const refreshModelsError = useSelector(
+    (state) =>
+      state.sequence?.refreshModelsError || "",
+  );
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
+  const [projectId, setProjectId] = useState("");
 
-  const [
-    loadingMessage,
-    setLoadingMessage,
-  ] = useState(
+  const [projectName, setProjectName] = useState("");
+
+  const [trimbleUser, setTrimbleUser] = useState(null);
+
+  const [loadedModels, setLoadedModels] = useState([]);
+
+  const [loading, setLoading] = useState(true);
+
+  const [loadingMessage, setLoadingMessage] = useState(
     "Checking access rights...",
   );
 
-  const [
-    accessError,
-    setAccessError,
-  ] = useState("");
+  const [accessError, setAccessError] = useState("");
 
   const userRole = useMemo(
-    () =>
-      normalizeRole(
-        trimbleUser?.role,
-      ),
+    () => normalizeRole(trimbleUser?.role),
     [trimbleUser?.role],
   );
 
-  const isOwner =
-    userRole === "owner";
+  const isOwner = userRole === "owner";
 
-  const isViewer =
-    userRole === "viewer";
+  const isViewer = userRole === "viewer";
 
-  const modelLoaded =
-    loadedModels.length > 0;
+  const modelLoaded = loadedModels.length > 0;
 
   /*
    * Normalize all loaded model IDs to strings.
@@ -193,17 +154,8 @@ export default function App() {
   const loadedModelIds = useMemo(
     () =>
       loadedModels
-        .map(
-          (model) =>
-            model?.id ??
-            model?.modelId ??
-            model?.modelExternalId,
-        )
-        .filter(
-          (modelId) =>
-            modelId != null &&
-            modelId !== "",
-        )
+        .map((model) => model?.id ?? model?.modelId)
+        .filter((modelId) => modelId != null && modelId !== "")
         .map(String),
     [loadedModels],
   );
@@ -217,184 +169,113 @@ export default function App() {
       setLoadedModels([]);
 
       try {
-        if (
-          window.parent === window
-        ) {
+        if (window.parent === window) {
           throw new Error(
             "The application must be opened inside Trimble Connect.",
           );
         }
 
-        setLoadingMessage(
-          "Connecting to Trimble Connect...",
-        );
+        setLoadingMessage("Connecting to Trimble Connect...");
 
-        const tcapi =
-          await WorkspaceAPI.connect(
-            window.parent,
-          );
+        const tcapi = await WorkspaceAPI.connect(window.parent);
 
-        setLoadingMessage(
-          "Checking access rights...",
-        );
+        tcapiRef.current = tcapi;
 
-        const token =
-          await tcapi.extension.requestPermission(
-            "accesstoken",
-          );
+        setLoadingMessage("Checking access rights...");
+
+        const token = await tcapi.extension.requestPermission("accesstoken");
 
         if (!token) {
-          throw new Error(
-            "Failed to obtain the Trimble Connect access token.",
-          );
+          throw new Error("Failed to obtain the Trimble Connect access token.");
         }
 
-        window.localStorage.setItem(
-          "trimbleToken",
-          token,
-        );
+        window.localStorage.setItem("trimbleToken", token);
 
-        const trimbleProfile =
-          await tcapi.user.getUser();
+        const trimbleProfile = await tcapi.user.getUser();
 
-        const trimbleEmail =
-          String(
-            trimbleProfile?.email ||
-              "",
-          )
-            .trim()
-            .toLowerCase();
+        const trimbleEmail = String(trimbleProfile?.email || "")
+          .trim()
+          .toLowerCase();
 
         if (!trimbleEmail) {
-          throw new Error(
-            "Unable to retrieve the Trimble user email.",
-          );
+          throw new Error("Unable to retrieve the Trimble user email.");
         }
 
-        const accessResult =
-          await checkTrimbleUser(
-            trimbleEmail,
-          );
+        const accessResult = await checkTrimbleUser(trimbleEmail);
 
         if (!accessResult.allowed) {
-          throw new Error(
-            accessResult.reason,
-          );
+          throw new Error(accessResult.reason);
         }
 
         if (cancelled) {
           return;
         }
 
-        const normalizedRole =
-          normalizeRole(
-            accessResult.user?.role,
-          );
+        const normalizedRole = normalizeRole(accessResult.user?.role);
 
         const normalizedUser = {
           ...accessResult.user,
 
           trimbleEmail,
 
-          role:
-            normalizedRole,
+          role: normalizedRole,
 
-          isOwner:
-            normalizedRole ===
-            "owner",
+          isOwner: normalizedRole === "owner",
 
-          isViewer:
-            normalizedRole ===
-            "viewer",
+          isViewer: normalizedRole === "viewer",
         };
 
-        setTrimbleUser(
-          normalizedUser,
-        );
+        setTrimbleUser(normalizedUser);
 
-        window.localStorage.setItem(
-          "trimbleEmail",
-          trimbleEmail,
-        );
+        window.localStorage.setItem("trimbleEmail", trimbleEmail);
 
-        window.localStorage.setItem(
-          "trimbleRole",
-          normalizedUser.role,
-        );
+        window.localStorage.setItem("trimbleRole", normalizedUser.role);
 
-        const project =
-          await tcapi.project.getProject();
+        const project = await tcapi.project.getProject();
 
         if (!project?.id) {
-          throw new Error(
-            "Failed to retrieve the current project.",
-          );
+          throw new Error("Failed to retrieve the current project.");
         }
 
-        const apiUrl =
-          getTrimbleApiUrl(
-            project.location,
-          );
+        const apiUrl = getTrimbleApiUrl(project.location);
 
-        window.localStorage.setItem(
-          "apiurl",
-          apiUrl,
-        );
+        window.localStorage.setItem("apiurl", apiUrl);
 
-        const currentProjectId =
-          String(project.id);
+        const currentProjectId = String(project.id);
 
-        const currentProjectName =
-          project.name || "";
+        const currentProjectName = project.name || "";
 
         if (cancelled) {
           return;
         }
 
-        setProjectId(
-          currentProjectId,
-        );
+        setProjectId(currentProjectId);
 
-        setProjectName(
-          currentProjectName,
-        );
+        setProjectName(currentProjectName);
 
         /*
          * Do not load sequencing data until a model
          * is available in the viewer.
          */
-        setLoadingMessage(
-          "Waiting for the model to load...",
-        );
+        setLoadingMessage("Waiting for the model to load...");
 
-        const currentLoadedModels =
-          await waitForLoadedModels(
-            tcapi,
-            {
-              isCancelled: () =>
-                cancelled,
-            },
-          );
+        const currentLoadedModels = await waitForLoadedModels(tcapi, {
+          isCancelled: () => cancelled,
+        });
 
         if (cancelled) {
           return;
         }
 
-        if (
-          !currentLoadedModels.length
-        ) {
+        if (!currentLoadedModels.length) {
           throw new Error(
             "No model has been loaded. Please load a model in Trimble Connect and reopen the extension.",
           );
         }
 
-        setLoadedModels(
-          currentLoadedModels,
-        );
+        setLoadedModels(currentLoadedModels);
 
-        setLoadingMessage(
-          "Loading sequencing data...",
-        );
+        setLoadingMessage("Loading sequencing data...");
 
         /*
          * Hydration in getPlansSaga now runs only after
@@ -402,50 +283,32 @@ export default function App() {
          */
         dispatch(
           GetPlanRequest({
-            projectId:
-              currentProjectId,
+            projectId: currentProjectId,
 
-            projectName:
-              currentProjectName,
+            projectName: currentProjectName,
 
-            currentUser:
-              normalizedUser,
+            currentUser: normalizedUser,
 
-            userRole:
-              normalizedUser.role,
+            userRole: normalizedUser.role,
 
-            isOwner:
-              normalizedUser.isOwner,
+            isOwner: normalizedUser.isOwner,
 
             trimbleEmail,
 
-            loadedModelIds:
-              currentLoadedModels
-                .map(
-                  (model) =>
-                    model?.id ??
-                    model?.modelId ??
-                    model?.modelExternalId,
-                )
-                .filter(
-                  (modelId) =>
-                    modelId != null &&
-                    modelId !== "",
-                )
-                .map(String),
+            loadedModelIds: currentLoadedModels
+              .map(
+                (model) =>
+                  model?.id ?? model?.modelId,
+              )
+              .filter((modelId) => modelId != null && modelId !== "")
+              .map(String),
           }),
         );
       } catch (error) {
-        console.error(
-          "Initialize application failed:",
-          error,
-        );
+        console.error("Initialize application failed:", error);
 
         if (!cancelled) {
-          setAccessError(
-            error?.message ||
-              "Unable to start the application.",
-          );
+          setAccessError(error?.message || "Unable to start the application.");
         }
       } finally {
         if (!cancelled) {
@@ -461,22 +324,73 @@ export default function App() {
     };
   }, [dispatch]);
 
+  const handleRefreshModels = useCallback(async () => {
+    if (refreshingModels) {
+      return 0;
+    }
+
+    const tcapi =
+      tcapiRef.current ||
+      (await WorkspaceAPI.connect(window.parent));
+
+    tcapiRef.current = tcapi;
+
+    const currentLoadedModels =
+      await tcapi.viewer.getModels("loaded");
+
+    if (
+      !Array.isArray(currentLoadedModels) ||
+      currentLoadedModels.length === 0
+    ) {
+      throw new Error(
+        "No model is currently loaded in Trimble Connect.",
+      );
+    }
+
+    const currentLoadedModelIds =
+      currentLoadedModels
+        .map(
+          (model) =>
+            model?.id ??
+            model?.modelId,
+        )
+        .filter(
+          (modelId) =>
+            modelId != null &&
+            modelId !== "",
+        )
+        .map(String);
+
+    setLoadedModels(currentLoadedModels);
+
+    /*
+     * Only hydrate current Redux objects again.
+     * Plans, SubPlans and Supabase rows are not reloaded.
+     */
+    dispatch(
+      RefreshLoadedModelsRequest({
+        loadedModelIds:
+          currentLoadedModelIds,
+      }),
+    );
+
+    return currentLoadedModels.length;
+  }, [
+    dispatch,
+    refreshingModels,
+  ]);
+
   if (loading) {
     return (
       <Layout
         style={{
           height: "100vh",
           display: "flex",
-          justifyContent:
-            "center",
-          alignItems:
-            "center",
+          justifyContent: "center",
+          alignItems: "center",
         }}
       >
-        <Spin
-          size="small"
-          tip={loadingMessage}
-        />
+        <Spin size="small" tip={loadingMessage} />
       </Layout>
     );
   }
@@ -496,12 +410,10 @@ export default function App() {
           extra={
             <Button
               type="primary"
-              icon={
-                <ShoppingCartOutlined />
-              }
+              icon={<ShoppingCartOutlined />}
               onClick={() => {
                 window.open(
-                  "https://shop.ibimconsulting.com.au/tools",
+                  "https://shop.ibimconsulting.com.au/tools/sequnece-planner",
                   "_blank",
                   "noopener,noreferrer",
                 );
@@ -531,14 +443,19 @@ export default function App() {
     >
       <TopMenu
         projectId={projectId}
-        projectName={
-          projectName
-        }
-        trimbleUser={
-          trimbleUser
-        }
+        projectName={projectName}
+        trimbleUser={trimbleUser}
         isOwner={isOwner}
         readOnly={isViewer}
+        onRefreshModels={
+          handleRefreshModels
+        }
+        refreshingModels={
+          refreshingModels
+        }
+        refreshModelsError={
+          refreshModelsError
+        }
       />
 
       {isViewer && (
@@ -548,8 +465,7 @@ export default function App() {
           banner
           message={
             <span>
-              You are using Viewer
-              permissions.{" "}
+              You are using Viewer permissions.{" "}
               <a
                 href="https://shop.ibimconsulting.com.au/tools/sequnece-planner"
                 target="_blank"
@@ -575,27 +491,19 @@ export default function App() {
         <Main
           isOwner={isOwner}
           readOnly={isViewer}
-          loadedModelIds={
-            loadedModelIds
-          }
+          loadedModelIds={loadedModelIds}
         />
       </Content>
 
       <Footer
         style={{
-          padding:
-            "8px 16px",
+          padding: "8px 16px",
           background: "#fff",
-          borderTop:
-            "1px solid #f0f0f0",
+          borderTop: "1px solid #f0f0f0",
           flexShrink: 0,
         }}
       >
-        <Simulation
-          loadedModelIds={
-            loadedModelIds
-          }
-        />
+        <Simulation loadedModelIds={loadedModelIds} />
       </Footer>
     </Layout>
   );

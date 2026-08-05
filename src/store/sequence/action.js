@@ -399,3 +399,27 @@ export function CopySubPlansFailure(
     payload,
   };
 }
+
+export const RefreshLoadedModelsRequest = (
+  payload = {},
+) => ({
+  type:
+    actionType.REFRESH_LOADED_MODELS_REQUEST,
+  payload,
+});
+
+export const RefreshLoadedModelsSuccess = (
+  payload = {},
+) => ({
+  type:
+    actionType.REFRESH_LOADED_MODELS_SUCCESS,
+  payload,
+});
+
+export const RefreshLoadedModelsFailure = (
+  payload,
+) => ({
+  type:
+    actionType.REFRESH_LOADED_MODELS_FAILURE,
+  payload,
+});

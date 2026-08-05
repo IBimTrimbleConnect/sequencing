@@ -1,4 +1,11 @@
-import { all, call, put, takeEvery, takeLatest } from "redux-saga/effects";
+import {
+  all,
+  select,
+  call,
+  put,
+  takeEvery,
+  takeLatest,
+} from "redux-saga/effects";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
@@ -31,6 +38,8 @@ import {
   UpdateSequenceObjectFieldsFailure,
   CopySubPlansSuccess,
   CopySubPlansFailure,
+  RefreshLoadedModelsSuccess,
+  RefreshLoadedModelsFailure,
 } from "./action";
 
 import * as actionType from "./actionTypes";
@@ -62,10 +71,7 @@ import { copySubPlans } from "../../services/copySubPlanService";
 
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
-import {
-  hydrateSequenceObjects,
-} from "../../services/trimbleRuntimeService";
-
+import { hydrateSequenceObjects } from "../../services/trimbleRuntimeService";
 
 function getErrorMessage(error, fallback) {
   return error?.message || error?.details || error?.hint || fallback;
@@ -97,17 +103,11 @@ function* getPlansSaga(action) {
       call(getSequenceObjectsByProject, projectId),
     ]);
 
-    const hydratedObjects =
-      yield call(
-        hydrateSequenceObjects,
-        {
-          tcapi,
+    const hydratedObjects = yield call(hydrateSequenceObjects, {
+      tcapi,
 
-          objects:
-            sequenceObjectRows ||
-            [],
-        },
-      );
+      objects: sequenceObjectRows || [],
+    });
 
     const objectsBySubPlan = new Map();
 
@@ -127,9 +127,7 @@ function* getPlansSaga(action) {
       objectsBySubPlan.get(key).push(object);
     }
 
-    const sequenceObjects =
-      (subPlans || []).map(
-        (subPlan) => ({
+    const sequenceObjects = (subPlans || []).map((subPlan) => ({
       planId: subPlan.planId,
 
       subPlanId: subPlan.id,
@@ -141,8 +139,7 @@ function* getPlansSaga(action) {
           subPlanId: subPlan.id,
         }),
       ),
-        }),
-      );
+    }));
 
     yield put(
       GetPlanSuccess({
@@ -152,11 +149,9 @@ function* getPlansSaga(action) {
 
         currentUser,
 
-        plans:
-          plans || [],
+        plans: plans || [],
 
-        subPlans:
-          subPlans || [],
+        subPlans: subPlans || [],
 
         sequenceObjects,
       }),
@@ -272,6 +267,94 @@ function* deletePlanSaga(action) {
 
     yield put(
       DeletePlanFailure(getErrorMessage(error, "Failed to delete plan.")),
+    );
+  }
+}
+
+const selectSequenceObjects = (state) => state.sequence.sequenceObjects || [];
+
+function flattenSequenceObjects(sequenceObjects) {
+  const flatObjects = [];
+  const groupRanges = [];
+
+  for (const group of sequenceObjects || []) {
+    const groupObjects = Array.isArray(group?.objects) ? group.objects : [];
+
+    const start = flatObjects.length;
+
+    flatObjects.push(...groupObjects);
+
+    groupRanges.push({
+      group,
+      start,
+      count: groupObjects.length,
+    });
+  }
+
+  return {
+    flatObjects,
+    groupRanges,
+  };
+}
+
+function rebuildSequenceObjectGroups({ hydratedObjects, groupRanges }) {
+  return groupRanges.map(({ group, start, count }) => ({
+    ...group,
+
+    objects: hydratedObjects.slice(start, start + count),
+  }));
+}
+
+export function* refreshLoadedModelsSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const sequenceObjects = yield select(selectSequenceObjects);
+
+    const { flatObjects, groupRanges } =
+      flattenSequenceObjects(sequenceObjects);
+
+    const tcapi = yield call(WorkspaceAPI.connect, window.parent);
+
+    /*
+     * hydrateSequenceObjects() calls:
+     * viewer.getModels("loaded")
+     * convertToObjectRuntimeIds(...)
+     * getObjectProperties(...)
+     *
+     * It only refreshes runtime fields.
+     * Supabase data is not reloaded.
+     */
+    const hydratedObjects = yield call(hydrateSequenceObjects, {
+      tcapi,
+      objects: flatObjects,
+    });
+
+    const hydratedGroups = rebuildSequenceObjectGroups({
+      hydratedObjects,
+      groupRanges,
+    });
+
+    yield put(
+      RefreshLoadedModelsSuccess({
+        sequenceObjects: hydratedGroups,
+
+        loadedModelIds: payload.loadedModelIds || [],
+      }),
+    );
+
+    /*
+     * Return value can be useful when testing the saga,
+     * but UI notifications should normally be handled
+     * in App or TopMenu.
+     */
+  } catch (error) {
+    console.error("Failed to refresh loaded models:", error);
+
+    yield put(
+      RefreshLoadedModelsFailure(
+        error?.message || "Failed to refresh loaded models.",
+      ),
     );
   }
 }
@@ -553,214 +636,122 @@ function* copySequenceSaga(action) {
 /* -------------------------------------------------------------------------- */
 
 const getSequenceObjectKey = (object) =>
-  String(
-    object?.externalId ??
-      object?.external_id ??
-      object?.objectId ??
-      "",
-  );
+  String(object?.externalId ?? object?.external_id ?? object?.objectId ?? "");
 
 function* setObjectsSaga(action) {
   try {
-    const payload =
-      action.payload || {};
+    const payload = action.payload || {};
 
-    const projectId =
-      payload.projectId ??
-      payload.trimbleProjectId;
+    const projectId = payload.projectId ?? payload.trimbleProjectId;
 
-    const planId =
-      payload.planId;
+    const planId = payload.planId;
 
-    const subPlanId =
-      payload.subPlanId;
+    const subPlanId = payload.subPlanId;
 
-    const runtimeObjects =
-      Array.isArray(payload.objects)
-        ? payload.objects
-        : [];
+    const runtimeObjects = Array.isArray(payload.objects)
+      ? payload.objects
+      : [];
 
     if (!projectId) {
-      throw new Error(
-        "Trimble project ID is required.",
-      );
+      throw new Error("Trimble project ID is required.");
     }
 
     if (!subPlanId) {
-      throw new Error(
-        "SubPlan ID is required.",
-      );
+      throw new Error("SubPlan ID is required.");
     }
 
-    const savedObjects =
-      yield call(
-        replaceSequenceObjectsForSubPlan,
-        {
-          trimbleProjectId:
-            projectId,
+    const savedObjects = yield call(replaceSequenceObjectsForSubPlan, {
+      trimbleProjectId: projectId,
 
-          subPlanId,
+      subPlanId,
 
-          objects:
-            runtimeObjects,
-        },
-      );
+      objects: runtimeObjects,
+    });
 
     /*
      * Runtime object lookup uses external_id only.
      */
-    const runtimeMap =
-      new Map(
-        runtimeObjects
-          .map((object) => [
-            getSequenceObjectKey(
-              object,
-            ),
-            object,
-          ])
-          .filter(
-            ([key]) =>
-              key !== "",
-          ),
-      );
+    const runtimeMap = new Map(
+      runtimeObjects
+        .map((object) => [getSequenceObjectKey(object), object])
+        .filter(([key]) => key !== ""),
+    );
 
-    const mergedObjects =
-      savedObjects.map(
-        (savedObject) => {
-          const runtimeObject =
-            runtimeMap.get(
-              getSequenceObjectKey(
-                savedObject,
-              ),
-            );
+    const mergedObjects = savedObjects.map((savedObject) => {
+      const runtimeObject = runtimeMap.get(getSequenceObjectKey(savedObject));
 
-          return {
-            ...savedObject,
-            ...runtimeObject,
+      return {
+        ...savedObject,
+        ...runtimeObject,
 
-            dbId:
-              savedObject.dbId,
+        dbId: savedObject.dbId,
 
-            externalId:
-              savedObject.externalId ??
-              savedObject.external_id ??
-              runtimeObject?.externalId ??
-              runtimeObject?.external_id ??
-              runtimeObject?.objectId ??
-              null,
+        externalId:
+          savedObject.externalId ??
+          savedObject.external_id ??
+          runtimeObject?.externalId ??
+          runtimeObject?.external_id ??
+          runtimeObject?.objectId ??
+          null,
 
-            /*
-             * Runtime-only values.
-             * These fields are not persisted to Supabase.
-             */
-            modelId:
-              runtimeObject?.modelId ??
-              null,
+        /*
+         * Runtime-only values.
+         * These fields are not persisted to Supabase.
+         */
+        modelId: runtimeObject?.modelId ?? null,
 
-            runtimeId:
-              runtimeObject?.runtimeId ??
-              null,
+        runtimeId: runtimeObject?.runtimeId ?? null,
 
-            id:
-              runtimeObject?.runtimeId ??
-              runtimeObject?.id ??
-              null,
+        id: runtimeObject?.runtimeId ?? runtimeObject?.id ?? null,
 
-            planId:
-              runtimeObject?.planId ??
-              planId,
+        planId: runtimeObject?.planId ?? planId,
 
-            subPlanId,
+        subPlanId,
 
-            asmPos:
-              runtimeObject?.asmPos ??
-              "",
+        asmPos: runtimeObject?.asmPos ?? "",
 
-            asmName:
-              runtimeObject?.asmName ??
-              runtimeObject?.name ??
-              "",
+        asmName: runtimeObject?.asmName ?? runtimeObject?.name ?? "",
 
-            name:
-              runtimeObject?.name ??
-              runtimeObject?.asmName ??
-              "",
+        name: runtimeObject?.name ?? runtimeObject?.asmName ?? "",
 
-            positionCode:
-              runtimeObject?.positionCode ??
-              "",
+        positionCode: runtimeObject?.positionCode ?? "",
 
-            rawWeight:
-              runtimeObject?.rawWeight ??
-              runtimeObject?.weight ??
-              null,
+        rawWeight: runtimeObject?.rawWeight ?? runtimeObject?.weight ?? null,
 
-            weight:
-              runtimeObject?.weight ??
-              runtimeObject?.rawWeight ??
-              null,
+        weight: runtimeObject?.weight ?? runtimeObject?.rawWeight ?? null,
 
-            rawLength:
-              runtimeObject?.rawLength ??
-              runtimeObject?.length ??
-              null,
+        rawLength: runtimeObject?.rawLength ?? runtimeObject?.length ?? null,
 
-            length:
-              runtimeObject?.length ??
-              runtimeObject?.rawLength ??
-              null,
+        length: runtimeObject?.length ?? runtimeObject?.rawLength ?? null,
 
-            rawCog:
-              runtimeObject?.rawCog ??
-              runtimeObject?.cog ??
-              null,
+        rawCog: runtimeObject?.rawCog ?? runtimeObject?.cog ?? null,
 
-            cog:
-              runtimeObject?.cog ??
-              runtimeObject?.rawCog ??
-              null,
+        cog: runtimeObject?.cog ?? runtimeObject?.rawCog ?? null,
 
-            distance:
-              runtimeObject?.distance ??
-              0,
+        distance: runtimeObject?.distance ?? 0,
 
-            center:
-              runtimeObject?.center ??
-              [0, 0, 0],
+        center: runtimeObject?.center ?? [0, 0, 0],
 
-            camera:
-              runtimeObject?.camera ??
-              savedObject?.camera ??
-              null,
+        camera: runtimeObject?.camera ?? savedObject?.camera ?? null,
 
-            objectAvailable:
-              runtimeObject?.objectAvailable ??
-              true,
-          };
-        },
-      );
+        objectAvailable: runtimeObject?.objectAvailable ?? true,
+      };
+    });
 
     yield put(
       SetObjectsSuccess({
         projectId,
         planId,
         subPlanId,
-        objects:
-          mergedObjects,
+        objects: mergedObjects,
       }),
     );
   } catch (error) {
-    console.error(
-      "Failed to save sequence objects:",
-      error,
-    );
+    console.error("Failed to save sequence objects:", error);
 
     yield put(
       SetObjectsFailure(
-        getErrorMessage(
-          error,
-          "Failed to save sequence objects.",
-        ),
+        getErrorMessage(error, "Failed to save sequence objects."),
       ),
     );
   }
@@ -1093,6 +1084,10 @@ function* sequenceSaga() {
     updateSequenceObjectFieldsSaga,
   );
   yield takeLatest(actionType.COPY_SUBPLANS_REQUEST, copySubPlansSaga);
+  yield takeLatest(
+    actionType.REFRESH_LOADED_MODELS_REQUEST,
+    refreshLoadedModelsSaga,
+  );
 }
 
 export default sequenceSaga;

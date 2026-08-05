@@ -12,6 +12,8 @@ const initialState = {
   subPlans: [],
   sequenceObjects: [],
 
+  loadedModelIds: [],
+
   pending: false,
   error: null,
 };
@@ -32,6 +34,7 @@ const reducers = (state = initialState, action) => {
     case type.UPLOAD_TEMPLATE_REQUEST:
     case type.SELECT_OBJECTS_REQUEST:
     case type.COPY_SUBPLANS_REQUEST:
+    case type.REFRESH_LOADED_MODELS_REQUEST:
       return {
         ...state,
         pending: true,
@@ -54,7 +57,18 @@ const reducers = (state = initialState, action) => {
         plans: [...state.plans, newPlan],
       };
     }
+    case type.REFRESH_LOADED_MODELS_SUCCESS:
+      return {
+        ...state,
 
+        pending: false,
+        error: null,
+
+        sequenceObjects:
+          action.payload?.sequenceObjects || state.sequenceObjects,
+
+        loadedModelIds: action.payload?.loadedModelIds || state.loadedModelIds,
+      };
     case type.GET_PLAN_SUCCESS:
       return {
         ...state,
@@ -368,57 +382,33 @@ const reducers = (state = initialState, action) => {
       };
 
     case type.UPDATE_SEQUENCE_OBJECT_SORT_DATES_SUCCESS: {
-  const subPlanId =
-    action.payload?.subPlanId;
+      const subPlanId = action.payload?.subPlanId;
 
-  const updatedObjects =
-    Array.isArray(
-      action.payload?.objects,
-    )
-      ? action.payload.objects
-      : [];
+      const updatedObjects = Array.isArray(action.payload?.objects)
+        ? action.payload.objects
+        : [];
 
-  const updateByDbId =
-    new Map(
-      updatedObjects
-        .filter(
-          (object) =>
-            object?.dbId != null,
-        )
-        .map((object) => [
-          String(object.dbId),
-          object,
-        ]),
-    );
+      const updateByDbId = new Map(
+        updatedObjects
+          .filter((object) => object?.dbId != null)
+          .map((object) => [String(object.dbId), object]),
+      );
 
-  return {
-    ...state,
-    pending: false,
-    error: null,
+      return {
+        ...state,
+        pending: false,
+        error: null,
 
-    sequenceObjects:
-      state.sequenceObjects.map(
-        (group) => {
-          if (
-            String(
-              group.subPlanId,
-            ) !==
-            String(subPlanId)
-          ) {
+        sequenceObjects: state.sequenceObjects.map((group) => {
+          if (String(group.subPlanId) !== String(subPlanId)) {
             return group;
           }
 
-          const objects = (
-            group.objects || []
-          )
+          const objects = (group.objects || [])
             .map((object) => {
               const updated =
                 object?.dbId != null
-                  ? updateByDbId.get(
-                      String(
-                        object.dbId,
-                      ),
-                    )
+                  ? updateByDbId.get(String(object.dbId))
                   : null;
 
               if (!updated) {
@@ -428,28 +418,22 @@ const reducers = (state = initialState, action) => {
               return {
                 ...object,
 
-                sortDatetime:
-                  updated.sortDatetime,
+                sortDatetime: updated.sortDatetime,
               };
             })
             .sort(
               (first, second) =>
-                new Date(
-                  first.sortDatetime,
-                ).getTime() -
-                new Date(
-                  second.sortDatetime,
-                ).getTime(),
+                new Date(first.sortDatetime).getTime() -
+                new Date(second.sortDatetime).getTime(),
             );
 
           return {
             ...group,
             objects,
           };
-        },
-      ),
-  };
-}
+        }),
+      };
+    }
 
     case type.UPDATE_SEQUENCE_OBJECT_FIELDS_REQUEST:
       return {
@@ -600,6 +584,7 @@ const reducers = (state = initialState, action) => {
     case type.UPLOAD_TEMPLATE_FAILURE:
     case type.SELECT_OBJECTS_FAILURE:
     case type.COPY_SUBPLANS_FAILURE:
+    case type.REFRESH_LOADED_MODELS_FAILURE:
       return {
         ...state,
         pending: false,
