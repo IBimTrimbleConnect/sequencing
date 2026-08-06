@@ -133,7 +133,7 @@ const CreatePlanModal = ({
         onFinish={onCreate}
       >
         <Form.Item
-          label="Plan Name"
+          label="Name"
           name="planName"
           style={{
             marginBottom: 12,
@@ -143,7 +143,7 @@ const CreatePlanModal = ({
               required: true,
               whitespace: true,
               message:
-                "Please enter the Plan name.",
+                "Please enter the name.",
             },
           ]}
         >

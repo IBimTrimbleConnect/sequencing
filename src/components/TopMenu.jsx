@@ -202,7 +202,7 @@ const TopMenu = ({
     form.resetFields();
 
     form.setFieldsValue({
-      planName: "Plan",
+      planName: "Phase",
       startIndex: plans.length + 1,
       quantity: 1,
     });
@@ -214,7 +214,7 @@ const TopMenu = ({
     form.resetFields();
 
     form.setFieldsValue({
-      planName: "Plan",
+      planName: "Phase",
       startIndex: plans.length + 1,
       quantity: 1,
     });
