@@ -19,13 +19,16 @@ import { Collapse, Button, Modal, Form, Input, Spin, message } from "antd";
 
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
-import { DeletePlanRequest, UpdatePlanRequest } from "../store/sequence/action";
+import {
+  DeletePlanRequest,
+  UpdatePlanRequest,
+  UpdatePlansOrderRequest,
+} from "../store/sequence/action";
 
 import SubPlanModal from "./SubPlanModal";
 import SubPlanCollapse from "./SubPlanCollapse";
 import SortableHeader from "./SortableHeader";
 import CopySubPlanModal from "./CopySubPlanModal";
-import { getMovedItemSortDatetime } from "../utils/sortDate";
 
 const Main = ({ isOwner = false, loadedModelIds = [] }) => {
   const dispatch = useDispatch();
@@ -55,6 +58,8 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
 
   const [activePlanKeys, setActivePlanKeys] = useState([]);
 
+  const [localPlans, setLocalPlans] = useState([]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -64,11 +69,37 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
   );
 
   /*
+   * Keep local drag-and-drop order synchronized
+   * with the latest Redux data.
+   */
+  useEffect(() => {
+    const sortedPlans = [...plans].sort(
+      (first, second) => {
+        const firstTime = new Date(
+          first?.sortDatetime ??
+            first?.sort_datetime ??
+            0,
+        ).getTime();
+
+        const secondTime = new Date(
+          second?.sortDatetime ??
+            second?.sort_datetime ??
+            0,
+        ).getTime();
+
+        return firstTime - secondTime;
+      },
+    );
+
+    setLocalPlans(sortedPlans);
+  }, [plans]);
+
+  /*
    * Automatically expand the active plan
    * during simulation.
    */
   useEffect(() => {
-    if (!plans.length) {
+    if (!localPlans.length) {
       return;
     }
 
@@ -78,7 +109,11 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
 
     const planKey = String(activeSimulationItem.planId);
 
-    const exists = plans.some((plan) => String(plan.id) === planKey);
+    const exists = localPlans.some(
+      (plan) =>
+        String(plan.id) ===
+        planKey,
+    );
 
     if (!exists) {
       return;
@@ -93,7 +128,10 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
 
       return [...keys, planKey];
     });
-  }, [plans, activeSimulationItem?.planId]);
+  }, [
+    localPlans,
+    activeSimulationItem?.planId,
+  ]);
 
   /*
    * Reorder plans.
@@ -103,60 +141,75 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
    */
   const handleDragEnd = useCallback(
     ({ active, over }) => {
-      if (!isOwner) {
+      if (!isOwner || !over) {
         return;
       }
 
-      if (!over || String(active.id) === String(over.id)) {
+      const activeId = String(active.id);
+      const overId = String(over.id);
+
+      if (activeId === overId) {
         return;
       }
 
-      const oldIndex = plans.findIndex(
-        (plan) => String(plan.id) === String(active.id),
+      const oldIndex = localPlans.findIndex(
+        (plan) =>
+          String(plan.id) === activeId,
       );
 
-      const newIndex = plans.findIndex(
-        (plan) => String(plan.id) === String(over.id),
+      const newIndex = localPlans.findIndex(
+        (plan) =>
+          String(plan.id) === overId,
       );
 
-      if (oldIndex === -1 || newIndex === -1) {
+      if (oldIndex < 0 || newIndex < 0) {
         return;
       }
+
+      const reorderedPlans = arrayMove(
+        localPlans,
+        oldIndex,
+        newIndex,
+      );
 
       /*
-       * This array is only used to determine
-       * the new adjacent Plans.
+       * Rebalance every sort_datetime after each move.
+       * Each Plan is spaced one second apart.
        */
-      const reorderedPlans = arrayMove(plans, oldIndex, newIndex);
+      const baseTime = Date.now();
 
-      const movedPlan = reorderedPlans[newIndex];
+      const updatedPlans = reorderedPlans.map(
+        (plan, index) => ({
+          ...plan,
 
-      const previousPlan = newIndex > 0 ? reorderedPlans[newIndex - 1] : null;
+          sortDatetime: new Date(
+            baseTime + index * 1000,
+          ).toISOString(),
+        }),
+      );
 
-      const nextPlan =
-        newIndex < reorderedPlans.length - 1
-          ? reorderedPlans[newIndex + 1]
-          : null;
+      /*
+       * Optimistic UI update.
+       */
+      setLocalPlans(updatedPlans);
 
-      try {
-        const sortDatetime = getMovedItemSortDatetime({
-          previousItem: previousPlan,
-          nextItem: nextPlan,
-        });
-
-        dispatch(
-          UpdatePlanRequest({
-            id: movedPlan.id,
-            sortDatetime,
-          }),
-        );
-      } catch (error) {
-        console.error("Failed to calculate Plan order:", error);
-
-        message.error(error?.message || "Unable to reorder the Plan.");
-      }
+      dispatch(
+        UpdatePlansOrderRequest({
+          plans: updatedPlans.map(
+            (plan) => ({
+              id: plan.id,
+              sortDatetime:
+                plan.sortDatetime,
+            }),
+          ),
+        }),
+      );
     },
-    [dispatch, isOwner, plans],
+    [
+      dispatch,
+      isOwner,
+      localPlans,
+    ],
   );
 
   const handleEdit = useCallback(
@@ -362,7 +415,7 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
 
   const collapseItems = useMemo(
     () =>
-      plans.map((plan) => {
+      localPlans.map((plan) => {
         const objectCount = sequenceObjects
           .filter((group) => String(group?.planId) === String(plan.id))
           .reduce(
@@ -399,7 +452,7 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
         };
       }),
     [
-      plans,
+      localPlans,
       sequenceObjects,
       activeSimulationItem,
       isOwner,
@@ -486,7 +539,10 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
           onDragEnd={handleDragEnd}
         >
           <SortableContext
-            items={plans.map((plan) => String(plan.id))}
+            items={localPlans.map(
+              (plan) =>
+                String(plan.id),
+            )}
             strategy={verticalListSortingStrategy}
           >
             <Collapse

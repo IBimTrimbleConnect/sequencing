@@ -449,3 +449,26 @@ export const CreateMultiplePlansFailure = (
 
   payload,
 });
+export const UpdatePlansOrderRequest = (
+  payload,
+) => ({
+  type:
+    actionType.UPDATE_PLANS_ORDER_REQUEST,
+  payload,
+});
+
+export const UpdatePlansOrderSuccess = (
+  payload,
+) => ({
+  type:
+    actionType.UPDATE_PLANS_ORDER_SUCCESS,
+  payload,
+});
+
+export const UpdatePlansOrderFailure = (
+  payload,
+) => ({
+  type:
+    actionType.UPDATE_PLANS_ORDER_FAILURE,
+  payload,
+});

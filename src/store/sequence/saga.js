@@ -42,6 +42,8 @@ import {
   RefreshLoadedModelsFailure,
   CreateMultiplePlansSuccess,
   CreateMultiplePlansFailure,
+  UpdatePlansOrderSuccess,
+  UpdatePlansOrderFailure,
 } from "./action";
 
 import * as actionType from "./actionTypes";
@@ -52,6 +54,7 @@ import {
   updatePlan,
   deletePlan,
   createPlansBulk,
+  updatePlansOrder,
 } from "../../services/planService";
 
 import {
@@ -193,7 +196,31 @@ function* updateSequenceObjectSortDatesSaga(action) {
     );
   }
 }
+export function* updatePlansOrderSaga(action) {
+  try {
+    const plans = Array.isArray(action.payload?.plans)
+      ? action.payload.plans
+      : [];
 
+    if (!plans.length) {
+      throw new Error("At least one Plan is required.");
+    }
+
+    const updatedPlans = yield call(updatePlansOrder, plans);
+
+    yield put(
+      UpdatePlansOrderSuccess({
+        plans: updatedPlans,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to update Plan order:", error);
+
+    yield put(
+      UpdatePlansOrderFailure(error?.message || "Unable to reorder Plans."),
+    );
+  }
+}
 function* createMultiplePlansSaga(action) {
   try {
     const payload = action.payload || {};
@@ -1131,6 +1158,7 @@ function* sequenceSaga() {
     actionType.CREATE_MULTIPLE_PLANS_REQUEST,
     createMultiplePlansSaga,
   );
+  yield takeLatest(actionType.UPDATE_PLANS_ORDER_REQUEST, updatePlansOrderSaga);
 }
 
 export default sequenceSaga;

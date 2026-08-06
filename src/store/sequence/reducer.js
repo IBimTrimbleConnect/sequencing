@@ -36,6 +36,7 @@ const reducers = (state = initialState, action) => {
     case type.COPY_SUBPLANS_REQUEST:
     case type.REFRESH_LOADED_MODELS_REQUEST:
     case type.CREATE_MULTIPLE_PLANS_REQUEST:
+    case type.UPDATE_PLANS_ORDER_REQUEST:
       return {
         ...state,
         pending: true,
@@ -128,6 +129,13 @@ const reducers = (state = initialState, action) => {
         plans: updatedPlans,
       };
     }
+    case type.UPDATE_PLANS_ORDER_SUCCESS:
+      return {
+        ...state,
+        pending: false,
+        error: null,
+        plans: action.payload?.plans || state.plans,
+      };
     case type.CREATE_MULTIPLE_PLANS_SUCCESS: {
       const createdPlans = action.payload?.plans || [];
 
@@ -602,6 +610,7 @@ const reducers = (state = initialState, action) => {
     case type.COPY_SUBPLANS_FAILURE:
     case type.REFRESH_LOADED_MODELS_FAILURE:
     case type.CREATE_MULTIPLE_PLANS_FAILURE:
+    case type.UPDATE_PLANS_ORDER_FAILURE:
       return {
         ...state,
         pending: false,

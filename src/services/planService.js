@@ -74,6 +74,50 @@ export async function createPlan({
 
   return mapPlan(data);
 }
+export async function updatePlansOrder(plans) {
+  if (!Array.isArray(plans)) {
+    throw new Error("Plans must be an array.");
+  }
+
+  if (!plans.length) {
+    return [];
+  }
+
+  const updatedPlans = [];
+
+  for (const plan of plans) {
+    if (!plan?.id) {
+      throw new Error("Plan ID is required.");
+    }
+
+    const sortDate = new Date(plan.sortDatetime);
+
+    if (Number.isNaN(sortDate.getTime())) {
+      throw new Error(`Invalid sort datetime for Plan ${plan.id}.`);
+    }
+
+    const { data, error } = await supabase
+      .from("plans")
+      .update({
+        sort_datetime: sortDate.toISOString(),
+      })
+      .eq("id", plan.id)
+      .select(PLAN_COLUMNS)
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    updatedPlans.push(mapPlan(data));
+  }
+
+  return updatedPlans.sort(
+    (first, second) =>
+      new Date(first.sortDatetime).getTime() -
+      new Date(second.sortDatetime).getTime(),
+  );
+}
 
 export async function createPlansBulk({ trimbleProjectId, plans }) {
   if (!trimbleProjectId) {
