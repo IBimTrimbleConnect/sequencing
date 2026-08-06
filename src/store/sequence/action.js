@@ -423,3 +423,29 @@ export const RefreshLoadedModelsFailure = (
     actionType.REFRESH_LOADED_MODELS_FAILURE,
   payload,
 });
+export const CreateMultiplePlansRequest = (
+  payload,
+) => ({
+  type:
+    actionType.CREATE_MULTIPLE_PLANS_REQUEST,
+
+  payload,
+});
+
+export const CreateMultiplePlansSuccess = (
+  payload,
+) => ({
+  type:
+    actionType.CREATE_MULTIPLE_PLANS_SUCCESS,
+
+  payload,
+});
+
+export const CreateMultiplePlansFailure = (
+  payload,
+) => ({
+  type:
+    actionType.CREATE_MULTIPLE_PLANS_FAILURE,
+
+  payload,
+});

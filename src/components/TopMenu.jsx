@@ -13,7 +13,7 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 
 import {
-  CreatePlanRequest,
+  CreateMultiplePlansRequest,
   SetActiveSimulationItem,
 } from "../store/sequence/action";
 
@@ -50,9 +50,7 @@ const TopMenu = ({
 
   const plans = useSelector((state) => state.sequence.plans || []);
 
-  const creatingPlans = useSelector(
-    (state) => state.sequence.pending === true,
-  );
+  const creatingPlans = useSelector((state) => state.sequence.pending === true);
 
   const sequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects || [],
@@ -155,12 +153,12 @@ const TopMenu = ({
       );
 
       const duplicatePlans = newPlans.filter((plan) =>
-        existingPlanNames.has(plan.name.toLowerCase()),
+        existingPlanNames.has(plan.name.trim().toLowerCase()),
       );
 
       if (duplicatePlans.length) {
         message.error(
-          `The following Plan name already exists: ${duplicatePlans
+          `The following Plan names already exist: ${duplicatePlans
             .map((plan) => plan.name)
             .join(", ")}`,
         );
@@ -169,28 +167,24 @@ const TopMenu = ({
       }
 
       /*
-       * Dispatch one request per Plan.
-       *
-       * Cách này hoạt động với CreatePlanRequest hiện tại.
+       * Chỉ dispatch một action.
+       * Saga gửi toàn bộ mảng xuống Supabase trong một insert.
        */
-      newPlans.forEach((newPlan) => {
-        dispatch(
-          CreatePlanRequest({
-            projectId,
+      dispatch(
+        CreateMultiplePlansRequest({
+          projectId,
 
-            name: newPlan.name,
-
-            color: newPlan.color,
-          }),
-        );
-      });
-
-      message.success(`${newPlans.length} Plan(s) are being created.`);
+          plans: newPlans,
+        }),
+      );
 
       form.resetFields();
 
       form.setFieldsValue({
-        startIndex: 1,
+        planName: baseName,
+
+        startIndex: startIndex + quantity,
+
         quantity: 1,
       });
 

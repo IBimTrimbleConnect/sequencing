@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { createUtcSortDate } from "../utils/sortDate";
 
 const PLAN_COLUMNS = `
   id,
@@ -72,6 +73,56 @@ export async function createPlan({
   }
 
   return mapPlan(data);
+}
+
+export async function createPlansBulk({ trimbleProjectId, plans }) {
+  if (!trimbleProjectId) {
+    throw new Error("Trimble project ID is required.");
+  }
+
+  if (!Array.isArray(plans) || plans.length === 0) {
+    throw new Error("At least one Plan is required.");
+  }
+
+  const baseDate = new Date();
+
+  const rows = plans.map((plan, index) => {
+    const name = String(plan?.name || "").trim();
+
+    if (!name) {
+      throw new Error(`Plan name is required at index ${index}.`);
+    }
+
+    return {
+      trimble_project_id: String(trimbleProjectId),
+
+      name,
+
+      color: plan?.color ?? null,
+
+      sort_datetime:
+        plan?.sortDatetime ??
+        plan?.sort_datetime ??
+        createUtcSortDate(baseDate, index),
+    };
+  });
+
+  const { data, error } = await supabase
+    .from("plans")
+    .insert(rows)
+    .select(PLAN_COLUMNS);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || [])
+    .map(mapPlan)
+    .sort(
+      (first, second) =>
+        new Date(first.sortDatetime).getTime() -
+        new Date(second.sortDatetime).getTime(),
+    );
 }
 
 export async function updatePlan({ id, name, color, sortDatetime }) {

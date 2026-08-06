@@ -35,6 +35,7 @@ const reducers = (state = initialState, action) => {
     case type.SELECT_OBJECTS_REQUEST:
     case type.COPY_SUBPLANS_REQUEST:
     case type.REFRESH_LOADED_MODELS_REQUEST:
+    case type.CREATE_MULTIPLE_PLANS_REQUEST:
       return {
         ...state,
         pending: true,
@@ -127,7 +128,22 @@ const reducers = (state = initialState, action) => {
         plans: updatedPlans,
       };
     }
+    case type.CREATE_MULTIPLE_PLANS_SUCCESS: {
+      const createdPlans = action.payload?.plans || [];
 
+      return {
+        ...state,
+
+        pending: false,
+        error: null,
+
+        plans: [...state.plans, ...createdPlans].sort(
+          (first, second) =>
+            new Date(first.sortDatetime || 0).getTime() -
+            new Date(second.sortDatetime || 0).getTime(),
+        ),
+      };
+    }
     case type.DELETE_PLAN_SUCCESS: {
       const deletedPlanId = action.payload?.deletedPlanId;
 
@@ -585,6 +601,7 @@ const reducers = (state = initialState, action) => {
     case type.SELECT_OBJECTS_FAILURE:
     case type.COPY_SUBPLANS_FAILURE:
     case type.REFRESH_LOADED_MODELS_FAILURE:
+    case type.CREATE_MULTIPLE_PLANS_FAILURE:
       return {
         ...state,
         pending: false,

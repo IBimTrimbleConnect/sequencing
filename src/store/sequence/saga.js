@@ -40,6 +40,8 @@ import {
   CopySubPlansFailure,
   RefreshLoadedModelsSuccess,
   RefreshLoadedModelsFailure,
+  CreateMultiplePlansSuccess,
+  CreateMultiplePlansFailure,
 } from "./action";
 
 import * as actionType from "./actionTypes";
@@ -49,6 +51,7 @@ import {
   createPlan,
   updatePlan,
   deletePlan,
+  createPlansBulk,
 } from "../../services/planService";
 
 import {
@@ -187,6 +190,42 @@ function* updateSequenceObjectSortDatesSaga(action) {
       UpdateSequenceObjectSortDatesFailure(
         error?.message || "Failed to update sequence object order.",
       ),
+    );
+  }
+}
+
+function* createMultiplePlansSaga(action) {
+  try {
+    const payload = action.payload || {};
+
+    const projectId = payload.projectId ?? payload.trimbleProjectId;
+
+    const plans = Array.isArray(payload.plans) ? payload.plans : [];
+
+    if (!projectId) {
+      throw new Error("Trimble project ID is required.");
+    }
+
+    if (!plans.length) {
+      throw new Error("At least one Plan is required.");
+    }
+
+    const createdPlans = yield call(createPlansBulk, {
+      trimbleProjectId: projectId,
+
+      plans,
+    });
+
+    yield put(
+      CreateMultiplePlansSuccess({
+        plans: createdPlans,
+      }),
+    );
+  } catch (error) {
+    console.error("Failed to create multiple Plans:", error);
+
+    yield put(
+      CreateMultiplePlansFailure(error?.message || "Unable to create Plans."),
     );
   }
 }
@@ -1087,6 +1126,10 @@ function* sequenceSaga() {
   yield takeLatest(
     actionType.REFRESH_LOADED_MODELS_REQUEST,
     refreshLoadedModelsSaga,
+  );
+  yield takeLatest(
+    actionType.CREATE_MULTIPLE_PLANS_REQUEST,
+    createMultiplePlansSaga,
   );
 }
 
