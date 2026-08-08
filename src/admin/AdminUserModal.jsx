@@ -1,15 +1,26 @@
 import React, { useEffect } from "react";
-import {
-  Alert,
-  DatePicker,
-  Form,
-  Input,
-  Modal,
-  Select,
-} from "antd";
+
+import { Alert, DatePicker, Form, Input, Modal, Select } from "antd";
+
 import dayjs from "dayjs";
 
 const DATE_FORMAT = "YYYY-MM-DD";
+
+const getLicenseDurationDays = (licenseType) => {
+  switch (licenseType) {
+    case "Trial":
+      return 14;
+
+    case "Monthly":
+      return 30;
+
+    case "Annual":
+      return 365;
+
+    default:
+      return null;
+  }
+};
 
 export default function AdminUserModal({
   open,
@@ -20,22 +31,17 @@ export default function AdminUserModal({
 }) {
   const [form] = Form.useForm();
 
-  const licenseType = Form.useWatch(
-    "licenseType",
-    form,
-  );
+  const licenseType = Form.useWatch("licenseType", form);
 
-  const startDate = Form.useWatch(
-    "startDate",
-    form,
-  );
+  const startDate = Form.useWatch("startDate", form);
 
-  const trialAlreadyUsed =
-    Number(editingUser?.trialCount ?? 0) >= 1;
+  const trialAlreadyUsed = Number(editingUser?.trialCount ?? 0) >= 1;
 
-  const currentlyTrial =
-    editingUser?.licenseType === "Trial";
+  const currentlyTrial = editingUser?.licenseType === "Trial";
 
+  /*
+   * Initialize the form.
+   */
   useEffect(() => {
     if (!open) {
       return;
@@ -43,34 +49,23 @@ export default function AdminUserModal({
 
     if (editingUser) {
       form.setFieldsValue({
-        email:
-          editingUser.email,
+        email: editingUser.email,
 
-        status:
-          editingUser.status ||
-          "Active",
+        userName: editingUser.userName || "",
 
-        role:
-          editingUser.role ||
-          "Viewer",
+        companyName: editingUser.companyName || "",
 
-        licenseType:
-          editingUser.licenseType ||
-          "Trial",
+        status: editingUser.status || "Active",
 
-        startDate:
-          editingUser.startDate
-            ? dayjs(
-                editingUser.startDate,
-              )
-            : dayjs(),
+        role: editingUser.role || "Viewer",
 
-        endDate:
-          editingUser.endDate
-            ? dayjs(
-                editingUser.endDate,
-              )
-            : null,
+        licenseType: editingUser.licenseType || "Trial",
+
+        startDate: editingUser.startDate
+          ? dayjs(editingUser.startDate)
+          : dayjs(),
+
+        endDate: editingUser.endDate ? dayjs(editingUser.endDate) : null,
       });
 
       return;
@@ -78,151 +73,74 @@ export default function AdminUserModal({
 
     form.resetFields();
 
+    const defaultStartDate = dayjs();
+
     form.setFieldsValue({
+      email: "",
+      userName: "",
+      companyName: "",
       status: "Active",
-
       role: "Viewer",
-
       licenseType: "Trial",
 
-      startDate:
-        dayjs(),
+      startDate: defaultStartDate,
 
-      endDate:
-        dayjs().add(
-          14,
-          "day",
-        ),
+      endDate: defaultStartDate.add(14, "day"),
     });
-  }, [
-    editingUser,
-    form,
-    open,
-  ]);
-
+  }, [editingUser, form, open]);
   useEffect(() => {
-    if (
-      !open ||
-      !startDate
-    ) {
+    if (!open || !startDate || !licenseType) {
       return;
     }
 
-    if (
-      licenseType ===
-      "Trial"
-    ) {
-      form.setFieldValue(
-        "endDate",
-        dayjs(
-          startDate,
-        ).add(
-          14,
-          "day",
-        ),
-      );
+    const durationDays = getLicenseDurationDays(licenseType);
 
+    if (durationDays == null) {
       return;
     }
 
-    if (
-      licenseType ===
-      "Annual"
-    ) {
-      form.setFieldValue(
-        "endDate",
-        dayjs(
-          startDate,
-        ).add(
-          365,
-          "day",
-        ),
-      );
-    }
-  }, [
-    licenseType,
-    startDate,
-    form,
-    open,
-  ]);
+    form.setFieldValue("endDate", dayjs(startDate).add(durationDays, "day"));
+  }, [form, licenseType, open, startDate]);
 
   const handleOk = async () => {
-    const values =
-      await form.validateFields();
+    const values = await form.validateFields();
 
     await onSubmit({
-      email:
-        String(
-          values.email ||
-          "",
-        )
-          .trim()
-          .toLowerCase(),
+      email: String(values.email || "")
+        .trim()
+        .toLowerCase(),
 
-      status:
-        values.status,
+      userName: String(values.userName || "").trim(),
 
-      role:
-        values.role,
+      companyName: String(values.companyName || "").trim(),
 
-      licenseType:
-        values.licenseType,
+      status: values.status,
 
-      startDate:
-        values.startDate
-          ? values.startDate.format(
-              DATE_FORMAT,
-            )
-          : null,
+      role: values.role,
 
-      endDate:
-        values.endDate
-          ? values.endDate.format(
-              DATE_FORMAT,
-            )
-          : null,
+      licenseType: values.licenseType,
+
+      startDate: values.startDate ? values.startDate.format(DATE_FORMAT) : null,
+
+      endDate: values.endDate ? values.endDate.format(DATE_FORMAT) : null,
     });
   };
 
   return (
     <Modal
-      title={
-        editingUser
-          ? "Edit Trimble User"
-          : "Add Trimble User"
-      }
+      title={editingUser ? "Edit Trimble User" : "Add Trimble User"}
       open={open}
-      confirmLoading={
-        loading
-      }
-      okText={
-        editingUser
-          ? "Save"
-          : "Create"
-      }
+      confirmLoading={loading}
+      okText={editingUser ? "Save" : "Create"}
       cancelText="Cancel"
-      onOk={
-        handleOk
-      }
-      onCancel={
-        onCancel
-      }
+      onOk={handleOk}
+      onCancel={onCancel}
       destroyOnHidden
-      maskClosable={
-        !loading
-      }
-      keyboard={
-        !loading
-      }
-      closable={
-        !loading
-      }
+      maskClosable={!loading}
+      keyboard={!loading}
+      closable={!loading}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        autoComplete="off"
-      >
+      <Form form={form} layout="vertical" autoComplete="off">
         <Form.Item
           label="Email"
           name="email"
@@ -230,22 +148,43 @@ export default function AdminUserModal({
             {
               required: true,
               whitespace: true,
-              message:
-                "Please enter the Trimble email.",
+              message: "Please enter the Trimble email.",
             },
             {
               type: "email",
-              message:
-                "Please enter a valid email.",
+              message: "Please enter a valid email.",
             },
           ]}
         >
-          <Input
-            placeholder="user@example.com"
-            disabled={
-              loading
-            }
-          />
+          <Input placeholder="user@example.com" disabled={loading} />
+        </Form.Item>
+
+        <Form.Item
+          label="User Name"
+          name="userName"
+          rules={[
+            {
+              required: true,
+              whitespace: true,
+              message: "Please enter the user name.",
+            },
+          ]}
+        >
+          <Input placeholder="User Name" disabled={loading} />
+        </Form.Item>
+
+        <Form.Item
+          label="Company Name"
+          name="companyName"
+          rules={[
+            {
+              required: true,
+              whitespace: true,
+              message: "Please enter the company name.",
+            },
+          ]}
+        >
+          <Input placeholder="Company Name" disabled={loading} />
         </Form.Item>
 
         <Form.Item
@@ -258,21 +197,15 @@ export default function AdminUserModal({
           ]}
         >
           <Select
-            disabled={
-              loading
-            }
+            disabled={loading}
             options={[
               {
-                label:
-                  "Active",
-                value:
-                  "Active",
+                label: "Active",
+                value: "Active",
               },
               {
-                label:
-                  "Inactive",
-                value:
-                  "Inactive",
+                label: "Inactive",
+                value: "Inactive",
               },
             ]}
           />
@@ -288,21 +221,15 @@ export default function AdminUserModal({
           ]}
         >
           <Select
-            disabled={
-              loading
-            }
+            disabled={loading}
             options={[
               {
-                label:
-                  "Owner",
-                value:
-                  "Owner",
+                label: "Owner",
+                value: "Owner",
               },
               {
-                label:
-                  "Viewer",
-                value:
-                  "Viewer",
+                label: "Viewer",
+                value: "Viewer",
               },
             ]}
           />
@@ -314,56 +241,47 @@ export default function AdminUserModal({
           rules={[
             {
               required: true,
-              message:
-                "Please select a license type.",
+              message: "Please select a license type.",
             },
           ]}
         >
           <Select
-            disabled={
-              loading
-            }
+            disabled={loading}
             options={[
               {
-                label:
-                  "Trial",
-                value:
-                  "Trial",
+                label: "Trial",
+                value: "Trial",
 
                 disabled:
-                  Boolean(
-                    editingUser,
-                  ) &&
-                  trialAlreadyUsed &&
-                  !currentlyTrial,
+                  Boolean(editingUser) && trialAlreadyUsed && !currentlyTrial,
               },
               {
-                label:
-                  "Annual",
-                value:
-                  "Annual",
+                label: "Monthly",
+                value: "Monthly",
+              },
+              {
+                label: "Annual",
+                value: "Annual",
               },
             ]}
           />
         </Form.Item>
 
-        {editingUser &&
-          trialAlreadyUsed && (
-            <Alert
-              type="info"
-              showIcon
-              style={{
-                marginBottom:
-                  16,
-              }}
-              message="Trial already used"
-              description={
-                currentlyTrial
-                  ? "This user is currently using Trial. If changed to Annual, Trial cannot be assigned again."
-                  : "This user has already used Trial and cannot be assigned another Trial."
-              }
-            />
-          )}
+        {editingUser && trialAlreadyUsed && (
+          <Alert
+            type="info"
+            showIcon
+            style={{
+              marginBottom: 16,
+            }}
+            message="Trial already used"
+            description={
+              currentlyTrial
+                ? "This user is currently using Trial. After changing to Monthly or Annual, Trial cannot be assigned again."
+                : "This user has already used Trial and cannot be assigned another Trial."
+            }
+          />
+        )}
 
         <Form.Item
           label="Start Date"
@@ -371,22 +289,16 @@ export default function AdminUserModal({
           rules={[
             {
               required: true,
-              message:
-                "Please select Start Date.",
+              message: "Please select Start Date.",
             },
           ]}
         >
           <DatePicker
             format="DD-MM-YYYY"
-            allowClear={
-              false
-            }
-            disabled={
-              loading
-            }
+            allowClear={false}
+            disabled={loading}
             style={{
-              width:
-                "100%",
+              width: "100%",
             }}
           />
         </Form.Item>
@@ -397,20 +309,16 @@ export default function AdminUserModal({
           rules={[
             {
               required: true,
-              message:
-                "End Date is required.",
+              message: "End Date is required.",
             },
           ]}
         >
           <DatePicker
             format="DD-MM-YYYY"
-            allowClear={
-              false
-            }
-            disabled
+            allowClear={false}
+            disabled={loading || licenseType === "Trial"}
             style={{
-              width:
-                "100%",
+              width: "100%",
             }}
           />
         </Form.Item>

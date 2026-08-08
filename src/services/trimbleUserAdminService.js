@@ -7,6 +7,8 @@ import {
 const USER_COLUMNS = `
   id,
   trimble_email,
+  user_name,
+  company_name,
   status,
   start_date,
   end_date,
@@ -20,11 +22,35 @@ const USER_COLUMNS = `
 const normalizeEmail = (
   value,
 ) =>
-  String(
-    value || "",
-  )
+  String(value || "")
     .trim()
     .toLowerCase();
+
+const normalizeText = (
+  value,
+) =>
+  String(value || "")
+    .trim();
+
+const getLicenseDurationDays = (
+  licenseType,
+) => {
+  switch (licenseType) {
+    case "Trial":
+      return 14;
+
+    case "Monthly":
+      return 30;
+
+    case "Annual":
+      return 365;
+
+    default:
+      throw new Error(
+        "License Type must be Trial, Monthly or Annual.",
+      );
+  }
+};
 
 function mapTrimbleUser(
   row,
@@ -38,6 +64,12 @@ function mapTrimbleUser(
 
     trimbleEmail:
       row.trimble_email,
+
+    userName:
+      row.user_name || "",
+
+    companyName:
+      row.company_name || "",
 
     status:
       row.status,
@@ -57,7 +89,7 @@ function mapTrimbleUser(
     trialCount:
       Number(
         row.trial_count ??
-        0,
+          0,
       ),
 
     createdAt:
@@ -71,16 +103,17 @@ function mapTrimbleUser(
 function normalizeBaseValues({
   email,
   trimbleEmail,
+  userName,
+  companyName,
   status,
   startDate,
-  endDate,
   role,
   licenseType,
 }) {
   const normalizedEmail =
     normalizeEmail(
       trimbleEmail ??
-      email,
+        email,
     );
 
   if (!normalizedEmail) {
@@ -89,18 +122,43 @@ function normalizeBaseValues({
     );
   }
 
+  const normalizedUserName =
+    normalizeText(
+      userName,
+    );
+
+  if (!normalizedUserName) {
+    throw new Error(
+      "User Name is required.",
+    );
+  }
+
+  const normalizedCompanyName =
+    normalizeText(
+      companyName,
+    );
+
+  if (!normalizedCompanyName) {
+    throw new Error(
+      "Company Name is required.",
+    );
+  }
+
   const normalizedLicenseType =
     licenseType ||
     "Trial";
 
   if (
-    normalizedLicenseType !==
-      "Trial" &&
-    normalizedLicenseType !==
-      "Annual"
+    ![
+      "Trial",
+      "Monthly",
+      "Annual",
+    ].includes(
+      normalizedLicenseType,
+    )
   ) {
     throw new Error(
-      "License Type must be Trial or Annual.",
+      "License Type must be Trial, Monthly or Annual.",
     );
   }
 
@@ -109,10 +167,12 @@ function normalizeBaseValues({
     "Viewer";
 
   if (
-    normalizedRole !==
-      "Owner" &&
-    normalizedRole !==
-      "Viewer"
+    ![
+      "Owner",
+      "Viewer",
+    ].includes(
+      normalizedRole,
+    )
   ) {
     throw new Error(
       "Role must be Owner or Viewer.",
@@ -124,10 +184,12 @@ function normalizeBaseValues({
     "Active";
 
   if (
-    normalizedStatus !==
-      "Active" &&
-    normalizedStatus !==
-      "Inactive"
+    ![
+      "Active",
+      "Inactive",
+    ].includes(
+      normalizedStatus,
+    )
   ) {
     throw new Error(
       "Status must be Active or Inactive.",
@@ -140,47 +202,32 @@ function normalizeBaseValues({
     );
   }
 
-  let normalizedEndDate =
-    endDate ||
-    null;
+  const durationDays =
+    getLicenseDurationDays(
+      normalizedLicenseType,
+    );
 
-  if (
-    normalizedLicenseType ===
-    "Trial"
-  ) {
-    normalizedEndDate =
-      dayjs(
-        startDate,
+  const normalizedEndDate =
+    dayjs(
+      startDate,
+    )
+      .add(
+        durationDays,
+        "day",
       )
-        .add(
-          14,
-          "day",
-        )
-        .format(
-          "YYYY-MM-DD",
-        );
-  }
-
-  if (
-    normalizedLicenseType ===
-    "Annual"
-  ) {
-    normalizedEndDate =
-      dayjs(
-        startDate,
-      )
-        .add(
-          365,
-          "day",
-        )
-        .format(
-          "YYYY-MM-DD",
-        );
-  }
+      .format(
+        "YYYY-MM-DD",
+      );
 
   return {
     trimble_email:
       normalizedEmail,
+
+    user_name:
+      normalizedUserName,
+
+    company_name:
+      normalizedCompanyName,
 
     status:
       normalizedStatus,
@@ -265,6 +312,45 @@ export async function getTrimbleUserById(
     : null;
 }
 
+export async function getTrimbleUserByEmail(
+  email,
+) {
+  const normalizedEmail =
+    normalizeEmail(
+      email,
+    );
+
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "trimble_users",
+    )
+    .select(
+      USER_COLUMNS,
+    )
+    .eq(
+      "trimble_email",
+      normalizedEmail,
+    )
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data
+    ? mapTrimbleUser(
+        data,
+      )
+    : null;
+}
+
 export async function createTrimbleUser(
   values,
 ) {
@@ -273,6 +359,11 @@ export async function createTrimbleUser(
       values,
     );
 
+  /*
+   * Trial is consumed immediately.
+   *
+   * Monthly / Annual do not consume Trial.
+   */
   row.trial_count =
     row.license_type ===
     "Trial"
@@ -342,15 +433,24 @@ export async function updateTrimbleUser({
     row.license_type ===
     "Trial";
 
-  const alreadyUsedTrial =
-    Number(
-      currentUser.trialCount,
-    ) >= 1;
-
   const currentlyTrial =
-    currentUser.licenseType ===
+    currentUser
+      .licenseType ===
     "Trial";
 
+  const alreadyUsedTrial =
+    Number(
+      currentUser
+        .trialCount ??
+        0,
+    ) >= 1;
+
+  /*
+   * Trial -> Monthly/Annual is allowed.
+   *
+   * Monthly/Annual -> Trial is allowed only when
+   * trial_count === 0.
+   */
   if (
     changingToTrial &&
     alreadyUsedTrial &&
@@ -363,8 +463,9 @@ export async function updateTrimbleUser({
 
   let nextTrialCount =
     Number(
-      currentUser.trialCount ??
-      0,
+      currentUser
+        .trialCount ??
+        0,
     );
 
   if (
@@ -375,6 +476,10 @@ export async function updateTrimbleUser({
       1;
   }
 
+  /*
+   * Never reset Trial Count when switching to
+   * Monthly or Annual.
+   */
   row.trial_count =
     nextTrialCount;
 
