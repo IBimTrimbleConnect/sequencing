@@ -28,10 +28,6 @@ import {
 } from "../utils/projectFormatting";
 import { buildGroups } from "./buildExcelGroups";
 import { fillGroups, fillHeader } from "./excelTemplate";
-import {
-  findSequenceObjectByInternalId,
-  getFirstSelectedInternalObject,
-} from "./trimbleHelpers";
 
 const DEFAULT_FILE_NAME = "Sequencing Report";
 

@@ -12,18 +12,18 @@ import {
   message,
 } from "antd";
 import {
-  DeleteOutlined,
   EditOutlined,
   LogoutOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import AdminUserModal from "./AdminUserModal";
 import {
   createTrimbleUser,
-  deleteTrimbleUser,
+  deactivateTrimbleUser,
   getTrimbleUsers,
   updateTrimbleUser,
 } from "../services/trimbleUserAdminService";
@@ -45,10 +45,8 @@ export default function AdminUsersPage() {
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
-
     try {
-      const result = await getTrimbleUsers();
-      setUsers(result);
+      setUsers(await getTrimbleUsers());
     } catch (error) {
       console.error("Load Trimble users failed:", error);
       message.error(error?.message || "Unable to load Trimble users.");
@@ -66,8 +64,14 @@ export default function AdminUsersPage() {
     if (!keyword) return users;
 
     return users.filter((user) =>
-      [user.email, user.status, user.role].some((value) =>
-        String(value || "").toLowerCase().includes(keyword),
+      [
+        user.email,
+        user.status,
+        user.role,
+        user.licenseType,
+        user.trialCount,
+      ].some((value) =>
+        String(value ?? "").toLowerCase().includes(keyword),
       ),
     );
   }, [search, users]);
@@ -77,20 +81,27 @@ export default function AdminUsersPage() {
 
     try {
       if (editingUser?.id) {
-        const updated = await updateTrimbleUser({ id: editingUser.id, ...values });
+        const updated = await updateTrimbleUser({
+          id: editingUser.id,
+          ...values,
+        });
+
         setUsers((current) =>
           current.map((user) =>
             String(user.id) === String(updated.id) ? updated : user,
           ),
         );
+
         message.success("Trimble user updated.");
       } else {
         const created = await createTrimbleUser(values);
+
         setUsers((current) =>
           [...current, created].sort((a, b) =>
             String(a.email || "").localeCompare(String(b.email || "")),
           ),
         );
+
         message.success("Trimble user created.");
       }
 
@@ -104,16 +115,20 @@ export default function AdminUsersPage() {
     }
   };
 
-  const handleDelete = async (user) => {
+  const handleDeactivate = async (user) => {
     try {
-      await deleteTrimbleUser(user.id);
+      const updated = await deactivateTrimbleUser(user.id);
+
       setUsers((current) =>
-        current.filter((item) => String(item.id) !== String(user.id)),
+        current.map((item) =>
+          String(item.id) === String(updated.id) ? updated : item,
+        ),
       );
-      message.success("Trimble user deleted.");
+
+      message.success("Trimble user deactivated.");
     } catch (error) {
-      console.error("Delete Trimble user failed:", error);
-      message.error(error?.message || "Unable to delete Trimble user.");
+      console.error("Deactivate Trimble user failed:", error);
+      message.error(error?.message || "Unable to deactivate Trimble user.");
     }
   };
 
@@ -122,18 +137,12 @@ export default function AdminUsersPage() {
       await logoutAdmin();
       navigate("/admin/login", { replace: true });
     } catch (error) {
-      console.error("Admin logout failed:", error);
       message.error(error?.message || "Unable to sign out.");
     }
   };
 
   const columns = [
-    {
-      title: "Email",
-      dataIndex: "email",
-      key: "email",
-      sorter: (a, b) => String(a.email || "").localeCompare(String(b.email || "")),
-    },
+    { title: "Email", dataIndex: "email", key: "email" },
     {
       title: "Status",
       dataIndex: "status",
@@ -150,11 +159,29 @@ export default function AdminUsersPage() {
       dataIndex: "role",
       key: "role",
       width: 100,
+      render: (value) => <Tag>{value || "Viewer"}</Tag>,
+    },
+    {
+      title: "License",
+      dataIndex: "licenseType",
+      key: "licenseType",
+      width: 110,
       render: (value) => (
-        <Tag color={String(value).toLowerCase() === "owner" ? "blue" : "default"}>
-          {value || "Viewer"}
+        <Tag color={value === "Annual" ? "blue" : "orange"}>
+          {value || "Trial"}
         </Tag>
       ),
+    },
+    {
+      title: "Trial Count",
+      dataIndex: "trialCount",
+      key: "trialCount",
+      width: 105,
+      align: "center",
+      render: (value) => {
+        const count = Number(value ?? 0);
+        return <Tag color={count > 0 ? "warning" : "default"}>{count}</Tag>;
+      },
     },
     {
       title: "Start Date",
@@ -187,16 +214,22 @@ export default function AdminUsersPage() {
             }}
           />
 
-          <Popconfirm
-            title="Delete Trimble user?"
-            description={user.email}
-            okText="Delete"
-            cancelText="Cancel"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => handleDelete(user)}
-          >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {String(user.status).toLowerCase() === "active" && (
+            <Popconfirm
+              title="Deactivate user?"
+              description={user.email}
+              okText="Deactivate"
+              cancelText="Cancel"
+              onConfirm={() => handleDeactivate(user)}
+            >
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<StopOutlined />}
+              />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -221,15 +254,24 @@ export default function AdminUsersPage() {
           <Title level={3} style={{ margin: 0 }}>
             Trimble Users
           </Title>
+
           <Text type="secondary">
-            Signed in as {admin?.admin?.email || admin?.authUser?.email || "Administrator"}
+            Signed in as{" "}
+            {admin?.admin?.email ||
+              admin?.authUser?.email ||
+              "Administrator"}
           </Text>
         </div>
 
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={loadUsers} loading={loading}>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={loadUsers}
+            loading={loading}
+          >
             Refresh
           </Button>
+
           <Button icon={<LogoutOutlined />} onClick={handleLogout}>
             Sign Out
           </Button>
@@ -251,10 +293,10 @@ export default function AdminUsersPage() {
             <Input
               allowClear
               prefix={<SearchOutlined />}
-              placeholder="Search by email, status or role"
+              placeholder="Search email, status, role, license..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              style={{ width: 320, maxWidth: "100%" }}
+              style={{ width: 360, maxWidth: "100%" }}
             />
 
             <Button
@@ -279,7 +321,7 @@ export default function AdminUsersPage() {
               showSizeChanger: true,
               showTotal: (total) => `${total} user(s)`,
             }}
-            scroll={{ x: 850 }}
+            scroll={{ x: 1050 }}
           />
         </Card>
       </Content>

@@ -1,3 +1,5 @@
+import dayjs from "dayjs";
+
 import {
   supabase,
 } from "./supabase";
@@ -9,6 +11,8 @@ const USER_COLUMNS = `
   start_date,
   end_date,
   role,
+  license_type,
+  trial_count,
   created_at,
   updated_at
 `;
@@ -16,7 +20,9 @@ const USER_COLUMNS = `
 const normalizeEmail = (
   value,
 ) =>
-  String(value || "")
+  String(
+    value || "",
+  )
     .trim()
     .toLowerCase();
 
@@ -45,6 +51,15 @@ function mapTrimbleUser(
     role:
       row.role,
 
+    licenseType:
+      row.license_type,
+
+    trialCount:
+      Number(
+        row.trial_count ??
+        0,
+      ),
+
     createdAt:
       row.created_at,
 
@@ -53,18 +68,19 @@ function mapTrimbleUser(
   };
 }
 
-function normalizeTrimbleUser({
+function normalizeBaseValues({
   email,
   trimbleEmail,
   status,
   startDate,
   endDate,
   role,
+  licenseType,
 }) {
   const normalizedEmail =
     normalizeEmail(
       trimbleEmail ??
-        email,
+      email,
     );
 
   if (!normalizedEmail) {
@@ -73,21 +89,113 @@ function normalizeTrimbleUser({
     );
   }
 
+  const normalizedLicenseType =
+    licenseType ||
+    "Trial";
+
+  if (
+    normalizedLicenseType !==
+      "Trial" &&
+    normalizedLicenseType !==
+      "Annual"
+  ) {
+    throw new Error(
+      "License Type must be Trial or Annual.",
+    );
+  }
+
+  const normalizedRole =
+    role ||
+    "Viewer";
+
+  if (
+    normalizedRole !==
+      "Owner" &&
+    normalizedRole !==
+      "Viewer"
+  ) {
+    throw new Error(
+      "Role must be Owner or Viewer.",
+    );
+  }
+
+  const normalizedStatus =
+    status ||
+    "Active";
+
+  if (
+    normalizedStatus !==
+      "Active" &&
+    normalizedStatus !==
+      "Inactive"
+  ) {
+    throw new Error(
+      "Status must be Active or Inactive.",
+    );
+  }
+
+  if (!startDate) {
+    throw new Error(
+      "Start Date is required.",
+    );
+  }
+
+  let normalizedEndDate =
+    endDate ||
+    null;
+
+  if (
+    normalizedLicenseType ===
+    "Trial"
+  ) {
+    normalizedEndDate =
+      dayjs(
+        startDate,
+      )
+        .add(
+          14,
+          "day",
+        )
+        .format(
+          "YYYY-MM-DD",
+        );
+  }
+
+  if (
+    normalizedLicenseType ===
+    "Annual"
+  ) {
+    normalizedEndDate =
+      dayjs(
+        startDate,
+      )
+        .add(
+          365,
+          "day",
+        )
+        .format(
+          "YYYY-MM-DD",
+        );
+  }
+
   return {
     trimble_email:
       normalizedEmail,
 
     status:
-      status || "Active",
+      normalizedStatus,
 
     start_date:
-      startDate || null,
+      startDate,
 
     end_date:
-      endDate || null,
+      normalizedEndDate,
 
     role:
-      role || "Viewer",
+      normalizedRole,
+
+    license_type:
+      normalizedLicenseType,
   };
 }
 
@@ -96,12 +204,17 @@ export async function getTrimbleUsers() {
     data,
     error,
   } = await supabase
-    .from("trimble_users")
-    .select(USER_COLUMNS)
+    .from(
+      "trimble_users",
+    )
+    .select(
+      USER_COLUMNS,
+    )
     .order(
       "trimble_email",
       {
-        ascending: true,
+        ascending:
+          true,
       },
     );
 
@@ -109,29 +222,88 @@ export async function getTrimbleUsers() {
     throw error;
   }
 
-  return (data || []).map(
+  return (
+    data || []
+  ).map(
     mapTrimbleUser,
   );
+}
+
+export async function getTrimbleUserById(
+  id,
+) {
+  if (!id) {
+    throw new Error(
+      "Trimble user ID is required.",
+    );
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "trimble_users",
+    )
+    .select(
+      USER_COLUMNS,
+    )
+    .eq(
+      "id",
+      id,
+    )
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data
+    ? mapTrimbleUser(
+        data,
+      )
+    : null;
 }
 
 export async function createTrimbleUser(
   values,
 ) {
   const row =
-    normalizeTrimbleUser(
+    normalizeBaseValues(
       values,
     );
+
+  row.trial_count =
+    row.license_type ===
+    "Trial"
+      ? 1
+      : 0;
 
   const {
     data,
     error,
   } = await supabase
-    .from("trimble_users")
-    .insert(row)
-    .select(USER_COLUMNS)
+    .from(
+      "trimble_users",
+    )
+    .insert(
+      row,
+    )
+    .select(
+      USER_COLUMNS,
+    )
     .single();
 
   if (error) {
+    if (
+      error.code ===
+      "23505"
+    ) {
+      throw new Error(
+        "A Trimble user with this email already exists.",
+      );
+    }
+
     throw error;
   }
 
@@ -150,21 +322,118 @@ export async function updateTrimbleUser({
     );
   }
 
+  const currentUser =
+    await getTrimbleUserById(
+      id,
+    );
+
+  if (!currentUser) {
+    throw new Error(
+      "Trimble user was not found.",
+    );
+  }
+
   const row =
-    normalizeTrimbleUser(
+    normalizeBaseValues(
       values,
     );
+
+  const changingToTrial =
+    row.license_type ===
+    "Trial";
+
+  const alreadyUsedTrial =
+    Number(
+      currentUser.trialCount,
+    ) >= 1;
+
+  const currentlyTrial =
+    currentUser.licenseType ===
+    "Trial";
+
+  if (
+    changingToTrial &&
+    alreadyUsedTrial &&
+    !currentlyTrial
+  ) {
+    throw new Error(
+      "This user has already used the free Trial.",
+    );
+  }
+
+  let nextTrialCount =
+    Number(
+      currentUser.trialCount ??
+      0,
+    );
+
+  if (
+    changingToTrial &&
+    nextTrialCount === 0
+  ) {
+    nextTrialCount =
+      1;
+  }
+
+  row.trial_count =
+    nextTrialCount;
 
   const {
     data,
     error,
   } = await supabase
-    .from("trimble_users")
-    .update({
-      ...row,
+    .from(
+      "trimble_users",
+    )
+    .update(
+      row,
+    )
+    .eq(
+      "id",
+      id,
+    )
+    .select(
+      USER_COLUMNS,
+    )
+    .single();
 
-      updated_at:
-        new Date().toISOString(),
+  if (error) {
+    if (
+      error.code ===
+      "23505"
+    ) {
+      throw new Error(
+        "A Trimble user with this email already exists.",
+      );
+    }
+
+    throw error;
+  }
+
+  return mapTrimbleUser(
+    data,
+  );
+}
+
+export async function deactivateTrimbleUser(
+  id,
+) {
+  if (!id) {
+    throw new Error(
+      "Trimble user ID is required.",
+    );
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from(
+      "trimble_users",
+    )
+    .update({
+      status:
+        "Inactive",
     })
     .eq(
       "id",
@@ -196,7 +465,9 @@ export async function deleteTrimbleUser(
   const {
     error,
   } = await supabase
-    .from("trimble_users")
+    .from(
+      "trimble_users",
+    )
     .delete()
     .eq(
       "id",
