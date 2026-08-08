@@ -226,38 +226,91 @@ const TopMenu = ({
     try {
       const tcapi = await WorkspaceAPI.connect(window.parent);
 
-      const selected = await getFirstSelectedInternalObject(tcapi);
+      const selections = await tcapi.viewer.getSelection();
 
-      if (!selected) {
-        message.warning("Please select a valid object in Trimble Connect.");
+      if (!Array.isArray(selections) || selections.length === 0) {
+        message.warning("Please select an object in Trimble Connect.");
+
         return;
       }
 
-      const found = findSequenceObjectByInternalId({
-        sequenceObjects,
-        modelId: selected.modelId,
-        objectId: selected.objectId,
-      });
+      const firstSelection = selections[0];
+
+      const modelId = firstSelection?.modelId;
+
+      const runtimeId = firstSelection?.objectRuntimeIds?.[0];
+
+      if (modelId == null || runtimeId == null) {
+        message.warning("Please select a valid object in Trimble Connect.");
+
+        return;
+      }
+
+      /*
+       * sequenceObjects:
+       *
+       * [
+       *   {
+       *     planId,
+       *     subPlanId,
+       *     objects: [...]
+       *   }
+       * ]
+       */
+      let found = null;
+
+      for (const group of sequenceObjects) {
+        const object = (group?.objects || []).find(
+          (item) =>
+            String(item?.modelId) === String(modelId) &&
+            String(item?.runtimeId) === String(runtimeId),
+        );
+
+        if (object) {
+          found = {
+            ...object,
+
+            planId: object?.planId ?? group?.planId,
+
+            subPlanId: object?.subPlanId ?? group?.subPlanId,
+          };
+
+          break;
+        }
+      }
 
       if (!found) {
         message.warning("The selected object was not found in sequencing.");
+
         return;
       }
+
+      const externalId = found?.externalId ?? found?.external_id ?? null;
 
       dispatch(
         SetActiveSimulationItem({
           planId: String(found.planId),
+
           subPlanId: String(found.subPlanId),
+
           modelId: found.modelId,
-          id: String(found.objectId),
-          objectId: found.objectId,
-          runtimeId: selected.runtimeId,
+
+          runtimeId: found.runtimeId,
+
+          /*
+           * Stable identity in Redux.
+           */
+          id: externalId != null ? String(externalId) : String(found.runtimeId),
+
+          objectId: externalId,
         }),
       );
     } catch (error) {
       console.error("Highlight object error:", error);
 
-      message.error("Unable to highlight the selected object.");
+      message.error(
+        error?.message || "Unable to highlight the selected object.",
+      );
     }
   }, [dispatch, sequenceObjects]);
 
