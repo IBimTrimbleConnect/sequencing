@@ -2,5 +2,7 @@
   "title": "IBIM Sequencing",
   "url": "https://sequencing.ibimconsulting.com.au/",
   "icon": "https://sequencing.ibimconsulting.com.au/logo.png",
-  "infoUrl": "https://ibimconsulting.com.au/"
+  "infoUrl": "https://ibimconsulting.com.au/",
+  "extensionType": ["3dviewer"],
+  "type": "panel"
 }
