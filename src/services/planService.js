@@ -231,3 +231,19 @@ export async function deletePlan(id) {
 
   return id;
 }
+export async function getExistingPlanProjectId() {
+  const { data, error } = await supabase
+    .from("plans")
+    .select("trimble_project_id")
+    .not("trimble_project_id", "is", null)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.trimble_project_id
+    ? String(data.trimble_project_id)
+    : null;
+}

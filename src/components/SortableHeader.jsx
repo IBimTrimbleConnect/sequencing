@@ -35,12 +35,17 @@ const MenuButton = ({
   icon,
   children,
   danger = false,
+  disabled = false,
   onClick,
 }) => {
   const handleClick = (
     event,
   ) => {
     event.stopPropagation();
+
+    if (disabled) {
+      return;
+    }
 
     onClick?.();
   };
@@ -50,6 +55,7 @@ const MenuButton = ({
       size="small"
       type="text"
       danger={danger}
+      disabled={disabled}
       icon={icon}
       onClick={
         handleClick
@@ -141,16 +147,20 @@ const SortableHeader = ({
         label,
         callback,
         danger = false,
+        disabled = false,
       }) => ({
         key,
 
         label: (
           <MenuButton
             icon={icon}
-            danger={
-              danger
-            }
+            danger={danger}
+            disabled={disabled}
             onClick={() => {
+              if (disabled) {
+                return;
+              }
+
               executeAction(
                 callback,
               );
@@ -167,19 +177,26 @@ const SortableHeader = ({
 
   const menuItems =
     useMemo(() => {
-      const viewerItems =
-        [];
+      const items = [];
+
+      const canSimulation =
+        !isFree;
+
+      const canHighlight =
+        true;
+
+      const canEdit =
+        isOwner;
 
       /*
-       * Free license cannot run Simulation.
+       * RUN SIMULATION
        *
-       * Viewer and Owner can use Simulation.
+       * Free   -> visible + disabled
+       * Viewer -> enabled
+       * Owner  -> enabled
        */
-      if (
-        !isFree &&
-        onSimulation
-      ) {
-        viewerItems.push(
+      if (onSimulation) {
+        items.push(
           createMenuItem({
             key:
               "runSimulation",
@@ -193,18 +210,23 @@ const SortableHeader = ({
 
             callback:
               onSimulation,
+
+            disabled:
+              !canSimulation,
           }),
         );
       }
 
       /*
-       * Highlight remains available
-       * for Free, Viewer and Owner.
+       * HIGHLIGHT
+       *
+       * Free / Viewer / Owner
+       * are all allowed.
        */
       if (
         onHighlightObject
       ) {
-        viewerItems.push(
+        items.push(
           createMenuItem({
             key:
               "highlightObjects",
@@ -218,25 +240,33 @@ const SortableHeader = ({
 
             callback:
               onHighlightObject,
+
+            disabled:
+              !canHighlight,
           }),
         );
       }
 
       /*
-       * Free / Viewer do not receive
-       * any Owner editing actions.
+       * Divider before Owner-only actions.
        */
-      if (!isOwner) {
-        return viewerItems;
+      if (
+        items.length > 0
+      ) {
+        items.push({
+          type: "divider",
+        });
       }
 
-      const ownerItems =
-        [];
+      /*
+       * OWNER-ONLY ACTIONS
+       *
+       * Viewer / Free:
+       * visible but disabled.
+       */
 
-      if (
-        onAssignObject
-      ) {
-        ownerItems.push(
+      if (onAssignObject) {
+        items.push(
           createMenuItem({
             key:
               "assignMultipleAssemblies",
@@ -250,14 +280,15 @@ const SortableHeader = ({
 
             callback:
               onAssignObject,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
-      if (
-        onAutoAssign
-      ) {
-        ownerItems.push(
+      if (onAutoAssign) {
+        items.push(
           createMenuItem({
             key:
               "assignPickedAssemblies",
@@ -271,14 +302,15 @@ const SortableHeader = ({
 
             callback:
               onAutoAssign,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
-      if (
-        onAddSubPlan
-      ) {
-        ownerItems.push(
+      if (onAddSubPlan) {
+        items.push(
           createMenuItem({
             key:
               "createSubPlan",
@@ -292,14 +324,15 @@ const SortableHeader = ({
 
             callback:
               onAddSubPlan,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
-      if (
-        onSortByDate
-      ) {
-        ownerItems.push(
+      if (onSortByDate) {
+        items.push(
           createMenuItem({
             key:
               "sortByDate",
@@ -313,14 +346,15 @@ const SortableHeader = ({
 
             callback:
               onSortByDate,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
-      if (
-        onCopySubPlan
-      ) {
-        ownerItems.push(
+      if (onCopySubPlan) {
+        items.push(
           createMenuItem({
             key:
               "copySubPlan",
@@ -334,15 +368,27 @@ const SortableHeader = ({
 
             callback:
               onCopySubPlan,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
-      const editItems =
-        [];
+      const hasEditActions =
+        Boolean(onEdit) ||
+        Boolean(onDelete);
+
+      if (
+        hasEditActions
+      ) {
+        items.push({
+          type: "divider",
+        });
+      }
 
       if (onEdit) {
-        editItems.push(
+        items.push(
           createMenuItem({
             key:
               "edit",
@@ -356,12 +402,15 @@ const SortableHeader = ({
 
             callback:
               onEdit,
+
+            disabled:
+              !canEdit,
           }),
         );
       }
 
       if (onDelete) {
-        editItems.push({
+        items.push({
           key:
             "delete",
 
@@ -371,12 +420,21 @@ const SortableHeader = ({
               description="Are you sure?"
               okText="Yes"
               cancelText="No"
+              disabled={
+                !canEdit
+              }
               open={
-                deleteConfirmOpen
+                canEdit
+                  ? deleteConfirmOpen
+                  : false
               }
               onOpenChange={(
                 open,
               ) => {
+                if (!canEdit) {
+                  return;
+                }
+
                 setDeleteConfirmOpen(
                   open,
                 );
@@ -392,6 +450,10 @@ const SortableHeader = ({
               ) => {
                 event
                   ?.stopPropagation?.();
+
+                if (!canEdit) {
+                  return;
+                }
 
                 setDeleteConfirmOpen(
                   false,
@@ -422,7 +484,14 @@ const SortableHeader = ({
                   icon={
                     <DeleteOutlined />
                   }
+                  disabled={
+                    !canEdit
+                  }
                   onClick={() => {
+                    if (!canEdit) {
+                      return;
+                    }
+
                     setDeleteConfirmOpen(
                       true,
                     );
@@ -436,42 +505,40 @@ const SortableHeader = ({
         });
       }
 
-      const result = [
-        ...viewerItems,
-      ];
-
-      if (
-        viewerItems.length &&
-        ownerItems.length
-      ) {
-        result.push({
-          type:
-            "divider",
-        });
-      }
-
-      result.push(
-        ...ownerItems,
-      );
-
-      if (
-        editItems.length &&
+      /*
+       * Remove accidental consecutive/trailing dividers.
+       */
+      return items.filter(
         (
-          viewerItems.length ||
-          ownerItems.length
-        )
-      ) {
-        result.push({
-          type:
-            "divider",
-        });
-      }
+          item,
+          index,
+          array,
+        ) => {
+          if (
+            item?.type !==
+            "divider"
+          ) {
+            return true;
+          }
 
-      result.push(
-        ...editItems,
+          const previous =
+            array[index - 1];
+
+          const next =
+            array[index + 1];
+
+          return (
+            index > 0 &&
+            index <
+              array.length -
+                1 &&
+            previous?.type !==
+              "divider" &&
+            next?.type !==
+              "divider"
+          );
+        },
       );
-
-      return result;
     }, [
       createMenuItem,
       isOwner,

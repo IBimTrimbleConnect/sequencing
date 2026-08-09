@@ -445,11 +445,19 @@ const Main = ({
               onAddSubPlan={handleAddSubPlan}
               onCopySubPlan={handleCopySubPlan}
               onHighlightObject={handleHighlightObject}
-              onSimulation={
-                !isFree && typeof onSimulation === "function"
-                  ? onSimulation
-                  : undefined
-              }
+              /*
+               * Always provide the callback so the menu item is visible
+               * for every license type.
+               *
+               * SortableHeader itself disables Run Simulation for Free.
+               */
+              onSimulation={(selectedPlan) => {
+                if (isFree) {
+                  return;
+                }
+
+                onSimulation?.(selectedPlan);
+              }}
             />
           ),
 
@@ -462,6 +470,13 @@ const Main = ({
               isFree={isFree}
               readOnly={!isOwner}
               loadedModelIds={loadedModelIds}
+              onSimulation={(request) => {
+                if (isFree) {
+                  return;
+                }
+
+                onSimulation?.(request);
+              }}
             />
           ),
         };

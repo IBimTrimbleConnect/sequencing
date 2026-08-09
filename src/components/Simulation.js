@@ -33,6 +33,9 @@ dayjs.extend(customParseFormat);
 
 const DATE_FORMATS = ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "YYYY/MM/DD"];
 
+const ALL_PLANS_VALUE = "__ALL_PLANS__";
+const ALL_SUBPLANS_VALUE = "__ALL_SUBPLANS__";
+
 const DEFAULT_PROJECT_FORMATTING = {
   massUnit: "kg",
   massDecimals: 2,
@@ -230,7 +233,11 @@ const getDisplayMassUnit = (formatting = DEFAULT_PROJECT_FORMATTING) => {
   }
 };
 
-export default function Simulation() {
+export default function Simulation({
+  loadedModelIds = [],
+  simulationRequest = null,
+  onSimulationRequestApplied,
+}) {
   const dispatch = useDispatch();
 
   const plans = useSelector((state) => state.sequence.plans || []);
@@ -243,6 +250,28 @@ export default function Simulation() {
 
   const tcapiRef = useRef(null);
   const intervalRef = useRef(null);
+
+  /*
+   * Serialize every Trimble Viewer mutation.
+   *
+   * Trimble viewer methods return Promise<void>. "await" guarantees
+   * ordering only inside one async function. Without this queue,
+   * goToIndex(), transparency changes and Grid changes can still run
+   * at the same time and overwrite each other's viewer state.
+   */
+  const viewerTaskRef = useRef(Promise.resolve());
+
+  /*
+   * Keep the current index available to the async autoplay loop
+   * without creating overlapping setInterval callbacks.
+   */
+  const indexRef = useRef(0);
+
+  /*
+   * Used to ignore stale transparency tasks while the user is
+   * dragging the transparency slider quickly.
+   */
+  const transparencyTaskIdRef = useRef(0);
 
   const simulationActivatedRef = useRef(false);
 
@@ -266,6 +295,102 @@ export default function Simulation() {
   const [endDate, setEndDate] = useState(null);
 
   const [showGrid, setShowGrid] = useState(false);
+
+  /*
+   * When Run Simulation is clicked from a Plan menu,
+   * first update the existing filters, then wait for `items`
+   * to be recalculated, and only then start playback.
+   */
+  const [
+    pendingSimulationRequest,
+    setPendingSimulationRequest,
+  ] = useState(null);
+
+  useEffect(() => {
+    indexRef.current = index;
+  }, [index]);
+
+  /*
+   * =====================================================
+   * RUN SIMULATION FROM PLAN / SUBPLAN MENU
+   * =====================================================
+   *
+   * Reuse this single Simulation engine.
+   */
+  useEffect(() => {
+    const requestedPlanId =
+      simulationRequest?.planId;
+
+    if (!requestedPlanId) {
+      return;
+    }
+
+    const planId =
+      String(requestedPlanId);
+
+    const requestedSubPlanId =
+      simulationRequest?.subPlanId != null
+        ? String(simulationRequest.subPlanId)
+        : null;
+
+    const planExists =
+      plans.some(
+        (plan) =>
+          String(plan?.id) === planId,
+      );
+
+    if (!planExists) {
+      onSimulationRequestApplied?.();
+      return;
+    }
+
+    setPlaying(false);
+    clearTimeout(intervalRef.current);
+
+    indexRef.current = 0;
+    setIndex(0);
+
+    setSelectedPlanIds([planId]);
+
+    if (requestedSubPlanId) {
+      setSelectedSubPlanIds([
+        requestedSubPlanId,
+      ]);
+    } else {
+      const planSubPlanIds =
+        subPlans
+          .filter(
+            (subPlan) =>
+              String(
+                subPlan?.planId ??
+                  subPlan?.parentPlanId ??
+                  "",
+              ) === planId,
+          )
+          .map(
+            (subPlan) =>
+              String(subPlan.id),
+          );
+
+      setSelectedSubPlanIds(
+        planSubPlanIds,
+      );
+    }
+
+    setStartDate(null);
+    setEndDate(null);
+
+    setPendingSimulationRequest({
+      planId,
+      subPlanId:
+        requestedSubPlanId,
+    });
+  }, [
+    simulationRequest,
+    plans,
+    subPlans,
+    onSimulationRequestApplied,
+  ]);
 
   /*
    * modelId và runtimeId đã được hydrate trong saga.
@@ -293,27 +418,39 @@ export default function Simulation() {
   }, []);
 
   useEffect(() => {
-    const validPlanIds = plans.map((plan) => String(plan.id));
-
-    setSelectedPlanIds((current) => {
-      if (!current.length) {
-        return validPlanIds;
-      }
-
-      const existingSelectedIds = current.filter((id) =>
-        validPlanIds.includes(String(id)),
+    const validPlanIds =
+      plans.map(
+        (plan) =>
+          String(plan.id),
       );
 
-      if (!existingSelectedIds.length) {
+    setSelectedPlanIds(
+      (current) => {
+        if (!current.length) {
+          return validPlanIds;
+        }
+
+        const existingSelectedIds =
+          current.filter(
+            (id) =>
+              validPlanIds.includes(
+                String(id),
+              ),
+          );
+
+        /*
+         * Preserve explicit selection, especially [Plan A]
+         * after Run Simulation is clicked from the Plan menu.
+         */
+        if (
+          existingSelectedIds.length
+        ) {
+          return existingSelectedIds;
+        }
+
         return validPlanIds;
-      }
-
-      const newPlanIds = validPlanIds.filter(
-        (id) => !existingSelectedIds.includes(id),
-      );
-
-      return [...existingSelectedIds, ...newPlanIds];
-    });
+      },
+    );
   }, [plans]);
 
   const availableSubPlans = useMemo(() => {
@@ -335,25 +472,31 @@ export default function Simulation() {
   // =====================================================
 
   useEffect(() => {
-    const validSubPlanIds = availableSubPlans.map((subPlan) =>
-      String(subPlan.id),
-    );
-
-    setSelectedSubPlanIds((current) => {
-      const existingSelectedIds = current.filter((id) =>
-        validSubPlanIds.includes(String(id)),
+    const validSubPlanIds =
+      availableSubPlans.map(
+        (subPlan) =>
+          String(subPlan.id),
       );
 
-      if (!existingSelectedIds.length) {
+    setSelectedSubPlanIds(
+      (current) => {
+        const existingSelectedIds =
+          current.filter(
+            (id) =>
+              validSubPlanIds.includes(
+                String(id),
+              ),
+          );
+
+        if (
+          existingSelectedIds.length
+        ) {
+          return existingSelectedIds;
+        }
+
         return validSubPlanIds;
-      }
-
-      const newSubPlanIds = validSubPlanIds.filter(
-        (id) => !existingSelectedIds.includes(id),
-      );
-
-      return [...existingSelectedIds, ...newSubPlanIds];
-    });
+      },
+    );
   }, [availableSubPlans]);
 
   // =====================================================
@@ -531,7 +674,7 @@ export default function Simulation() {
     setPlaying(false);
     setIndex(0);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(intervalRef.current);
   }, [selectedPlanIds, selectedSubPlanIds, startDate, endDate]);
 
   /*
@@ -543,7 +686,7 @@ export default function Simulation() {
       setIndex(0);
       setPlaying(false);
 
-      clearInterval(intervalRef.current);
+      clearTimeout(intervalRef.current);
 
       return;
     }
@@ -577,6 +720,25 @@ export default function Simulation() {
     }
 
     return tcapiRef.current;
+  }, []);
+
+
+  const enqueueViewerTask = useCallback((task) => {
+    const nextTask = viewerTaskRef.current
+      .catch(() => {
+        /*
+         * A failed previous task must not break the queue.
+         */
+      })
+      .then(task);
+
+    /*
+     * Keep a non-rejecting tail in the queue, while still returning
+     * the original Promise so the caller can await/catch its error.
+     */
+    viewerTaskRef.current = nextTask.catch(() => {});
+
+    return nextTask;
   }, []);
 
   /*
@@ -712,7 +874,7 @@ export default function Simulation() {
         },
       );
     },
-    [getTcapi, subPlans, transparency],
+    [getTcapi, subPlans],
   );
 
   const colorAccumulatedObjects = useCallback(
@@ -879,72 +1041,95 @@ export default function Simulation() {
 
       setTransparency(nextTransparency);
 
-      /*
-       * Chưa bắt đầu simulation:
-       * chỉ lưu giá trị slider, không thay đổi viewer.
-       */
-      if (!simulationActivatedRef.current) {
+      if (
+        !simulationActivatedRef.current ||
+        !items.length ||
+        index < 0 ||
+        index >= items.length
+      ) {
         return;
       }
 
-      if (!items.length || index < 0 || index >= items.length) {
-        return;
-      }
+      /*
+       * Only the newest slider value needs to be applied.
+       * Older queued transparency changes are skipped.
+       */
+      const taskId =
+        ++transparencyTaskIdRef.current;
 
       try {
-        const tcapi = await getTcapi();
+        await enqueueViewerTask(async () => {
+          if (
+            taskId !==
+            transparencyTaskIdRef.current
+          ) {
+            return;
+          }
 
-        const accumulatedObjects =
-          buildAccumulatedObjects(index);
+          const tcapi = await getTcapi();
 
-        if (nextTransparency > 0) {
+          const accumulatedObjects =
+            buildAccumulatedObjects(index);
+
           /*
-           * Trimble viewer.setOpacity() nhận trực tiếp
-           * transparency từ 0 -> 100.
+           * Preserve the current behavior used by this version:
+           * completed objects are updated individually.
            *
-           * 0   = không transparency
-           * 100 = transparency tối đa
+           * NOTE:
+           * setObjectState.opacity is intentionally left using the
+           * existing 0..1 calculation from this working version.
+           * viewer.setOpacity() below is a different API and uses 0..100.
            */
-          await tcapi.viewer.setOpacity(
-            nextTransparency,
+          const opacity = Math.max(
+            0,
+            Math.min(
+              1,
+              1 -
+                nextTransparency /
+                  100,
+            ),
           );
 
-          /*
-           * Khi background model được hiển thị,
-           * đổi toàn bộ model sang Light Grey.
-           */
-          await tcapi.viewer.setObjectState(
-            undefined,
-            {
-              color: {
-                r: 211,
-                g: 211,
-                b: 211,
+          for (
+            const group of
+            accumulatedObjects
+          ) {
+            if (
+              group?.modelId == null ||
+              !Array.isArray(
+                group.entityIds,
+              ) ||
+              !group.entityIds.length
+            ) {
+              continue;
+            }
+
+            if (
+              taskId !==
+              transparencyTaskIdRef.current
+            ) {
+              return;
+            }
+
+            await tcapi.viewer.setObjectState(
+              {
+                modelObjectIds: [
+                  {
+                    modelId:
+                      group.modelId,
+
+                    objectRuntimeIds:
+                      group.entityIds,
+                  },
+                ],
               },
-              visible: true,
-            },
-          );
-
-          /*
-           * Các object đã chạy simulation
-           * trả lại màu SubPlan và opacity 100%.
-           */
-          await colorAccumulatedObjects(index);
-        } else {
-          /*
-           * 0% transparency:
-           * reset global transparency và chỉ isolate
-           * các object đã chạy simulation.
-           */
-          await tcapi.viewer.setOpacity(0);
-
-          await isolateObjectsInTrimble(
-            accumulatedObjects,
-            showGrid,
-          );
-
-          await colorAccumulatedObjects(index);
-        }
+              {
+                opacity,
+                visible: true,
+              },
+            );
+          }
+        });
       } catch (error) {
         console.error(
           "Update simulation transparency failed:",
@@ -955,11 +1140,9 @@ export default function Simulation() {
     [
       items.length,
       index,
-      showGrid,
       getTcapi,
       buildAccumulatedObjects,
-      isolateObjectsInTrimble,
-      colorAccumulatedObjects,
+      enqueueViewerTask,
     ],
   );
 
@@ -973,7 +1156,13 @@ export default function Simulation() {
         return;
       }
 
-      const safeIndex = Math.max(0, Math.min(newIndex, items.length - 1));
+      const safeIndex = Math.max(
+        0,
+        Math.min(
+          newIndex,
+          items.length - 1,
+        ),
+      );
 
       const item = items[safeIndex];
 
@@ -981,85 +1170,112 @@ export default function Simulation() {
         return;
       }
 
-      /*
-       * Simulation chỉ active khi người dùng thực sự
-       * tương tác với Play/Next/Previous/Slider.
-       */
-      simulationActivatedRef.current = true;
+      simulationActivatedRef.current =
+        true;
 
+      /*
+       * Keep both React state and the async playback ref in sync.
+       */
+      indexRef.current = safeIndex;
       setIndex(safeIndex);
 
       dispatch(
         SetActiveSimulationItem({
-          planId: String(item.planId),
+          planId:
+            String(item.planId),
 
-          subPlanId: String(item.subPlanId),
+          subPlanId:
+            String(item.subPlanId),
 
-          modelId: item.modelId,
+          modelId:
+            item.modelId,
 
-          id: String(item.externalId ?? item.objectId ?? ""),
+          id:
+            String(
+              item.externalId ??
+                item.objectId ??
+                "",
+            ),
 
-          objectId: item.externalId ?? item.objectId ?? null,
+          objectId:
+            item.externalId ??
+            item.objectId ??
+            null,
 
-          runtimeId: item.runtimeId,
+          runtimeId:
+            item.runtimeId,
         }),
       );
 
       try {
-        const accumulatedObjects = buildAccumulatedObjects(safeIndex);
-        const tcapi = await getTcapi();
         /*
-         * Transparency > 0:
-         * - Show full model.
-         * - Background = Light Grey.
-         * - viewer.setOpacity receives 0 -> 100 directly.
-         *
-         * Transparency = 0:
-         * - Reset global transparency.
-         * - Only isolate accumulated simulation objects.
+         * Every Viewer mutation for this simulation step is executed
+         * inside one queued task. This prevents another goToIndex(),
+         * transparency change or Grid change from interleaving with it.
          */
-        if (transparency > 0) {
-          await tcapi.viewer.setOpacity(
-            transparency,
-          );
+        await enqueueViewerTask(
+          async () => {
+            const accumulatedObjects =
+              buildAccumulatedObjects(
+                safeIndex,
+              );
 
-          await tcapi.viewer.setObjectState(
-            undefined,
-            {
-              color: {
-                r: 211,
-                g: 211,
-                b: 211,
-              },
-              visible: true,
-            },
-          );
-        } else {
-          await tcapi.viewer.setOpacity(0);
+            const tcapi =
+              await getTcapi();
 
-          await isolateObjectsInTrimble(
-            accumulatedObjects,
-            showGrid,
-          );
-        }
+            /*
+             * viewer.setOpacity() returns Promise<void>.
+             * Await it before changing object state.
+             *
+             * This working approach is intentionally preserved:
+             * - transparency > 0: global viewer transparency + Light Grey
+             * - transparency = 0: isolate accumulated objects
+             */
+            if (transparency > 0) {
+              await tcapi.viewer.setOpacity(
+                transparency,
+              );
 
-        await gotoCamera(
-          item,
-          accumulatedObjects,
-        );
+              await tcapi.viewer.setObjectState(
+                undefined,
+                {
+                  color: {
+                    r: 211,
+                    g: 211,
+                    b: 211,
+                  },
+                },
+              );
+            } else {
+              await isolateObjectsInTrimble(
+                accumulatedObjects,
+                showGrid,
+              );
+            }
 
-        /*
-         * Restore SubPlan color for all completed objects.
-         */
-        await colorAccumulatedObjects(
-          safeIndex,
-        );
+            // await gotoCamera(
+            //   item,
+            //   accumulatedObjects,
+            // );
 
-        await selectObjectInTrimble(
-          item,
+            /*
+             * This runs only after setOpacity/setObjectState/isolate
+             * has resolved.
+             */
+            await colorAccumulatedObjects(
+              safeIndex,
+            );
+
+            await selectObjectInTrimble(
+              item,
+            );
+          },
         );
       } catch (error) {
-        console.error("Simulation viewer error:", error);
+        console.error(
+          "Simulation viewer error:",
+          error,
+        );
       }
     },
     [
@@ -1068,6 +1284,7 @@ export default function Simulation() {
       showGrid,
       transparency,
       getTcapi,
+      enqueueViewerTask,
       buildAccumulatedObjects,
       isolateObjectsInTrimble,
       gotoCamera,
@@ -1075,6 +1292,95 @@ export default function Simulation() {
       selectObjectInTrimble,
     ],
   );
+
+  /*
+   * =====================================================
+   * AUTO START MENU SIMULATION
+   * =====================================================
+   */
+  useEffect(() => {
+    if (!pendingSimulationRequest) {
+      return;
+    }
+
+    if (!items.length) {
+      return;
+    }
+
+    const requestedPlanId =
+      String(
+        pendingSimulationRequest.planId,
+      );
+
+    const requestedSubPlanId =
+      pendingSimulationRequest.subPlanId != null
+        ? String(
+            pendingSimulationRequest.subPlanId,
+          )
+        : null;
+
+    const itemsMatchRequest =
+      items.every((item) => {
+        if (
+          String(item?.planId) !==
+          requestedPlanId
+        ) {
+          return false;
+        }
+
+        if (
+          requestedSubPlanId &&
+          String(item?.subPlanId) !==
+            requestedSubPlanId
+        ) {
+          return false;
+        }
+
+        return true;
+      });
+
+    if (!itemsMatchRequest) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const startSimulation =
+      async () => {
+        try {
+          await goToIndex(0);
+
+          if (cancelled) {
+            return;
+          }
+
+          setPlaying(true);
+          setPendingSimulationRequest(null);
+          onSimulationRequestApplied?.();
+        } catch (error) {
+          console.error(
+            "Start menu simulation failed:",
+            error,
+          );
+
+          if (!cancelled) {
+            setPendingSimulationRequest(null);
+            onSimulationRequestApplied?.();
+          }
+        }
+      };
+
+    startSimulation();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pendingSimulationRequest,
+    items,
+    goToIndex,
+    onSimulationRequestApplied,
+  ]);
 
   // =====================================================
   // SHOW/HIDE GRID
@@ -1084,47 +1390,73 @@ export default function Simulation() {
     async (checked) => {
       setShowGrid(checked);
 
-      /*
-       * Nếu người dùng chưa chạy simulation thì chỉ cập nhật
-       * state của Switch, không isolate model.
-       */
-      if (!simulationActivatedRef.current) {
+      if (
+        !simulationActivatedRef.current
+      ) {
         return;
       }
 
-      if (!items.length || index < 0 || index >= items.length) {
+      if (
+        !items.length ||
+        index < 0 ||
+        index >= items.length
+      ) {
         return;
       }
 
       try {
-        const accumulatedObjects = buildAccumulatedObjects(index);
+        await enqueueViewerTask(
+          async () => {
+            const accumulatedObjects =
+              buildAccumulatedObjects(
+                index,
+              );
 
-        /*
-         * Truyền checked trực tiếp vì setShowGrid là async.
-         */
-        await isolateObjectsInTrimble(accumulatedObjects, checked);
+            await isolateObjectsInTrimble(
+              accumulatedObjects,
+              checked,
+            );
+          },
+        );
       } catch (error) {
-        console.error("Update grid visibility error:", error);
+        console.error(
+          "Update grid visibility error:",
+          error,
+        );
       }
     },
-    [items.length, index, buildAccumulatedObjects, isolateObjectsInTrimble],
+    [
+      items.length,
+      index,
+      enqueueViewerTask,
+      buildAccumulatedObjects,
+      isolateObjectsInTrimble,
+    ],
   );
 
-  const next = useCallback(() => {
+  const next = useCallback(async () => {
     setPlaying(false);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(
+      intervalRef.current,
+    );
 
-    goToIndex(index + 1);
-  }, [index, goToIndex]);
+    await goToIndex(
+      indexRef.current + 1,
+    );
+  }, [goToIndex]);
 
-  const prev = useCallback(() => {
+  const prev = useCallback(async () => {
     setPlaying(false);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(
+      intervalRef.current,
+    );
 
-    goToIndex(index - 1);
-  }, [index, goToIndex]);
+    await goToIndex(
+      indexRef.current - 1,
+    );
+  }, [goToIndex]);
 
   const togglePlay = useCallback(async () => {
     if (!items.length) {
@@ -1147,58 +1479,118 @@ export default function Simulation() {
   // =====================================================
 
   useEffect(() => {
-    if (!playing || !items.length) {
-      clearInterval(intervalRef.current);
+    if (
+      !playing ||
+      !items.length
+    ) {
+      clearTimeout(
+        intervalRef.current,
+      );
 
       return;
     }
 
-    intervalRef.current = setInterval(() => {
-      const nextIndex = index + 1;
+    let cancelled = false;
 
-      if (nextIndex >= items.length) {
-        clearInterval(intervalRef.current);
+    const scheduleNext =
+      () => {
+        clearTimeout(
+          intervalRef.current,
+        );
 
-        setPlaying(false);
+        intervalRef.current =
+          setTimeout(
+            async () => {
+              if (cancelled) {
+                return;
+              }
 
-        return;
-      }
+              const nextIndex =
+                indexRef.current + 1;
 
-      goToIndex(nextIndex);
-    }, delay);
+              if (
+                nextIndex >=
+                items.length
+              ) {
+                setPlaying(false);
+
+                return;
+              }
+
+              /*
+               * Wait for the complete Viewer task before scheduling
+               * the next simulation step. No async overlap.
+               */
+              await goToIndex(
+                nextIndex,
+              );
+
+              if (cancelled) {
+                return;
+              }
+
+              scheduleNext();
+            },
+            delay,
+          );
+      };
+
+    scheduleNext();
 
     return () => {
-      clearInterval(intervalRef.current);
+      cancelled = true;
+
+      clearTimeout(
+        intervalRef.current,
+      );
     };
-  }, [playing, delay, index, items.length, goToIndex]);
+  }, [
+    playing,
+    delay,
+    items.length,
+    goToIndex,
+  ]);
 
   useEffect(() => {
     return () => {
-      clearInterval(intervalRef.current);
+      clearTimeout(
+        intervalRef.current,
+      );
 
-      const tcapi = tcapiRef.current;
+      const tcapi =
+        tcapiRef.current;
 
       if (!tcapi) {
         return;
       }
 
-      Promise.all([
-        tcapi.viewer.setOpacity(0),
+      /*
+       * Append reset after all pending viewer mutations.
+       * This avoids an older queued task overwriting the cleanup reset.
+       */
+      viewerTaskRef.current = viewerTaskRef.current
+        .catch(() => {})
+        .then(async () => {
+          try {
+            await tcapi.viewer.setOpacity(
+              0,
+            );
 
-        tcapi.viewer.setObjectState(
-          undefined,
-          {
-            visible: "reset",
-            color: "reset",
-            opacity: 100,
-          },
-        ),
-      ]).catch((error) => {
-        console.error(
-          "Reset simulation viewer state failed:",
-          error,
-        );
-      });
+            await tcapi.viewer.setObjectState(
+              undefined,
+              {
+                visible: "reset",
+                color: "reset",
+                opacity: 1,
+              },
+            );
+          } catch (error) {
+            console.error(
+              "Reset simulation viewer state failed:",
+              error,
+            );
+          }
+        });
     };
   }, []);
 
@@ -1214,7 +1606,7 @@ export default function Simulation() {
             onClick={() => {
               setPlaying(false);
 
-              clearInterval(intervalRef.current);
+              clearTimeout(intervalRef.current);
 
               goToIndex(itemIndex);
             }}
@@ -1240,25 +1632,92 @@ export default function Simulation() {
     setPlaying(false);
     setIndex(0);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(intervalRef.current);
 
-    setSelectedPlanIds(values || []);
+    const nextValues = Array.isArray(values)
+      ? values.map(String)
+      : [];
+
+    /*
+     * "All Plans" selects every Plan ID.
+     * The special value itself is never stored in state.
+     */
+    if (
+      nextValues.includes(
+        ALL_PLANS_VALUE,
+      )
+    ) {
+      const allPlanIds =
+        plans.map(
+          (plan) =>
+            String(plan.id),
+        );
+
+      setSelectedPlanIds(
+        allPlanIds,
+      );
+
+      /*
+       * Selecting all Plans should also make all SubPlans
+       * available and selected.
+       */
+      const allSubPlanIds =
+        subPlans.map(
+          (subPlan) =>
+            String(subPlan.id),
+        );
+
+      setSelectedSubPlanIds(
+        allSubPlanIds,
+      );
+
+      return;
+    }
+
+    setSelectedPlanIds(
+      nextValues,
+    );
   };
 
   const handleSubPlanChange = (values) => {
     setPlaying(false);
     setIndex(0);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(intervalRef.current);
 
-    setSelectedSubPlanIds(values || []);
+    const nextValues = Array.isArray(values)
+      ? values.map(String)
+      : [];
+
+    /*
+     * "All Sub Plans" selects every SubPlan that is currently
+     * available under the selected Plans.
+     */
+    if (
+      nextValues.includes(
+        ALL_SUBPLANS_VALUE,
+      )
+    ) {
+      setSelectedSubPlanIds(
+        availableSubPlans.map(
+          (subPlan) =>
+            String(subPlan.id),
+        ),
+      );
+
+      return;
+    }
+
+    setSelectedSubPlanIds(
+      nextValues,
+    );
   };
 
   const handleStartDateChange = (date) => {
     setPlaying(false);
     setIndex(0);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(intervalRef.current);
 
     setStartDate(date);
 
@@ -1271,7 +1730,7 @@ export default function Simulation() {
     setPlaying(false);
     setIndex(0);
 
-    clearInterval(intervalRef.current);
+    clearTimeout(intervalRef.current);
 
     setEndDate(date);
 
@@ -1325,11 +1784,28 @@ export default function Simulation() {
               flex: 1,
               minWidth: 0,
             }}
-            options={plans.map((plan) => ({
-              value: String(plan.id),
+            options={[
+              {
+                value:
+                  ALL_PLANS_VALUE,
 
-              label: plan.name || "Unnamed Plan",
-            }))}
+                label:
+                  "All Plans",
+              },
+
+              ...plans.map(
+                (plan) => ({
+                  value:
+                    String(
+                      plan.id,
+                    ),
+
+                  label:
+                    plan.name ||
+                    "Unnamed Plan",
+                }),
+              ),
+            ]}
           />
 
           <Tooltip title={showGrid ? "Hide Grid" : "Show Grid"}>
@@ -1362,25 +1838,52 @@ export default function Simulation() {
             style={{
               width: "100%",
             }}
-            options={availableSubPlans.map((subPlan) => {
-              const subPlanPlanId = subPlan.planId ?? subPlan.parentPlanId;
+            options={[
+              {
+                value:
+                  ALL_SUBPLANS_VALUE,
 
-              const parentPlan = plans.find(
-                (plan) => String(plan.id) === String(subPlanPlanId),
-              );
+                label:
+                  "All Sub Plans",
+              },
 
-              const subPlanName = subPlan.name || "Unnamed Sub Plan";
+              ...availableSubPlans.map(
+                (subPlan) => {
+                  const subPlanPlanId =
+                    subPlan.planId ??
+                    subPlan.parentPlanId;
 
-              const label = parentPlan?.name
-                ? `${subPlanName} (${parentPlan.name})`
-                : subPlanName;
+                  const parentPlan =
+                    plans.find(
+                      (plan) =>
+                        String(
+                          plan.id,
+                        ) ===
+                        String(
+                          subPlanPlanId,
+                        ),
+                    );
 
-              return {
-                value: String(subPlan.id),
+                  const subPlanName =
+                    subPlan.name ||
+                    "Unnamed Sub Plan";
 
-                label,
-              };
-            })}
+                  const label =
+                    parentPlan?.name
+                      ? `${subPlanName} (${parentPlan.name})`
+                      : subPlanName;
+
+                  return {
+                    value:
+                      String(
+                        subPlan.id,
+                      ),
+
+                    label,
+                  };
+                },
+              ),
+            ]}
           />
         </div>
 
@@ -1490,7 +1993,7 @@ export default function Simulation() {
 
               setPlaying(false);
 
-              clearInterval(intervalRef.current);
+              clearTimeout(intervalRef.current);
 
               goToIndex(nearestIndex);
             }}

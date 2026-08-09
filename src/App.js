@@ -14,6 +14,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import dayjs from "dayjs";
 
 import { useDispatch, useSelector } from "react-redux";
 
@@ -116,6 +117,10 @@ export default function App() {
     (state) => state.sequence?.refreshModelsError || "",
   );
 
+  const sequenceError = useSelector(
+    (state) => state.sequence?.error || null,
+  );
+
   const [projectId, setProjectId] = useState("");
 
   const [projectName, setProjectName] = useState("");
@@ -123,6 +128,17 @@ export default function App() {
   const [trimbleUser, setTrimbleUser] = useState(null);
 
   const [loadedModels, setLoadedModels] = useState([]);
+
+  /*
+   * One-shot command sent from the Plan menu to the existing
+   * Simulation component.
+   *
+   * requestId makes repeated clicks on the same Plan trigger again.
+   */
+  const [
+    simulationRequest,
+    setSimulationRequest,
+  ] = useState(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -142,6 +158,27 @@ export default function App() {
   const isViewer = userRole === "viewer";
 
   const isFree = trimbleUser?.isFree === true || userRole === "free";
+
+  const isTrial =
+    String(trimbleUser?.licenseType || "")
+      .trim()
+      .toLowerCase() === "trial";
+
+  const trialDaysRemaining = useMemo(() => {
+    if (!isTrial || !trimbleUser?.endDate) {
+      return null;
+    }
+
+    const today = dayjs().startOf("day");
+
+    const endDate = dayjs(trimbleUser.endDate).startOf("day");
+
+    if (!endDate.isValid()) {
+      return null;
+    }
+
+    return Math.max(0, endDate.diff(today, "day") + 1);
+  }, [isTrial, trimbleUser?.endDate]);
 
   const modelLoaded = loadedModels.length > 0;
 
@@ -362,6 +399,44 @@ export default function App() {
     return currentLoadedModels.length;
   }, [dispatch, refreshingModels]);
 
+  const handleSimulationRequest = useCallback(
+    (value) => {
+      if (isFree || !value) {
+        return;
+      }
+
+      const planId =
+        value?.planId ??
+        value?.id ??
+        null;
+
+      const subPlanId =
+        value?.subPlanId ??
+        null;
+
+      if (!planId) {
+        return;
+      }
+
+      setSimulationRequest({
+        planId: String(planId),
+
+        subPlanId:
+          subPlanId != null
+            ? String(subPlanId)
+            : null,
+
+        requestId: Date.now(),
+      });
+    },
+    [isFree],
+  );
+
+  const handleSimulationRequestApplied =
+    useCallback(() => {
+      setSimulationRequest(null);
+    }, []);
+
   if (loading) {
     return (
       <Layout
@@ -408,7 +483,30 @@ export default function App() {
       </Layout>
     );
   }
-
+  if (sequenceError?.code === "TRIAL_PROJECT_LIMIT") {
+    return (
+      <Result
+        status="403"
+        title="Trial Project Limit"
+        subTitle={sequenceError.message}
+        extra={
+          <Button
+            type="primary"
+            icon={<ShoppingCartOutlined />}
+            onClick={() => {
+              window.open(
+                "https://shop.ibimconsulting.com.au/tools/sequnece-planner",
+                "_blank",
+                "noopener,noreferrer",
+              );
+            }}
+          >
+            Purchase License
+          </Button>
+        }
+      />
+    );
+  }
   /*
    * Additional render protection.
    */
@@ -435,7 +533,39 @@ export default function App() {
         refreshingModels={refreshingModels}
         refreshModelsError={refreshModelsError}
       />
-
+      {isTrial && !isFree && (
+        <Alert
+          type="warning"
+          showIcon
+          banner
+          message={
+            <span>
+              You are using a <strong>Trial License</strong>.
+              {trialDaysRemaining != null && (
+                <>
+                  {" "}
+                  You have{" "}
+                  <strong>
+                    {trialDaysRemaining}{" "}
+                    {trialDaysRemaining === 1 ? "day" : "days"}
+                  </strong>{" "}
+                  remaining.
+                </>
+              )}{" "}
+              <a
+                href="https://shop.ibimconsulting.com.au/tools/sequnece-planner"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  fontWeight: 600,
+                }}
+              >
+                Purchase License
+              </a>
+            </span>
+          }
+        />
+      )}
       {isFree && (
         <Alert
           type="warning"
@@ -461,7 +591,7 @@ export default function App() {
         />
       )}
 
-      {isViewer && !isFree && (
+      {isViewer && !isFree && !isTrial && (
         <Alert
           type="info"
           showIcon
@@ -488,6 +618,9 @@ export default function App() {
           isFree={isFree}
           readOnly={!isOwner}
           loadedModelIds={loadedModelIds}
+          onSimulation={
+            handleSimulationRequest
+          }
         />
       </Content>
 
@@ -499,7 +632,19 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        {!isFree && <Simulation loadedModelIds={loadedModelIds} />}
+        {!isFree && (
+          <Simulation
+            loadedModelIds={
+              loadedModelIds
+            }
+            simulationRequest={
+              simulationRequest
+            }
+            onSimulationPlanApplied={
+              handleSimulationRequestApplied
+            }
+          />
+        )}
       </Footer>
     </Layout>
   );

@@ -50,6 +50,7 @@ import * as actionType from "./actionTypes";
 
 import {
   getPlansByProject,
+  getExistingPlanProjectId,
   createPlan,
   updatePlan,
   deletePlan,
@@ -101,12 +102,52 @@ function* getPlansSaga(action) {
       throw new Error("Trimble project ID is required.");
     }
 
+    const currentProjectId = String(projectId);
+
+    /*
+     * =========================================
+     * TRIAL PROJECT LIMIT
+     * =========================================
+     */
+    if (currentUser?.isTrial === true) {
+      /*
+       * Kiểm tra xem hệ thống đã có Plan
+       * thuộc project nào chưa.
+       */
+      const existingProjectId = yield call(getExistingPlanProjectId);
+
+      /*
+       * Có Plan rồi nhưng thuộc project khác.
+       */
+      if (existingProjectId && String(existingProjectId) !== currentProjectId) {
+        yield put(
+          GetPlanFailure({
+            code: "TRIAL_PROJECT_LIMIT",
+
+            message:
+              "The Trial License is limited to one Trimble Connect project. " +
+              "Please purchase a license to use Sequence Planner on another project.",
+          }),
+        );
+
+        return;
+      }
+    }
+
+    /*
+     * =========================================
+     * LOAD DATA
+     * =========================================
+     */
+
     const tcapi = yield call(WorkspaceAPI.connect, window.parent);
 
     const [plans, subPlans, sequenceObjectRows] = yield all([
-      call(getPlansByProject, projectId),
-      call(getSubPlansByProject, projectId),
-      call(getSequenceObjectsByProject, projectId),
+      call(getPlansByProject, currentProjectId),
+
+      call(getSubPlansByProject, currentProjectId),
+
+      call(getSequenceObjectsByProject, currentProjectId),
     ]);
 
     const hydratedObjects = yield call(hydrateSequenceObjects, {
@@ -141,7 +182,9 @@ function* getPlansSaga(action) {
       objects: (objectsBySubPlan.get(String(subPlan.id)) || []).map(
         (object) => ({
           ...object,
+
           planId: subPlan.planId,
+
           subPlanId: subPlan.id,
         }),
       ),
@@ -149,7 +192,7 @@ function* getPlansSaga(action) {
 
     yield put(
       GetPlanSuccess({
-        projectId: String(projectId),
+        projectId: currentProjectId,
 
         projectName,
 
@@ -166,7 +209,13 @@ function* getPlansSaga(action) {
     console.error("Failed to load sequencing data:", error);
 
     yield put(
-      GetPlanFailure(error?.message || "Failed to load sequencing data."),
+      GetPlanFailure({
+        code: "TRIAL_PROJECT_LIMIT",
+
+        message:
+          "The Trial License is limited to one Trimble Connect project. " +
+          "Please purchase a license to use Sequence Planner on another project.",
+      }),
     );
   }
 }

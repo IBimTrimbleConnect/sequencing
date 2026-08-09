@@ -137,6 +137,7 @@ const SubPlanCollapse = ({
   isFree = false,
   readOnly = false,
   loadedModelIds = [],
+  onSimulation,
 }) => {
   const dispatch = useDispatch();
   const { message } = App.useApp();
@@ -1361,36 +1362,15 @@ const SubPlanCollapse = ({
     };
 
 
-  const DATE_FORMATS = ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "YYYY/MM/DD"];
-
-  const parseDate = (value) => {
-    if (!value) {
-      return null;
-    }
-
-    if (dayjs.isDayjs(value)) {
-      return value.isValid() ? value : null;
-    }
-
-    const strictDate = dayjs(value, DATE_FORMATS, true);
-
-    if (strictDate.isValid()) {
-      return strictDate;
-    }
-
-    const normalDate = dayjs(value);
-
-    return normalDate.isValid() ? normalDate : null;
-  };
-
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  const handleSimulation = async (subPlan) => {
+  /*
+   * SubPlan simulation uses the shared Simulation component.
+   * No direct Trimble Viewer animation is executed here.
+   */
+  const handleSimulation = (subPlan) => {
     if (isFree) {
       message.warning(
         "Simulation is not available with the Free License.",
       );
-
       return;
     }
 
@@ -1398,224 +1378,41 @@ const SubPlanCollapse = ({
       return;
     }
 
-    try {
-      const tcapi =
-        await WorkspaceAPI.connect(
-          window.parent,
-        );
+    onSimulation?.({
+      planId: String(plan.id),
+      subPlanId: String(subPlan.id),
+    });
+  };
 
-      const subPlanId =
-        String(subPlan.id);
+  const DATE_FORMATS = [
+    "DD-MM-YYYY",
+    "DD/MM/YYYY",
+    "YYYY-MM-DD",
+    "YYYY/MM/DD",
+  ];
 
-      const items = [];
+  const parseDate = (value) => {
+    if (!value) return null;
 
-      for (
-        const group of
-        sequenceObjects
-      ) {
-        const groupSubPlanId =
-          String(
-            group?.subPlanId ??
-              "",
-          );
-
-        for (
-          const object of
-          group?.objects || []
-        ) {
-          const objectSubPlanId =
-            String(
-              object?.subPlanId ??
-                groupSubPlanId,
-            );
-
-          if (
-            objectSubPlanId !==
-            subPlanId
-          ) {
-            continue;
-          }
-
-          const modelId =
-            object?.modelId;
-
-          const runtimeId =
-            getRuntimeId(
-              object,
-            );
-
-          const parsedDate =
-            parseDate(
-              object?.assignedDate ||
-                object?.date,
-            );
-
-          if (
-            modelId == null ||
-            runtimeId == null ||
-            !parsedDate ||
-            object?.objectAvailable ===
-              false
-          ) {
-            continue;
-          }
-
-          items.push({
-            modelId,
-            runtimeId,
-
-            externalId:
-              getExternalId(
-                object,
-              ),
-
-            simulationTime:
-              parsedDate.valueOf(),
-
-            camera:
-              object?.camera,
-          });
-        }
-      }
-
-      if (!items.length) {
-        message.warning(
-          "No available objects found for simulation.",
-        );
-
-        return;
-      }
-
-      items.sort(
-        (first, second) =>
-          first.simulationTime -
-          second.simulationTime,
-      );
-
-      const color =
-        normalizeRgbColor(
-          subPlan.color,
-        );
-
-      const accumulatedModelMap =
-        new Map();
-
-      for (
-        let index = 0;
-        index < items.length;
-        index += 1
-      ) {
-        const item =
-          items[index];
-
-        const modelKey =
-          String(
-            item.modelId,
-          );
-
-        if (
-          !accumulatedModelMap.has(
-            modelKey,
-          )
-        ) {
-          accumulatedModelMap.set(
-            modelKey,
-            {
-              modelId:
-                item.modelId,
-
-              entityIds:
-                new Set(),
-            },
-          );
-        }
-
-        accumulatedModelMap
-          .get(modelKey)
-          .entityIds.add(
-            item.runtimeId,
-          );
-
-        const accumulatedObjects = [
-          ...accumulatedModelMap.values(),
-        ].map((group) => ({
-          modelId:
-            group.modelId,
-
-          entityIds: [
-            ...group.entityIds,
-          ],
-        }));
-
-        await tcapi.viewer.isolateEntities(
-          accumulatedObjects,
-        );
-
-        if (color) {
-          await tcapi.viewer.setObjectState(
-            {
-              modelObjectIds: [
-                {
-                  modelId:
-                    item.modelId,
-
-                  objectRuntimeIds: [
-                    item.runtimeId,
-                  ],
-                },
-              ],
-            },
-            {
-              color,
-              visible: true,
-              opacity: 1,
-            },
-          );
-        }
-
-        await tcapi.viewer.setSelection(
-          {
-            modelObjectIds: [
-              {
-                modelId:
-                  item.modelId,
-
-                objectRuntimeIds: [
-                  item.runtimeId,
-                ],
-              },
-            ],
-          },
-          "set",
-        );
-
-        if (item.camera) {
-          await tcapi.viewer.setCamera(
-            item.camera,
-            {
-              animationTime:
-                1000,
-            },
-          );
-        }
-
-        if (
-          index <
-          items.length - 1
-        ) {
-          await sleep(200);
-        }
-      }
-    } catch (error) {
-      console.error(
-        "handleSimulation error:",
-        error,
-      );
-
-      message.error(
-        "Simulation failed.",
-      );
+    if (dayjs.isDayjs(value)) {
+      return value.isValid() ? value : null;
     }
+
+    const strictDate = dayjs(
+      value,
+      DATE_FORMATS,
+      true,
+    );
+
+    if (strictDate.isValid()) {
+      return strictDate;
+    }
+
+    const normalDate = dayjs(value);
+
+    return normalDate.isValid()
+      ? normalDate
+      : null;
   };
 
   const handleSortByDate = (subPlan) => {
@@ -1907,49 +1704,53 @@ const SubPlanCollapse = ({
           plan={subPlan}
           objectCount={objectCount}
           isOwner={canEdit}
-          onEdit={canEdit ? () => handleEdit(subPlan) : undefined}
-          onDelete={
-            canEdit
-              ? (item) => {
-                  if (!item?.id) {
-                    return;
-                  }
-
-                  dispatch(
-                    DeleteSubPlanRequest({
-                      planId: plan.id,
-                      subPlanId: item.id,
-                    }),
-                  );
-                }
-              : undefined
-          }
-          onAssignObject={
-            canEdit
-              ? () =>
-                  openAssignDateModal(
-                    subPlan,
-                    "manual",
-                  )
-              : undefined
-          }
-          onAutoAssign={
-            canEdit
-              ? () =>
-                  openAssignDateModal(
-                    subPlan,
-                    "auto",
-                  )
-              : undefined
-          }
+          isViewer={isViewer}
           isFree={isFree}
-          onSimulation={
-            !isFree
-              ? () => handleSimulation(subPlan)
-              : undefined
-          }
-          onSortByDate={canEdit ? () => handleSortByDate(subPlan) : undefined}
-          onHighlightObject={() => handleHighlightObject(subPlan)}
+          onEdit={() => {
+            handleEdit(subPlan);
+          }}
+          onDelete={(item) => {
+            if (!item?.id) {
+              return;
+            }
+
+            /*
+             * SortableHeader disables this action for
+             * Viewer / Free, but keep a second permission
+             * guard here as well.
+             */
+            if (!canEdit) {
+              return;
+            }
+
+            dispatch(
+              DeleteSubPlanRequest({
+                planId: plan.id,
+                subPlanId: item.id,
+              }),
+            );
+          }}
+          onAssignObject={() => {
+            openAssignDateModal(
+              subPlan,
+              "manual",
+            );
+          }}
+          onAutoAssign={() => {
+            openAssignDateModal(
+              subPlan,
+              "auto",
+            );
+          }}
+          onSimulation={() => {
+            handleSimulation(subPlan);
+          }}
+          onSortByDate={() => {
+            handleSortByDate(subPlan);
+          }}
+          onHighlightObject={() => {
+            handleHighlightObject(subPlan);
+          }}
         />
       ),
 
