@@ -36,131 +36,312 @@ export async function getUsers() {
   return (data || []).map(mapUser);
 }
 
-export async function checkTrimbleUser(trimbleEmail) {
-  const email = String(trimbleEmail || "")
+const createFreeUser = ({
+  email,
+  sourceUser = null,
+  reason = "LICENSE_NOT_FOUND",
+}) => ({
+  /*
+   * Free user không tồn tại trong database.
+   */
+  id: null,
+
+  email,
+  trimbleEmail: email,
+
+  userName:
+    sourceUser?.userName || "",
+
+  companyName:
+    sourceUser?.companyName || "",
+
+  /*
+   * Đây chỉ là trạng thái runtime.
+   * Không được ghi vào trimble_users.
+   */
+  status: "Free",
+
+  role: "free",
+
+  licenseType: "Free",
+
+  startDate: null,
+  endDate: null,
+
+  trialCount:
+    Number(
+      sourceUser?.trialCount ?? 0,
+    ),
+
+  isOwner: false,
+  isViewer: false,
+  isFree: true,
+
+  freeReason: reason,
+});
+
+export async function checkTrimbleUser(
+  trimbleEmail,
+) {
+  const email = String(
+    trimbleEmail || "",
+  )
     .trim()
     .toLowerCase();
 
+  /*
+   * Không lấy được email từ Trimble Connect.
+   *
+   * Không thể cấp Free vì không biết
+   * người dùng hiện tại là ai.
+   */
   if (!email) {
     return {
       allowed: false,
-      reason: "Unable to retrieve the Trimble user email.",
+
+      reason:
+        "Unable to retrieve the Trimble user email.",
+
       user: null,
-      errorCode: "EMAIL_NOT_AVAILABLE",
+
+      errorCode:
+        "EMAIL_NOT_AVAILABLE",
     };
   }
 
-  const { data, error } = await supabase
+  const {
+    data,
+    error,
+  } = await supabase
     .from("trimble_users")
     .select("*")
-    .ilike("trimble_email", email)
+    .ilike(
+      "trimble_email",
+      email,
+    )
     .maybeSingle();
 
+  /*
+   * Database lỗi thì KHÔNG fallback Free.
+   *
+   * Nếu Supabase bị lỗi mạng mà tự động Free,
+   * user Owner/Viewer hợp lệ cũng sẽ bị
+   * chuyển thành Free.
+   */
   if (error) {
-    console.error("Check Trimble user failed:", error);
+    console.error(
+      "Check Trimble user failed:",
+      error,
+    );
 
     return {
       allowed: false,
-      reason: "Unable to verify your license. Please try again later.",
+
+      reason:
+        "Unable to verify your license. Please try again later.",
+
       user: null,
-      errorCode: "LICENSE_CHECK_FAILED",
+
+      errorCode:
+        "LICENSE_CHECK_FAILED",
     };
   }
 
   /*
-   * Email không tồn tại trong trimble_users:
-   * không cấp quyền Viewer mặc định.
+   * =====================================================
+   * USER KHÔNG TỒN TẠI
+   * =====================================================
+   *
+   * Không insert vào database.
+   * Tạo Free User chỉ ở runtime.
    */
   if (!data) {
     return {
-      allowed: false,
+      allowed: true,
 
-      reason:
-        `The account '${email}' does not have a valid license. ` +
-        "Please purchase a license to continue.",
+      reason: null,
 
-      user: null,
+      errorCode:
+        "FREE_LICENSE",
 
-      errorCode: "LICENSE_NOT_FOUND",
+      user:
+        createFreeUser({
+          email,
+
+          reason:
+            "LICENSE_NOT_FOUND",
+        }),
     };
   }
 
-  const user = mapUser(data);
+  const user =
+    mapUser(data);
 
-  const today = getLocalDateString();
+  const today =
+    getLocalDateString();
 
-  const normalizedStatus = String(user.status || "")
-    .trim()
-    .toLowerCase();
+  const normalizedStatus =
+    String(
+      user.status || "",
+    )
+      .trim()
+      .toLowerCase();
 
-  const normalizedRole = String(user.role || "")
-    .trim()
-    .toLowerCase();
+  const normalizedRole =
+    String(
+      user.role || "",
+    )
+      .trim()
+      .toLowerCase();
 
-  if (normalizedStatus !== "active") {
+  /*
+   * =====================================================
+   * LICENSE INACTIVE
+   * =====================================================
+   *
+   * Có thể coi giống license không còn hiệu lực
+   * và fallback về Free.
+   */
+  if (
+    normalizedStatus !==
+    "active"
+  ) {
     return {
-      allowed: false,
-      reason:
-        "Your license is inactive. Please purchase or renew your license.",
-      user,
-      errorCode: "LICENSE_INACTIVE",
-    };
-  }
+      allowed: true,
 
-  if (user.startDate && today < user.startDate) {
-    return {
-      allowed: false,
+      reason: null,
 
-      reason: `Your license will be activated on ${user.startDate}.`,
+      errorCode:
+        "FREE_LICENSE",
 
-      user,
+      user:
+        createFreeUser({
+          email,
 
-      errorCode: "LICENSE_NOT_STARTED",
-    };
-  }
+          sourceUser:
+            user,
 
-  if (user.endDate && today > user.endDate) {
-    return {
-      allowed: false,
-
-      reason:
-        `Your license expired on ${user.endDate}. ` +
-        "Please renew your license to continue.",
-
-      user,
-
-      errorCode: "LICENSE_EXPIRED",
+          reason:
+            "LICENSE_INACTIVE",
+        }),
     };
   }
 
   /*
-   * Chỉ chấp nhận các role hợp lệ.
+   * =====================================================
+   * LICENSE CHƯA BẮT ĐẦU
+   * =====================================================
+   *
+   * Mình giữ là không được access license trả phí.
+   *
+   * Nếu muốn vẫn cho Free thì cũng có thể
+   * đổi đoạn này sang createFreeUser().
    */
-  if (normalizedRole !== "owner" && normalizedRole !== "viewer") {
+  if (
+    user.startDate &&
+    today < user.startDate
+  ) {
+    return {
+      allowed: true,
+
+      reason: null,
+
+      errorCode:
+        "FREE_LICENSE",
+
+      user:
+        createFreeUser({
+          email,
+
+          sourceUser:
+            user,
+
+          reason:
+            "LICENSE_NOT_STARTED",
+        }),
+    };
+  }
+
+  /*
+   * =====================================================
+   * LICENSE HẾT HẠN
+   * =====================================================
+   *
+   * Không sửa database.
+   * Chỉ chuyển runtime user sang Free.
+   */
+  if (
+    user.endDate &&
+    today > user.endDate
+  ) {
+    return {
+      allowed: true,
+
+      reason: null,
+
+      errorCode:
+        "FREE_LICENSE",
+
+      user:
+        createFreeUser({
+          email,
+
+          sourceUser:
+            user,
+
+          reason:
+            "LICENSE_EXPIRED",
+        }),
+    };
+  }
+
+  /*
+   * =====================================================
+   * LICENSE HỢP LỆ
+   * =====================================================
+   */
+
+  if (
+    normalizedRole !==
+      "owner" &&
+    normalizedRole !==
+      "viewer"
+  ) {
     return {
       allowed: false,
 
-      reason: "Your account does not have a valid application role.",
+      reason:
+        "Your account does not have a valid application role.",
 
-      user,
+      user: null,
 
-      errorCode: "INVALID_ROLE",
+      errorCode:
+        "INVALID_ROLE",
     };
   }
 
   return {
     allowed: true,
+
     reason: null,
+
     errorCode: null,
 
     user: {
       ...user,
 
-      role: normalizedRole,
+      role:
+        normalizedRole,
 
-      isOwner: normalizedRole === "owner",
+      isOwner:
+        normalizedRole ===
+        "owner",
 
-      isViewer: normalizedRole === "viewer",
+      isViewer:
+        normalizedRole ===
+        "viewer",
+
+      isFree: false,
     },
   };
 }

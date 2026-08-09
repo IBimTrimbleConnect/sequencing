@@ -108,15 +108,12 @@ export default function App() {
 
   const tcapiRef = useRef(null);
 
-
   const refreshingModels = useSelector(
-    (state) =>
-      state.sequence?.refreshingModels === true,
+    (state) => state.sequence?.refreshingModels === true,
   );
 
   const refreshModelsError = useSelector(
-    (state) =>
-      state.sequence?.refreshModelsError || "",
+    (state) => state.sequence?.refreshModelsError || "",
   );
 
   const [projectId, setProjectId] = useState("");
@@ -143,6 +140,8 @@ export default function App() {
   const isOwner = userRole === "owner";
 
   const isViewer = userRole === "viewer";
+
+  const isFree = trimbleUser?.isFree === true || userRole === "free";
 
   const modelLoaded = loadedModels.length > 0;
 
@@ -223,6 +222,9 @@ export default function App() {
           isOwner: normalizedRole === "owner",
 
           isViewer: normalizedRole === "viewer",
+
+          isFree:
+            accessResult.user?.isFree === true || normalizedRole === "free",
         };
 
         setTrimbleUser(normalizedUser);
@@ -296,10 +298,7 @@ export default function App() {
             trimbleEmail,
 
             loadedModelIds: currentLoadedModels
-              .map(
-                (model) =>
-                  model?.id ?? model?.modelId,
-              )
+              .map((model) => model?.id ?? model?.modelId)
               .filter((modelId) => modelId != null && modelId !== "")
               .map(String),
           }),
@@ -330,36 +329,23 @@ export default function App() {
     }
 
     const tcapi =
-      tcapiRef.current ||
-      (await WorkspaceAPI.connect(window.parent));
+      tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
 
     tcapiRef.current = tcapi;
 
-    const currentLoadedModels =
-      await tcapi.viewer.getModels("loaded");
+    const currentLoadedModels = await tcapi.viewer.getModels("loaded");
 
     if (
       !Array.isArray(currentLoadedModels) ||
       currentLoadedModels.length === 0
     ) {
-      throw new Error(
-        "No model is currently loaded in Trimble Connect.",
-      );
+      throw new Error("No model is currently loaded in Trimble Connect.");
     }
 
-    const currentLoadedModelIds =
-      currentLoadedModels
-        .map(
-          (model) =>
-            model?.id ??
-            model?.modelId,
-        )
-        .filter(
-          (modelId) =>
-            modelId != null &&
-            modelId !== "",
-        )
-        .map(String);
+    const currentLoadedModelIds = currentLoadedModels
+      .map((model) => model?.id ?? model?.modelId)
+      .filter((modelId) => modelId != null && modelId !== "")
+      .map(String);
 
     setLoadedModels(currentLoadedModels);
 
@@ -369,16 +355,12 @@ export default function App() {
      */
     dispatch(
       RefreshLoadedModelsRequest({
-        loadedModelIds:
-          currentLoadedModelIds,
+        loadedModelIds: currentLoadedModelIds,
       }),
     );
 
     return currentLoadedModels.length;
-  }, [
-    dispatch,
-    refreshingModels,
-  ]);
+  }, [dispatch, refreshingModels]);
 
   if (loading) {
     return (
@@ -446,26 +428,24 @@ export default function App() {
         projectName={projectName}
         trimbleUser={trimbleUser}
         isOwner={isOwner}
-        readOnly={isViewer}
-        onRefreshModels={
-          handleRefreshModels
-        }
-        refreshingModels={
-          refreshingModels
-        }
-        refreshModelsError={
-          refreshModelsError
-        }
+        isViewer={isViewer}
+        isFree={isFree}
+        readOnly={!isOwner}
+        onRefreshModels={handleRefreshModels}
+        refreshingModels={refreshingModels}
+        refreshModelsError={refreshModelsError}
       />
 
-      {isViewer && (
+      {isFree && (
         <Alert
-          type="info"
+          type="warning"
           showIcon
           banner
+          closable
           message={
             <span>
-              You are using Viewer permissions.{" "}
+              You are using the <strong>Free License</strong>. Some features are
+              limited.{" "}
               <a
                 href="https://shop.ibimconsulting.com.au/tools/sequnece-planner"
                 target="_blank"
@@ -474,8 +454,22 @@ export default function App() {
                   fontWeight: 600,
                 }}
               >
-                Purchase License
+                Upgrade License
               </a>
+            </span>
+          }
+        />
+      )}
+
+      {isViewer && !isFree && (
+        <Alert
+          type="info"
+          showIcon
+          banner
+          message={
+            <span>
+              You are using <strong>Viewer permissions</strong>. Editing
+              features are available to project Owners only.
             </span>
           }
         />
@@ -490,7 +484,9 @@ export default function App() {
       >
         <Main
           isOwner={isOwner}
-          readOnly={isViewer}
+          isViewer={isViewer}
+          isFree={isFree}
+          readOnly={!isOwner}
           loadedModelIds={loadedModelIds}
         />
       </Content>
@@ -503,7 +499,7 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        <Simulation loadedModelIds={loadedModelIds} />
+        {!isFree && <Simulation loadedModelIds={loadedModelIds} />}
       </Footer>
     </Layout>
   );

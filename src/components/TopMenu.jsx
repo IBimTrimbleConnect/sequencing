@@ -35,6 +35,7 @@ const TopMenu = ({
   projectId: projectIdProp = "",
   projectName: projectNameProp = "",
   userRole: userRoleProp = "",
+  isFree = false,
   onRefreshModels,
   refreshingModels = false,
   refreshModelsError = "",
@@ -311,6 +312,14 @@ const TopMenu = ({
   }, [dispatch, sequenceObjects]);
 
   const handleOpenExportModal = useCallback(() => {
+    if (isFree) {
+      message.warning(
+        "Excel export is not available with the Free License.",
+      );
+
+      return;
+    }
+
     exportForm.resetFields();
 
     exportForm.setFieldsValue({
@@ -321,7 +330,7 @@ const TopMenu = ({
     });
 
     setExportModalOpen(true);
-  }, [exportForm, plans]);
+  }, [exportForm, plans, isFree]);
 
   const handleCloseExportModal = useCallback(() => {
     if (exporting) {
@@ -339,6 +348,14 @@ const TopMenu = ({
       startDateValue,
       endDateValue,
     }) => {
+      if (isFree) {
+        message.warning(
+          "Excel export is not available with the Free License.",
+        );
+
+        return;
+      }
+
       setExporting(true);
 
       try {
@@ -432,7 +449,7 @@ const TopMenu = ({
         setExporting(false);
       }
     },
-    [exportForm, plans, projectName, sequenceObjects],
+    [exportForm, isFree, plans, projectName, sequenceObjects],
   );
 
   const handleConfirmExport = useCallback(async () => {
@@ -548,10 +565,17 @@ const TopMenu = ({
               />
             </Tooltip>
 
-            <Tooltip title="Export to Excel">
+            <Tooltip
+              title={
+                isFree
+                  ? "Excel export is not available with the Free License."
+                  : "Export to Excel"
+              }
+            >
               <Button
                 size="large"
                 type="text"
+                disabled={isFree}
                 icon={
                   <DownloadOutlined
                     style={{

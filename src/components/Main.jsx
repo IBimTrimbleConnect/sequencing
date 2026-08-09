@@ -30,7 +30,13 @@ import SubPlanCollapse from "./SubPlanCollapse";
 import SortableHeader from "./SortableHeader";
 import CopySubPlanModal from "./CopySubPlanModal";
 
-const Main = ({ isOwner = false, loadedModelIds = [] }) => {
+const Main = ({
+  isOwner = false,
+  isViewer = false,
+  isFree = false,
+  loadedModelIds = [],
+  onSimulation,
+}) => {
   const dispatch = useDispatch();
   const [form] = Form.useForm();
 
@@ -433,11 +439,17 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
               plan={plan}
               objectCount={objectCount}
               isOwner={isOwner}
+              isFree={isFree}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onAddSubPlan={handleAddSubPlan}
               onCopySubPlan={handleCopySubPlan}
               onHighlightObject={handleHighlightObject}
+              onSimulation={
+                !isFree && typeof onSimulation === "function"
+                  ? onSimulation
+                  : undefined
+              }
             />
           ),
 
@@ -446,6 +458,9 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
               plan={plan}
               activeSimulationItem={activeSimulationItem}
               isOwner={isOwner}
+              isViewer={isViewer}
+              isFree={isFree}
+              readOnly={!isOwner}
               loadedModelIds={loadedModelIds}
             />
           ),
@@ -456,7 +471,10 @@ const Main = ({ isOwner = false, loadedModelIds = [] }) => {
       sequenceObjects,
       activeSimulationItem,
       isOwner,
+      isViewer,
+      isFree,
       loadedModelIds,
+      onSimulation,
       handleEdit,
       handleDelete,
       handleAddSubPlan,

@@ -133,6 +133,8 @@ const SubPlanCollapse = ({
   plan,
   activeSimulationItem,
   isOwner = false,
+  isViewer = false,
+  isFree = false,
   readOnly = false,
   loadedModelIds = [],
 }) => {
@@ -1384,6 +1386,14 @@ const SubPlanCollapse = ({
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const handleSimulation = async (subPlan) => {
+    if (isFree) {
+      message.warning(
+        "Simulation is not available with the Free License.",
+      );
+
+      return;
+    }
+
     if (!subPlan?.id) {
       return;
     }
@@ -1932,7 +1942,12 @@ const SubPlanCollapse = ({
                   )
               : undefined
           }
-          onSimulation={() => handleSimulation(subPlan)}
+          isFree={isFree}
+          onSimulation={
+            !isFree
+              ? () => handleSimulation(subPlan)
+              : undefined
+          }
           onSortByDate={canEdit ? () => handleSortByDate(subPlan) : undefined}
           onHighlightObject={() => handleHighlightObject(subPlan)}
         />

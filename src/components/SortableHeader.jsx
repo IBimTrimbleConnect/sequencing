@@ -1,6 +1,14 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useMemo,
+  useState,
+} from "react";
 
-import {Button, Dropdown, Popconfirm } from "antd";
+import {
+  Button,
+  Dropdown,
+  Popconfirm,
+} from "antd";
 
 import {
   CopyOutlined,
@@ -15,12 +23,23 @@ import {
   SortAscendingOutlined,
 } from "@ant-design/icons";
 
-import { useSortable } from "@dnd-kit/sortable";
+import {
+  useSortable,
+} from "@dnd-kit/sortable";
 
-import { CSS } from "@dnd-kit/utilities";
+import {
+  CSS,
+} from "@dnd-kit/utilities";
 
-const MenuButton = ({ icon, children, danger = false, onClick }) => {
-  const handleClick = (event) => {
+const MenuButton = ({
+  icon,
+  children,
+  danger = false,
+  onClick,
+}) => {
+  const handleClick = (
+    event,
+  ) => {
     event.stopPropagation();
 
     onClick?.();
@@ -32,12 +51,16 @@ const MenuButton = ({ icon, children, danger = false, onClick }) => {
       type="text"
       danger={danger}
       icon={icon}
-      onClick={handleClick}
+      onClick={
+        handleClick
+      }
       style={{
         width: "100%",
         display: "flex",
-        justifyContent: "flex-start",
-        alignItems: "center",
+        justifyContent:
+          "flex-start",
+        alignItems:
+          "center",
       }}
     >
       {children}
@@ -47,8 +70,12 @@ const MenuButton = ({ icon, children, danger = false, onClick }) => {
 
 const SortableHeader = ({
   plan,
+
   objectCount = 0,
+
   isOwner = false,
+
+  isFree = false,
 
   onEdit,
   onDelete,
@@ -60,9 +87,15 @@ const SortableHeader = ({
   onHighlightObject,
   onSimulation,
 }) => {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [
+    dropdownOpen,
+    setDropdownOpen,
+  ] = useState(false);
 
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [
+    deleteConfirmOpen,
+    setDeleteConfirmOpen,
+  ] = useState(false);
 
   const {
     attributes,
@@ -72,298 +105,491 @@ const SortableHeader = ({
     transition,
     isDragging,
   } = useSortable({
-    id: String(plan?.id ?? ""),
+    id: String(
+      plan?.id ?? "",
+    ),
 
-    disabled: !isOwner,
+    disabled:
+      !isOwner,
   });
 
-  const closeDropdown = useCallback(() => {
-    setDropdownOpen(false);
-  }, []);
-
-  const executeAction = useCallback(
-    (callback) => {
-      closeDropdown();
-
-      callback?.(plan);
-    },
-    [closeDropdown, plan],
-  );
-
-  const createMenuItem = useCallback(
-    ({ key, icon, label, callback, danger = false }) => ({
-      key,
-
-      label: (
-        <MenuButton
-          icon={icon}
-          danger={danger}
-          onClick={() => {
-            executeAction(callback);
-          }}
-        >
-          {label}
-        </MenuButton>
-      ),
-    }),
-    [executeAction],
-  );
-
-  const menuItems = useMemo(() => {
-    const viewerItems = [];
-
-    if (onSimulation) {
-      viewerItems.push(
-        createMenuItem({
-          key: "runSimulation",
-
-          icon: <PlayCircleOutlined />,
-
-          label: "Run Simulation",
-
-          callback: onSimulation,
-        }),
+  const closeDropdown =
+    useCallback(() => {
+      setDropdownOpen(
+        false,
       );
-    }
+    }, []);
 
-    if (onHighlightObject) {
-      viewerItems.push(
-        createMenuItem({
-          key: "highlightObjects",
+  const executeAction =
+    useCallback(
+      (callback) => {
+        closeDropdown();
 
-          icon: <SelectOutlined />,
+        callback?.(plan);
+      },
+      [
+        closeDropdown,
+        plan,
+      ],
+    );
 
-          label: "Highlight",
-
-          callback: onHighlightObject,
-        }),
-      );
-    }
-
-    if (!isOwner) {
-      return viewerItems;
-    }
-
-    const ownerItems = [];
-
-    if (onAssignObject) {
-      ownerItems.push(
-        createMenuItem({
-          key: "assignMultipleAssemblies",
-
-          icon: <PlusOutlined />,
-
-          label: "Assign Multiple Assemblies",
-
-          callback: onAssignObject,
-        }),
-      );
-    }
-
-    if (onAutoAssign) {
-      ownerItems.push(
-        createMenuItem({
-          key: "assignPickedAssemblies",
-
-          icon: <PlusOutlined />,
-
-          label: "Assign Picked Assemblies In Order",
-
-          callback: onAutoAssign,
-        }),
-      );
-    }
-
-    if (onAddSubPlan) {
-      ownerItems.push(
-        createMenuItem({
-          key: "createSubPlan",
-
-          icon: <FolderAddOutlined />,
-
-          label: "Create Sub Plan",
-
-          callback: onAddSubPlan,
-        }),
-      );
-    }
-
-    if (onSortByDate) {
-      ownerItems.push(
-        createMenuItem({
-          key: "sortByDate",
-
-          icon: <SortAscendingOutlined />,
-
-          label: "Sort By Date",
-
-          callback: onSortByDate,
-        }),
-      );
-    }
-
-    if (onCopySubPlan) {
-      ownerItems.push(
-        createMenuItem({
-          key: "copySubPlan",
-
-          icon: <CopyOutlined />,
-
-          label: "Copy Sub Plan",
-
-          callback: onCopySubPlan,
-        }),
-      );
-    }
-
-    const editItems = [];
-
-    if (onEdit) {
-      editItems.push(
-        createMenuItem({
-          key: "edit",
-
-          icon: <EditOutlined />,
-
-          label: "Edit",
-
-          callback: onEdit,
-        }),
-      );
-    }
-
-    if (onDelete) {
-      editItems.push({
-        key: "delete",
+  const createMenuItem =
+    useCallback(
+      ({
+        key,
+        icon,
+        label,
+        callback,
+        danger = false,
+      }) => ({
+        key,
 
         label: (
-          <Popconfirm
-            title="Delete"
-            description="Are you sure?"
-            okText="Yes"
-            cancelText="No"
-            open={deleteConfirmOpen}
-            onOpenChange={(open) => {
-              setDeleteConfirmOpen(open);
-
-              if (open) {
-                setDropdownOpen(true);
-              }
-            }}
-            onConfirm={(event) => {
-              event?.stopPropagation?.();
-
-              setDeleteConfirmOpen(false);
-
-              closeDropdown();
-
-              onDelete(plan);
-            }}
-            onCancel={(event) => {
-              event?.stopPropagation?.();
-
-              setDeleteConfirmOpen(false);
-
-              closeDropdown();
+          <MenuButton
+            icon={icon}
+            danger={
+              danger
+            }
+            onClick={() => {
+              executeAction(
+                callback,
+              );
             }}
           >
-            <div>
-              <MenuButton
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => {
-                  setDeleteConfirmOpen(true);
-                }}
-              >
-                Delete
-              </MenuButton>
-            </div>
-          </Popconfirm>
+            {label}
+          </MenuButton>
         ),
-      });
-    }
+      }),
+      [
+        executeAction,
+      ],
+    );
 
-    const result = [...viewerItems];
+  const menuItems =
+    useMemo(() => {
+      const viewerItems =
+        [];
 
-    if (viewerItems.length && ownerItems.length) {
-      result.push({
-        type: "divider",
-      });
-    }
+      /*
+       * Free license cannot run Simulation.
+       *
+       * Viewer and Owner can use Simulation.
+       */
+      if (
+        !isFree &&
+        onSimulation
+      ) {
+        viewerItems.push(
+          createMenuItem({
+            key:
+              "runSimulation",
 
-    result.push(...ownerItems);
+            icon: (
+              <PlayCircleOutlined />
+            ),
 
-    if (editItems.length && (viewerItems.length || ownerItems.length)) {
-      result.push({
-        type: "divider",
-      });
-    }
+            label:
+              "Run Simulation",
 
-    result.push(...editItems);
-
-    return result;
-  }, [
-    createMenuItem,
-    isOwner,
-    plan,
-    onEdit,
-    onDelete,
-    onAddSubPlan,
-    onAssignObject,
-    onAutoAssign,
-    onCopySubPlan,
-    onSortByDate,
-    onHighlightObject,
-    onSimulation,
-    deleteConfirmOpen,
-    closeDropdown,
-  ]);
-
-  const handleDropdownChange = useCallback(
-    (open) => {
-      if (!open && deleteConfirmOpen) {
-        return;
+            callback:
+              onSimulation,
+          }),
+        );
       }
 
-      setDropdownOpen(open);
-    },
-    [deleteConfirmOpen],
-  );
+      /*
+       * Highlight remains available
+       * for Free, Viewer and Owner.
+       */
+      if (
+        onHighlightObject
+      ) {
+        viewerItems.push(
+          createMenuItem({
+            key:
+              "highlightObjects",
 
-  const handleStopPropagation = useCallback((event) => {
-    event.stopPropagation();
-  }, []);
+            icon: (
+              <SelectOutlined />
+            ),
 
-  const containerStyle = useMemo(
-    () => ({
-      transform: CSS.Transform.toString(transform),
+            label:
+              "Highlight",
 
-      transition,
+            callback:
+              onHighlightObject,
+          }),
+        );
+      }
 
-      opacity: isDragging ? 0.5 : 1,
+      /*
+       * Free / Viewer do not receive
+       * any Owner editing actions.
+       */
+      if (!isOwner) {
+        return viewerItems;
+      }
 
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
+      const ownerItems =
+        [];
 
-      width: "100%",
-      minWidth: 0,
-    }),
-    [transform, transition, isDragging],
-  );
+      if (
+        onAssignObject
+      ) {
+        ownerItems.push(
+          createMenuItem({
+            key:
+              "assignMultipleAssemblies",
 
-  const safeObjectCount = Number.isFinite(Number(objectCount))
-    ? Math.max(0, Number(objectCount))
-    : 0;
+            icon: (
+              <PlusOutlined />
+            ),
+
+            label:
+              "Assign Multiple Assemblies",
+
+            callback:
+              onAssignObject,
+          }),
+        );
+      }
+
+      if (
+        onAutoAssign
+      ) {
+        ownerItems.push(
+          createMenuItem({
+            key:
+              "assignPickedAssemblies",
+
+            icon: (
+              <PlusOutlined />
+            ),
+
+            label:
+              "Assign Picked Assemblies In Order",
+
+            callback:
+              onAutoAssign,
+          }),
+        );
+      }
+
+      if (
+        onAddSubPlan
+      ) {
+        ownerItems.push(
+          createMenuItem({
+            key:
+              "createSubPlan",
+
+            icon: (
+              <FolderAddOutlined />
+            ),
+
+            label:
+              "Create Sub Plan",
+
+            callback:
+              onAddSubPlan,
+          }),
+        );
+      }
+
+      if (
+        onSortByDate
+      ) {
+        ownerItems.push(
+          createMenuItem({
+            key:
+              "sortByDate",
+
+            icon: (
+              <SortAscendingOutlined />
+            ),
+
+            label:
+              "Sort By Date",
+
+            callback:
+              onSortByDate,
+          }),
+        );
+      }
+
+      if (
+        onCopySubPlan
+      ) {
+        ownerItems.push(
+          createMenuItem({
+            key:
+              "copySubPlan",
+
+            icon: (
+              <CopyOutlined />
+            ),
+
+            label:
+              "Copy Sub Plan",
+
+            callback:
+              onCopySubPlan,
+          }),
+        );
+      }
+
+      const editItems =
+        [];
+
+      if (onEdit) {
+        editItems.push(
+          createMenuItem({
+            key:
+              "edit",
+
+            icon: (
+              <EditOutlined />
+            ),
+
+            label:
+              "Edit",
+
+            callback:
+              onEdit,
+          }),
+        );
+      }
+
+      if (onDelete) {
+        editItems.push({
+          key:
+            "delete",
+
+          label: (
+            <Popconfirm
+              title="Delete"
+              description="Are you sure?"
+              okText="Yes"
+              cancelText="No"
+              open={
+                deleteConfirmOpen
+              }
+              onOpenChange={(
+                open,
+              ) => {
+                setDeleteConfirmOpen(
+                  open,
+                );
+
+                if (open) {
+                  setDropdownOpen(
+                    true,
+                  );
+                }
+              }}
+              onConfirm={(
+                event,
+              ) => {
+                event
+                  ?.stopPropagation?.();
+
+                setDeleteConfirmOpen(
+                  false,
+                );
+
+                closeDropdown();
+
+                onDelete(
+                  plan,
+                );
+              }}
+              onCancel={(
+                event,
+              ) => {
+                event
+                  ?.stopPropagation?.();
+
+                setDeleteConfirmOpen(
+                  false,
+                );
+
+                closeDropdown();
+              }}
+            >
+              <div>
+                <MenuButton
+                  danger
+                  icon={
+                    <DeleteOutlined />
+                  }
+                  onClick={() => {
+                    setDeleteConfirmOpen(
+                      true,
+                    );
+                  }}
+                >
+                  Delete
+                </MenuButton>
+              </div>
+            </Popconfirm>
+          ),
+        });
+      }
+
+      const result = [
+        ...viewerItems,
+      ];
+
+      if (
+        viewerItems.length &&
+        ownerItems.length
+      ) {
+        result.push({
+          type:
+            "divider",
+        });
+      }
+
+      result.push(
+        ...ownerItems,
+      );
+
+      if (
+        editItems.length &&
+        (
+          viewerItems.length ||
+          ownerItems.length
+        )
+      ) {
+        result.push({
+          type:
+            "divider",
+        });
+      }
+
+      result.push(
+        ...editItems,
+      );
+
+      return result;
+    }, [
+      createMenuItem,
+      isOwner,
+      isFree,
+      plan,
+      onEdit,
+      onDelete,
+      onAddSubPlan,
+      onAssignObject,
+      onAutoAssign,
+      onCopySubPlan,
+      onSortByDate,
+      onHighlightObject,
+      onSimulation,
+      deleteConfirmOpen,
+      closeDropdown,
+    ]);
+
+  const handleDropdownChange =
+    useCallback(
+      (open) => {
+        if (
+          !open &&
+          deleteConfirmOpen
+        ) {
+          return;
+        }
+
+        setDropdownOpen(
+          open,
+        );
+      },
+      [
+        deleteConfirmOpen,
+      ],
+    );
+
+  const handleStopPropagation =
+    useCallback(
+      (event) => {
+        event.stopPropagation();
+      },
+      [],
+    );
+
+  const containerStyle =
+    useMemo(
+      () => ({
+        transform:
+          CSS.Transform.toString(
+            transform,
+          ),
+
+        transition,
+
+        opacity:
+          isDragging
+            ? 0.5
+            : 1,
+
+        display:
+          "flex",
+
+        alignItems:
+          "center",
+
+        justifyContent:
+          "space-between",
+
+        width:
+          "100%",
+
+        minWidth:
+          0,
+      }),
+      [
+        transform,
+        transition,
+        isDragging,
+      ],
+    );
+
+  const safeObjectCount =
+    Number.isFinite(
+      Number(
+        objectCount,
+      ),
+    )
+      ? Math.max(
+          0,
+          Number(
+            objectCount,
+          ),
+        )
+      : 0;
 
   return (
-    <div ref={setNodeRef} style={containerStyle}>
+    <div
+      ref={
+        setNodeRef
+      }
+      style={
+        containerStyle
+      }
+    >
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
+          display:
+            "flex",
+
+          alignItems:
+            "center",
+
           gap: 8,
-          minWidth: 0,
+
+          minWidth:
+            0,
+
           flex: 1,
         }}
       >
@@ -371,17 +597,26 @@ const SortableHeader = ({
           <span
             {...attributes}
             {...listeners}
-            onClick={handleStopPropagation}
+            onClick={
+              handleStopPropagation
+            }
             style={{
-              cursor: isDragging ? "grabbing" : "grab",
+              cursor:
+                isDragging
+                  ? "grabbing"
+                  : "grab",
 
-              display: "inline-flex",
+              display:
+                "inline-flex",
 
-              alignItems: "center",
+              alignItems:
+                "center",
 
-              flexShrink: 0,
+              flexShrink:
+                0,
 
-              touchAction: "none",
+              touchAction:
+                "none",
             }}
           >
             <MenuOutlined />
@@ -390,49 +625,78 @@ const SortableHeader = ({
 
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
+            display:
+              "flex",
+
+            alignItems:
+              "center",
+
             gap: 8,
-            minWidth: 0,
+
+            minWidth:
+              0,
+
             flex: 1,
           }}
         >
           <span
-            title={plan?.name}
+            title={
+              plan?.name
+            }
             style={{
-              overflow: "hidden",
+              overflow:
+                "hidden",
 
-              textOverflow: "ellipsis",
+              textOverflow:
+                "ellipsis",
 
-              whiteSpace: "nowrap",
+              whiteSpace:
+                "nowrap",
 
-              minWidth: 0,
+              minWidth:
+                0,
             }}
           >
-            {plan?.name || "Unnamed Plan"}
+            {plan?.name ||
+              "Unnamed Plan"}
           </span>
 
-          <span>[{safeObjectCount}]</span>
+          <span>
+            [{safeObjectCount}]
+          </span>
         </div>
       </div>
 
-      {menuItems.length > 0 && (
+      {menuItems.length >
+        0 && (
         <div
-          onClick={handleStopPropagation}
+          onClick={
+            handleStopPropagation
+          }
           style={{
-            flexShrink: 0,
+            flexShrink:
+              0,
           }}
         >
           <Dropdown
-            open={dropdownOpen}
-            trigger={["click"]}
+            open={
+              dropdownOpen
+            }
+            trigger={[
+              "click",
+            ]}
             placement="bottomRight"
             destroyOnHidden
-            onOpenChange={handleDropdownChange}
+            onOpenChange={
+              handleDropdownChange
+            }
             menu={{
-              items: menuItems,
+              items:
+                menuItems,
 
-              onClick: ({ domEvent }) => {
+              onClick: ({
+                domEvent,
+              }) => {
                 domEvent.stopPropagation();
               },
             }}
@@ -440,8 +704,12 @@ const SortableHeader = ({
             <Button
               type="text"
               size="small"
-              icon={<MoreOutlined />}
-              onClick={handleStopPropagation}
+              icon={
+                <MoreOutlined />
+              }
+              onClick={
+                handleStopPropagation
+              }
             />
           </Dropdown>
         </div>
@@ -450,4 +718,6 @@ const SortableHeader = ({
   );
 };
 
-export default React.memo(SortableHeader);
+export default React.memo(
+  SortableHeader,
+);
