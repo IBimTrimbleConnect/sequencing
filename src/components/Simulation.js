@@ -708,7 +708,7 @@ export default function Simulation() {
         {
           color,
           visible: true,
-          opacity: 100,
+          opacity: 1,
         },
       );
     },
@@ -972,7 +972,7 @@ export default function Simulation() {
         Nếu transparency = 0 thì isolate các object đã hoàn thành.
         */
         if (transparency > 0) {
-          await tcapi.viewer.setOpacity(20);
+          await tcapi.viewer.setOpacity(transparency);
           await tcapi.viewer.setObjectState(undefined, {
             color: {
               r: 211,
