@@ -708,7 +708,7 @@ export default function Simulation() {
         {
           color,
           visible: true,
-          opacity: 1,
+          opacity: 100,
         },
       );
     },
@@ -872,56 +872,97 @@ export default function Simulation() {
   );
   const handleTransparencyChange = useCallback(
     async (value) => {
-      const nextTransparency = Number(value) || 0;
+      const nextTransparency = Math.max(
+        0,
+        Math.min(100, Number(value) || 0),
+      );
 
       setTransparency(nextTransparency);
 
-      if (
-        !simulationActivatedRef.current ||
-        !items.length ||
-        index < 0 ||
-        index >= items.length
-      ) {
+      /*
+       * Chưa bắt đầu simulation:
+       * chỉ lưu giá trị slider, không thay đổi viewer.
+       */
+      if (!simulationActivatedRef.current) {
+        return;
+      }
+
+      if (!items.length || index < 0 || index >= items.length) {
         return;
       }
 
       try {
         const tcapi = await getTcapi();
 
-        const accumulatedObjects = buildAccumulatedObjects(index);
+        const accumulatedObjects =
+          buildAccumulatedObjects(index);
 
-        const opacity = Math.max(0, Math.min(1, 1 - nextTransparency / 100));
+        if (nextTransparency > 0) {
+          /*
+           * Trimble viewer.setOpacity() nhận trực tiếp
+           * transparency từ 0 -> 100.
+           *
+           * 0   = không transparency
+           * 100 = transparency tối đa
+           */
+          await tcapi.viewer.setOpacity(
+            nextTransparency,
+          );
 
-        for (const group of accumulatedObjects) {
-          if (
-            group?.modelId == null ||
-            !Array.isArray(group.entityIds) ||
-            !group.entityIds.length
-          ) {
-            continue;
-          }
-
+          /*
+           * Khi background model được hiển thị,
+           * đổi toàn bộ model sang Light Grey.
+           */
           await tcapi.viewer.setObjectState(
+            undefined,
             {
-              modelObjectIds: [
-                {
-                  modelId: group.modelId,
-                  objectRuntimeIds: group.entityIds,
-                },
-              ],
-            },
-            {
-              opacity,
+              color: {
+                r: 211,
+                g: 211,
+                b: 211,
+              },
               visible: true,
             },
           );
+
+          /*
+           * Các object đã chạy simulation
+           * trả lại màu SubPlan và opacity 100%.
+           */
+          await colorAccumulatedObjects(index);
+        } else {
+          /*
+           * 0% transparency:
+           * reset global transparency và chỉ isolate
+           * các object đã chạy simulation.
+           */
+          await tcapi.viewer.setOpacity(0);
+
+          await isolateObjectsInTrimble(
+            accumulatedObjects,
+            showGrid,
+          );
+
+          await colorAccumulatedObjects(index);
         }
       } catch (error) {
-        console.error("Update simulation transparency failed:", error);
+        console.error(
+          "Update simulation transparency failed:",
+          error,
+        );
       }
     },
-    [items.length, index, getTcapi, buildAccumulatedObjects],
+    [
+      items.length,
+      index,
+      showGrid,
+      getTcapi,
+      buildAccumulatedObjects,
+      isolateObjectsInTrimble,
+      colorAccumulatedObjects,
+    ],
   );
+
   // =====================================================
   // NAVIGATION
   // =====================================================
@@ -968,27 +1009,55 @@ export default function Simulation() {
         const accumulatedObjects = buildAccumulatedObjects(safeIndex);
         const tcapi = await getTcapi();
         /*
-        Nếu transparency > 0 thì setOpacity cho toàn bộ model, không isolate.
-        Nếu transparency = 0 thì isolate các object đã hoàn thành.
-        */
+         * Transparency > 0:
+         * - Show full model.
+         * - Background = Light Grey.
+         * - viewer.setOpacity receives 0 -> 100 directly.
+         *
+         * Transparency = 0:
+         * - Reset global transparency.
+         * - Only isolate accumulated simulation objects.
+         */
         if (transparency > 0) {
-          await tcapi.viewer.setOpacity(transparency);
-          await tcapi.viewer.setObjectState(undefined, {
-            color: {
-              r: 211,
-              g: 211,
-              b: 211,
+          await tcapi.viewer.setOpacity(
+            transparency,
+          );
+
+          await tcapi.viewer.setObjectState(
+            undefined,
+            {
+              color: {
+                r: 211,
+                g: 211,
+                b: 211,
+              },
+              visible: true,
             },
-          });
+          );
         } else {
-          await isolateObjectsInTrimble(accumulatedObjects, showGrid);
+          await tcapi.viewer.setOpacity(0);
+
+          await isolateObjectsInTrimble(
+            accumulatedObjects,
+            showGrid,
+          );
         }
 
-        await gotoCamera(item, accumulatedObjects);
+        await gotoCamera(
+          item,
+          accumulatedObjects,
+        );
 
-        await colorAccumulatedObjects(safeIndex);
+        /*
+         * Restore SubPlan color for all completed objects.
+         */
+        await colorAccumulatedObjects(
+          safeIndex,
+        );
 
-        await selectObjectInTrimble(item);
+        await selectObjectInTrimble(
+          item,
+        );
       } catch (error) {
         console.error("Simulation viewer error:", error);
       }
@@ -997,6 +1066,8 @@ export default function Simulation() {
       items,
       dispatch,
       showGrid,
+      transparency,
+      getTcapi,
       buildAccumulatedObjects,
       isolateObjectsInTrimble,
       gotoCamera,
@@ -1111,14 +1182,22 @@ export default function Simulation() {
         return;
       }
 
-      Promise.resolve(
-        tcapi.viewer.setObjectState(undefined, {
-          visible: "reset",
-          color: "reset",
-          opacity: 1,
-        }),
-      ).catch((error) => {
-        console.error("Reset simulation viewer state failed:", error);
+      Promise.all([
+        tcapi.viewer.setOpacity(0),
+
+        tcapi.viewer.setObjectState(
+          undefined,
+          {
+            visible: "reset",
+            color: "reset",
+            opacity: 100,
+          },
+        ),
+      ]).catch((error) => {
+        console.error(
+          "Reset simulation viewer state failed:",
+          error,
+        );
       });
     };
   }, []);
