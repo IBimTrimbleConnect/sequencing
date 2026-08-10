@@ -301,10 +301,8 @@ export default function Simulation({
    * first update the existing filters, then wait for `items`
    * to be recalculated, and only then start playback.
    */
-  const [
-    pendingSimulationRequest,
-    setPendingSimulationRequest,
-  ] = useState(null);
+  const [pendingSimulationRequest, setPendingSimulationRequest] =
+    useState(null);
 
   useEffect(() => {
     indexRef.current = index;
@@ -318,26 +316,20 @@ export default function Simulation({
    * Reuse this single Simulation engine.
    */
   useEffect(() => {
-    const requestedPlanId =
-      simulationRequest?.planId;
+    const requestedPlanId = simulationRequest?.planId;
 
     if (!requestedPlanId) {
       return;
     }
 
-    const planId =
-      String(requestedPlanId);
+    const planId = String(requestedPlanId);
 
     const requestedSubPlanId =
       simulationRequest?.subPlanId != null
         ? String(simulationRequest.subPlanId)
         : null;
 
-    const planExists =
-      plans.some(
-        (plan) =>
-          String(plan?.id) === planId,
-      );
+    const planExists = plans.some((plan) => String(plan?.id) === planId);
 
     if (!planExists) {
       onSimulationRequestApplied?.();
@@ -353,28 +345,16 @@ export default function Simulation({
     setSelectedPlanIds([planId]);
 
     if (requestedSubPlanId) {
-      setSelectedSubPlanIds([
-        requestedSubPlanId,
-      ]);
+      setSelectedSubPlanIds([requestedSubPlanId]);
     } else {
-      const planSubPlanIds =
-        subPlans
-          .filter(
-            (subPlan) =>
-              String(
-                subPlan?.planId ??
-                  subPlan?.parentPlanId ??
-                  "",
-              ) === planId,
-          )
-          .map(
-            (subPlan) =>
-              String(subPlan.id),
-          );
+      const planSubPlanIds = subPlans
+        .filter(
+          (subPlan) =>
+            String(subPlan?.planId ?? subPlan?.parentPlanId ?? "") === planId,
+        )
+        .map((subPlan) => String(subPlan.id));
 
-      setSelectedSubPlanIds(
-        planSubPlanIds,
-      );
+      setSelectedSubPlanIds(planSubPlanIds);
     }
 
     setStartDate(null);
@@ -382,15 +362,9 @@ export default function Simulation({
 
     setPendingSimulationRequest({
       planId,
-      subPlanId:
-        requestedSubPlanId,
+      subPlanId: requestedSubPlanId,
     });
-  }, [
-    simulationRequest,
-    plans,
-    subPlans,
-    onSimulationRequestApplied,
-  ]);
+  }, [simulationRequest, plans, subPlans, onSimulationRequestApplied]);
 
   /*
    * modelId và runtimeId đã được hydrate trong saga.
@@ -418,39 +392,27 @@ export default function Simulation({
   }, []);
 
   useEffect(() => {
-    const validPlanIds =
-      plans.map(
-        (plan) =>
-          String(plan.id),
+    const validPlanIds = plans.map((plan) => String(plan.id));
+
+    setSelectedPlanIds((current) => {
+      if (!current.length) {
+        return validPlanIds;
+      }
+
+      const existingSelectedIds = current.filter((id) =>
+        validPlanIds.includes(String(id)),
       );
 
-    setSelectedPlanIds(
-      (current) => {
-        if (!current.length) {
-          return validPlanIds;
-        }
+      /*
+       * Preserve explicit selection, especially [Plan A]
+       * after Run Simulation is clicked from the Plan menu.
+       */
+      if (existingSelectedIds.length) {
+        return existingSelectedIds;
+      }
 
-        const existingSelectedIds =
-          current.filter(
-            (id) =>
-              validPlanIds.includes(
-                String(id),
-              ),
-          );
-
-        /*
-         * Preserve explicit selection, especially [Plan A]
-         * after Run Simulation is clicked from the Plan menu.
-         */
-        if (
-          existingSelectedIds.length
-        ) {
-          return existingSelectedIds;
-        }
-
-        return validPlanIds;
-      },
-    );
+      return validPlanIds;
+    });
   }, [plans]);
 
   const availableSubPlans = useMemo(() => {
@@ -472,31 +434,21 @@ export default function Simulation({
   // =====================================================
 
   useEffect(() => {
-    const validSubPlanIds =
-      availableSubPlans.map(
-        (subPlan) =>
-          String(subPlan.id),
+    const validSubPlanIds = availableSubPlans.map((subPlan) =>
+      String(subPlan.id),
+    );
+
+    setSelectedSubPlanIds((current) => {
+      const existingSelectedIds = current.filter((id) =>
+        validSubPlanIds.includes(String(id)),
       );
 
-    setSelectedSubPlanIds(
-      (current) => {
-        const existingSelectedIds =
-          current.filter(
-            (id) =>
-              validSubPlanIds.includes(
-                String(id),
-              ),
-          );
+      if (existingSelectedIds.length) {
+        return existingSelectedIds;
+      }
 
-        if (
-          existingSelectedIds.length
-        ) {
-          return existingSelectedIds;
-        }
-
-        return validSubPlanIds;
-      },
-    );
+      return validSubPlanIds;
+    });
   }, [availableSubPlans]);
 
   // =====================================================
@@ -721,7 +673,6 @@ export default function Simulation({
 
     return tcapiRef.current;
   }, []);
-
 
   const enqueueViewerTask = useCallback((task) => {
     const nextTask = viewerTaskRef.current
@@ -1034,10 +985,7 @@ export default function Simulation({
   );
   const handleTransparencyChange = useCallback(
     async (value) => {
-      const nextTransparency = Math.max(
-        0,
-        Math.min(100, Number(value) || 0),
-      );
+      const nextTransparency = Math.max(0, Math.min(100, Number(value) || 0));
 
       setTransparency(nextTransparency);
 
@@ -1054,22 +1002,17 @@ export default function Simulation({
        * Only the newest slider value needs to be applied.
        * Older queued transparency changes are skipped.
        */
-      const taskId =
-        ++transparencyTaskIdRef.current;
+      const taskId = ++transparencyTaskIdRef.current;
 
       try {
         await enqueueViewerTask(async () => {
-          if (
-            taskId !==
-            transparencyTaskIdRef.current
-          ) {
+          if (taskId !== transparencyTaskIdRef.current) {
             return;
           }
 
           const tcapi = await getTcapi();
 
-          const accumulatedObjects =
-            buildAccumulatedObjects(index);
+          const accumulatedObjects = buildAccumulatedObjects(index);
 
           /*
            * Preserve the current behavior used by this version:
@@ -1080,34 +1023,18 @@ export default function Simulation({
            * existing 0..1 calculation from this working version.
            * viewer.setOpacity() below is a different API and uses 0..100.
            */
-          const opacity = Math.max(
-            0,
-            Math.min(
-              1,
-              1 -
-                nextTransparency /
-                  100,
-            ),
-          );
+          const opacity = Math.max(0, Math.min(1, 1 - nextTransparency / 100));
 
-          for (
-            const group of
-            accumulatedObjects
-          ) {
+          for (const group of accumulatedObjects) {
             if (
               group?.modelId == null ||
-              !Array.isArray(
-                group.entityIds,
-              ) ||
+              !Array.isArray(group.entityIds) ||
               !group.entityIds.length
             ) {
               continue;
             }
 
-            if (
-              taskId !==
-              transparencyTaskIdRef.current
-            ) {
+            if (taskId !== transparencyTaskIdRef.current) {
               return;
             }
 
@@ -1115,11 +1042,9 @@ export default function Simulation({
               {
                 modelObjectIds: [
                   {
-                    modelId:
-                      group.modelId,
+                    modelId: group.modelId,
 
-                    objectRuntimeIds:
-                      group.entityIds,
+                    objectRuntimeIds: group.entityIds,
                   },
                 ],
               },
@@ -1131,20 +1056,42 @@ export default function Simulation({
           }
         });
       } catch (error) {
-        console.error(
-          "Update simulation transparency failed:",
-          error,
-        );
+        console.error("Update simulation transparency failed:", error);
       }
     },
-    [
-      items.length,
-      index,
-      getTcapi,
-      buildAccumulatedObjects,
-      enqueueViewerTask,
-    ],
+    [items.length, index, getTcapi, buildAccumulatedObjects, enqueueViewerTask],
   );
+
+  const handleTransparencyChange1 = async (value) => {
+    const nextTransparency = Math.max(0, Math.min(100, Number(value) || 0));
+
+    setTransparency(nextTransparency);
+
+    try {
+      const tcapi = await getTcapi();
+
+      if (nextTransparency > 0) {
+        // await tcapi.viewer.setObjectState(undefined, {
+        //   color: {
+        //     r: 211,
+        //     g: 211,
+        //     b: 211,
+        //   },
+        //   opacity: nextTransparency,
+        // });
+        await tcapi.viewer.setOpacity(nextTransparency);
+
+      } else {
+        await tcapi.viewer.setOpacity(0);
+
+        await tcapi.viewer.setObjectState(undefined, {
+          color: "reset",
+        });
+      }
+    } catch (error) {
+      console.error("Update transparency failed:", error);
+    }
+  };
 
   // =====================================================
   // NAVIGATION
@@ -1156,13 +1103,7 @@ export default function Simulation({
         return;
       }
 
-      const safeIndex = Math.max(
-        0,
-        Math.min(
-          newIndex,
-          items.length - 1,
-        ),
-      );
+      const safeIndex = Math.max(0, Math.min(newIndex, items.length - 1));
 
       const item = items[safeIndex];
 
@@ -1170,8 +1111,7 @@ export default function Simulation({
         return;
       }
 
-      simulationActivatedRef.current =
-        true;
+      simulationActivatedRef.current = true;
 
       /*
        * Keep both React state and the async playback ref in sync.
@@ -1181,29 +1121,17 @@ export default function Simulation({
 
       dispatch(
         SetActiveSimulationItem({
-          planId:
-            String(item.planId),
+          planId: String(item.planId),
 
-          subPlanId:
-            String(item.subPlanId),
+          subPlanId: String(item.subPlanId),
 
-          modelId:
-            item.modelId,
+          modelId: item.modelId,
 
-          id:
-            String(
-              item.externalId ??
-                item.objectId ??
-                "",
-            ),
+          id: String(item.externalId ?? item.objectId ?? ""),
 
-          objectId:
-            item.externalId ??
-            item.objectId ??
-            null,
+          objectId: item.externalId ?? item.objectId ?? null,
 
-          runtimeId:
-            item.runtimeId,
+          runtimeId: item.runtimeId,
         }),
       );
 
@@ -1213,69 +1141,38 @@ export default function Simulation({
          * inside one queued task. This prevents another goToIndex(),
          * transparency change or Grid change from interleaving with it.
          */
-        await enqueueViewerTask(
-          async () => {
-            const accumulatedObjects =
-              buildAccumulatedObjects(
-                safeIndex,
-              );
+        await enqueueViewerTask(async () => {
+          const accumulatedObjects = buildAccumulatedObjects(safeIndex);
 
-            const tcapi =
-              await getTcapi();
+          const tcapi = await getTcapi();
 
-            /*
-             * viewer.setOpacity() returns Promise<void>.
-             * Await it before changing object state.
-             *
-             * This working approach is intentionally preserved:
-             * - transparency > 0: global viewer transparency + Light Grey
-             * - transparency = 0: isolate accumulated objects
-             */
-            if (transparency > 0) {
-              await tcapi.viewer.setOpacity(
-                transparency,
-              );
+          /*
+           * viewer.setOpacity() returns Promise<void>.
+           * Await it before changing object state.
+           *
+           * This working approach is intentionally preserved:
+           * - transparency > 0: global viewer transparency + Light Grey
+           * - transparency = 0: isolate accumulated objects
+           */
+          if (transparency === 0) {
+            await isolateObjectsInTrimble(accumulatedObjects, showGrid);
+          }
 
-              await tcapi.viewer.setObjectState(
-                undefined,
-                {
-                  color: {
-                    r: 211,
-                    g: 211,
-                    b: 211,
-                  },
-                },
-              );
-            } else {
-              await isolateObjectsInTrimble(
-                accumulatedObjects,
-                showGrid,
-              );
-            }
+          // await gotoCamera(
+          //   item,
+          //   accumulatedObjects,
+          // );
 
-            // await gotoCamera(
-            //   item,
-            //   accumulatedObjects,
-            // );
+          /*
+           * This runs only after setOpacity/setObjectState/isolate
+           * has resolved.
+           */
+          await colorAccumulatedObjects(safeIndex);
 
-            /*
-             * This runs only after setOpacity/setObjectState/isolate
-             * has resolved.
-             */
-            await colorAccumulatedObjects(
-              safeIndex,
-            );
-
-            await selectObjectInTrimble(
-              item,
-            );
-          },
-        );
+          await selectObjectInTrimble(item);
+        });
       } catch (error) {
-        console.error(
-          "Simulation viewer error:",
-          error,
-        );
+        console.error("Simulation viewer error:", error);
       }
     },
     [
@@ -1307,37 +1204,27 @@ export default function Simulation({
       return;
     }
 
-    const requestedPlanId =
-      String(
-        pendingSimulationRequest.planId,
-      );
+    const requestedPlanId = String(pendingSimulationRequest.planId);
 
     const requestedSubPlanId =
       pendingSimulationRequest.subPlanId != null
-        ? String(
-            pendingSimulationRequest.subPlanId,
-          )
+        ? String(pendingSimulationRequest.subPlanId)
         : null;
 
-    const itemsMatchRequest =
-      items.every((item) => {
-        if (
-          String(item?.planId) !==
-          requestedPlanId
-        ) {
-          return false;
-        }
+    const itemsMatchRequest = items.every((item) => {
+      if (String(item?.planId) !== requestedPlanId) {
+        return false;
+      }
 
-        if (
-          requestedSubPlanId &&
-          String(item?.subPlanId) !==
-            requestedSubPlanId
-        ) {
-          return false;
-        }
+      if (
+        requestedSubPlanId &&
+        String(item?.subPlanId) !== requestedSubPlanId
+      ) {
+        return false;
+      }
 
-        return true;
-      });
+      return true;
+    });
 
     if (!itemsMatchRequest) {
       return;
@@ -1345,42 +1232,33 @@ export default function Simulation({
 
     let cancelled = false;
 
-    const startSimulation =
-      async () => {
-        try {
-          await goToIndex(0);
+    const startSimulation = async () => {
+      try {
+        await goToIndex(0);
 
-          if (cancelled) {
-            return;
-          }
+        if (cancelled) {
+          return;
+        }
 
-          setPlaying(true);
+        setPlaying(true);
+        setPendingSimulationRequest(null);
+        onSimulationRequestApplied?.();
+      } catch (error) {
+        console.error("Start menu simulation failed:", error);
+
+        if (!cancelled) {
           setPendingSimulationRequest(null);
           onSimulationRequestApplied?.();
-        } catch (error) {
-          console.error(
-            "Start menu simulation failed:",
-            error,
-          );
-
-          if (!cancelled) {
-            setPendingSimulationRequest(null);
-            onSimulationRequestApplied?.();
-          }
         }
-      };
+      }
+    };
 
     startSimulation();
 
     return () => {
       cancelled = true;
     };
-  }, [
-    pendingSimulationRequest,
-    items,
-    goToIndex,
-    onSimulationRequestApplied,
-  ]);
+  }, [pendingSimulationRequest, items, goToIndex, onSimulationRequestApplied]);
 
   // =====================================================
   // SHOW/HIDE GRID
@@ -1390,39 +1268,22 @@ export default function Simulation({
     async (checked) => {
       setShowGrid(checked);
 
-      if (
-        !simulationActivatedRef.current
-      ) {
+      if (!simulationActivatedRef.current) {
         return;
       }
 
-      if (
-        !items.length ||
-        index < 0 ||
-        index >= items.length
-      ) {
+      if (!items.length || index < 0 || index >= items.length) {
         return;
       }
 
       try {
-        await enqueueViewerTask(
-          async () => {
-            const accumulatedObjects =
-              buildAccumulatedObjects(
-                index,
-              );
+        await enqueueViewerTask(async () => {
+          const accumulatedObjects = buildAccumulatedObjects(index);
 
-            await isolateObjectsInTrimble(
-              accumulatedObjects,
-              checked,
-            );
-          },
-        );
+          await isolateObjectsInTrimble(accumulatedObjects, checked);
+        });
       } catch (error) {
-        console.error(
-          "Update grid visibility error:",
-          error,
-        );
+        console.error("Update grid visibility error:", error);
       }
     },
     [
@@ -1437,32 +1298,23 @@ export default function Simulation({
   const next = useCallback(async () => {
     setPlaying(false);
 
-    clearTimeout(
-      intervalRef.current,
-    );
+    clearTimeout(intervalRef.current);
 
-    await goToIndex(
-      indexRef.current + 1,
-    );
+    await goToIndex(indexRef.current + 1);
   }, [goToIndex]);
 
   const prev = useCallback(async () => {
     setPlaying(false);
 
-    clearTimeout(
-      intervalRef.current,
-    );
+    clearTimeout(intervalRef.current);
 
-    await goToIndex(
-      indexRef.current - 1,
-    );
+    await goToIndex(indexRef.current - 1);
   }, [goToIndex]);
 
   const togglePlay = useCallback(async () => {
     if (!items.length) {
       return;
     }
-
     if (!playing) {
       if (index >= items.length - 1) {
         await goToIndex(0);
@@ -1479,86 +1331,58 @@ export default function Simulation({
   // =====================================================
 
   useEffect(() => {
-    if (
-      !playing ||
-      !items.length
-    ) {
-      clearTimeout(
-        intervalRef.current,
-      );
+    if (!playing || !items.length) {
+      clearTimeout(intervalRef.current);
 
       return;
     }
 
     let cancelled = false;
 
-    const scheduleNext =
-      () => {
-        clearTimeout(
-          intervalRef.current,
-        );
+    const scheduleNext = () => {
+      clearTimeout(intervalRef.current);
 
-        intervalRef.current =
-          setTimeout(
-            async () => {
-              if (cancelled) {
-                return;
-              }
+      intervalRef.current = setTimeout(async () => {
+        if (cancelled) {
+          return;
+        }
 
-              const nextIndex =
-                indexRef.current + 1;
+        const nextIndex = indexRef.current + 1;
 
-              if (
-                nextIndex >=
-                items.length
-              ) {
-                setPlaying(false);
+        if (nextIndex >= items.length) {
+          setPlaying(false);
 
-                return;
-              }
+          return;
+        }
 
-              /*
-               * Wait for the complete Viewer task before scheduling
-               * the next simulation step. No async overlap.
-               */
-              await goToIndex(
-                nextIndex,
-              );
+        /*
+         * Wait for the complete Viewer task before scheduling
+         * the next simulation step. No async overlap.
+         */
+        await goToIndex(nextIndex);
 
-              if (cancelled) {
-                return;
-              }
+        if (cancelled) {
+          return;
+        }
 
-              scheduleNext();
-            },
-            delay,
-          );
-      };
+        scheduleNext();
+      }, delay);
+    };
 
     scheduleNext();
 
     return () => {
       cancelled = true;
 
-      clearTimeout(
-        intervalRef.current,
-      );
+      clearTimeout(intervalRef.current);
     };
-  }, [
-    playing,
-    delay,
-    items.length,
-    goToIndex,
-  ]);
+  }, [playing, delay, items.length, goToIndex]);
 
   useEffect(() => {
     return () => {
-      clearTimeout(
-        intervalRef.current,
-      );
+      clearTimeout(intervalRef.current);
 
-      const tcapi =
-        tcapiRef.current;
+      const tcapi = tcapiRef.current;
 
       if (!tcapi) {
         return;
@@ -1572,23 +1396,15 @@ export default function Simulation({
         .catch(() => {})
         .then(async () => {
           try {
-            await tcapi.viewer.setOpacity(
-              0,
-            );
+            await tcapi.viewer.setOpacity(0);
 
-            await tcapi.viewer.setObjectState(
-              undefined,
-              {
-                visible: "reset",
-                color: "reset",
-                opacity: 1,
-              },
-            );
+            await tcapi.viewer.setObjectState(undefined, {
+              visible: "reset",
+              color: "reset",
+              opacity: 1,
+            });
           } catch (error) {
-            console.error(
-              "Reset simulation viewer state failed:",
-              error,
-            );
+            console.error("Reset simulation viewer state failed:", error);
           }
         });
     };
@@ -1634,49 +1450,29 @@ export default function Simulation({
 
     clearTimeout(intervalRef.current);
 
-    const nextValues = Array.isArray(values)
-      ? values.map(String)
-      : [];
+    const nextValues = Array.isArray(values) ? values.map(String) : [];
 
     /*
      * "All Plans" selects every Plan ID.
      * The special value itself is never stored in state.
      */
-    if (
-      nextValues.includes(
-        ALL_PLANS_VALUE,
-      )
-    ) {
-      const allPlanIds =
-        plans.map(
-          (plan) =>
-            String(plan.id),
-        );
+    if (nextValues.includes(ALL_PLANS_VALUE)) {
+      const allPlanIds = plans.map((plan) => String(plan.id));
 
-      setSelectedPlanIds(
-        allPlanIds,
-      );
+      setSelectedPlanIds(allPlanIds);
 
       /*
        * Selecting all Plans should also make all SubPlans
        * available and selected.
        */
-      const allSubPlanIds =
-        subPlans.map(
-          (subPlan) =>
-            String(subPlan.id),
-        );
+      const allSubPlanIds = subPlans.map((subPlan) => String(subPlan.id));
 
-      setSelectedSubPlanIds(
-        allSubPlanIds,
-      );
+      setSelectedSubPlanIds(allSubPlanIds);
 
       return;
     }
 
-    setSelectedPlanIds(
-      nextValues,
-    );
+    setSelectedPlanIds(nextValues);
   };
 
   const handleSubPlanChange = (values) => {
@@ -1685,32 +1481,21 @@ export default function Simulation({
 
     clearTimeout(intervalRef.current);
 
-    const nextValues = Array.isArray(values)
-      ? values.map(String)
-      : [];
+    const nextValues = Array.isArray(values) ? values.map(String) : [];
 
     /*
      * "All Sub Plans" selects every SubPlan that is currently
      * available under the selected Plans.
      */
-    if (
-      nextValues.includes(
-        ALL_SUBPLANS_VALUE,
-      )
-    ) {
+    if (nextValues.includes(ALL_SUBPLANS_VALUE)) {
       setSelectedSubPlanIds(
-        availableSubPlans.map(
-          (subPlan) =>
-            String(subPlan.id),
-        ),
+        availableSubPlans.map((subPlan) => String(subPlan.id)),
       );
 
       return;
     }
 
-    setSelectedSubPlanIds(
-      nextValues,
-    );
+    setSelectedSubPlanIds(nextValues);
   };
 
   const handleStartDateChange = (date) => {
@@ -1786,25 +1571,16 @@ export default function Simulation({
             }}
             options={[
               {
-                value:
-                  ALL_PLANS_VALUE,
+                value: ALL_PLANS_VALUE,
 
-                label:
-                  "All Plans",
+                label: "All Plans",
               },
 
-              ...plans.map(
-                (plan) => ({
-                  value:
-                    String(
-                      plan.id,
-                    ),
+              ...plans.map((plan) => ({
+                value: String(plan.id),
 
-                  label:
-                    plan.name ||
-                    "Unnamed Plan",
-                }),
-              ),
+                label: plan.name || "Unnamed Plan",
+              })),
             ]}
           />
 
@@ -1840,49 +1616,30 @@ export default function Simulation({
             }}
             options={[
               {
-                value:
-                  ALL_SUBPLANS_VALUE,
+                value: ALL_SUBPLANS_VALUE,
 
-                label:
-                  "All Sub Plans",
+                label: "All Sub Plans",
               },
 
-              ...availableSubPlans.map(
-                (subPlan) => {
-                  const subPlanPlanId =
-                    subPlan.planId ??
-                    subPlan.parentPlanId;
+              ...availableSubPlans.map((subPlan) => {
+                const subPlanPlanId = subPlan.planId ?? subPlan.parentPlanId;
 
-                  const parentPlan =
-                    plans.find(
-                      (plan) =>
-                        String(
-                          plan.id,
-                        ) ===
-                        String(
-                          subPlanPlanId,
-                        ),
-                    );
+                const parentPlan = plans.find(
+                  (plan) => String(plan.id) === String(subPlanPlanId),
+                );
 
-                  const subPlanName =
-                    subPlan.name ||
-                    "Unnamed Sub Plan";
+                const subPlanName = subPlan.name || "Unnamed Sub Plan";
 
-                  const label =
-                    parentPlan?.name
-                      ? `${subPlanName} (${parentPlan.name})`
-                      : subPlanName;
+                const label = parentPlan?.name
+                  ? `${subPlanName} (${parentPlan.name})`
+                  : subPlanName;
 
-                  return {
-                    value:
-                      String(
-                        subPlan.id,
-                      ),
+                return {
+                  value: String(subPlan.id),
 
-                    label,
-                  };
-                },
-              ),
+                  label,
+                };
+              }),
             ]}
           />
         </div>
@@ -2058,7 +1815,7 @@ export default function Simulation({
               max={100}
               step={5}
               value={transparency}
-              onChange={handleTransparencyChange}
+              onChange={handleTransparencyChange1}
               tooltip={{
                 formatter: (value) => `${value}%`,
               }}
