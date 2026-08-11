@@ -71,63 +71,32 @@ dayjs.extend(customParseFormat);
  * Viewer operations must always use modelId + runtimeId.
  */
 const getExternalId = (object) =>
-  object?.externalId ??
-  object?.external_id ??
-  object?.objectId ??
-  null;
+  object?.externalId ?? object?.external_id ?? object?.objectId ?? null;
 
 const getRuntimeId = (object) =>
-  object?.runtimeId ??
-  object?.objectRuntimeId ??
-  null;
+  object?.runtimeId ?? object?.objectRuntimeId ?? null;
 
-const getObjectModelId = (object) =>
-  object?.modelId ?? null;
+const getObjectModelId = (object) => object?.modelId ?? null;
 
 const getObjectKey = (object) =>
-  String(
-    object?.dbId ??
-      getExternalId(object) ??
-      "",
-  );
+  String(object?.dbId ?? getExternalId(object) ?? "");
 
-const getObjectDate = (object) =>
-  object?.assignedDate ??
-  object?.date ??
-  "";
+const getObjectDate = (object) => object?.assignedDate ?? object?.date ?? "";
 
-const isSameObject = (
-  first,
-  second,
-) => {
+const isSameObject = (first, second) => {
   if (!first || !second) {
     return false;
   }
 
-  const firstDbId =
-    first?.dbId;
+  const firstDbId = first?.dbId;
 
-  const secondDbId =
-    second?.dbId;
+  const secondDbId = second?.dbId;
 
-  if (
-    firstDbId != null &&
-    secondDbId != null
-  ) {
-    return (
-      String(firstDbId) ===
-      String(secondDbId)
-    );
+  if (firstDbId != null && secondDbId != null) {
+    return String(firstDbId) === String(secondDbId);
   }
 
-  return (
-    String(
-      getExternalId(first),
-    ) ===
-    String(
-      getExternalId(second),
-    )
-  );
+  return String(getExternalId(first)) === String(getExternalId(second));
 };
 
 const createSortDatesBetween = ({ previousItem, nextItem, count }) => {
@@ -495,7 +464,11 @@ const SortableSubItem = React.memo(
       onZoomIn,
     ]);
 
-    const displayDate = getObjectDate(item);
+    const objectDate = getObjectDate(item);
+
+    const displayDate = objectDate
+      ? dayjs(objectDate).format("DD-MM-YYYY")
+      : "";
 
     return (
       <Dropdown
@@ -726,11 +699,7 @@ const SequenceObjectCollapse = ({
     () =>
       new Set(
         (loadedModelIds || [])
-          .filter(
-            (modelId) =>
-              modelId != null &&
-              modelId !== "",
-          )
+          .filter((modelId) => modelId != null && modelId !== "")
           .map(String),
       ),
     [loadedModelIds],
@@ -745,101 +714,62 @@ const SequenceObjectCollapse = ({
       return [];
     }
 
-    return currentObjects.filter(
-      (object) => {
-        const modelId =
-          getObjectModelId(
-            object,
-          );
+    return currentObjects.filter((object) => {
+      const modelId = getObjectModelId(object);
 
-        const runtimeId =
-          getRuntimeId(
-            object,
-          );
+      const runtimeId = getRuntimeId(object);
 
-        if (
-          modelId == null ||
-          runtimeId == null ||
-          object?.objectAvailable ===
-            false
-        ) {
-          return false;
-        }
+      if (
+        modelId == null ||
+        runtimeId == null ||
+        object?.objectAvailable === false
+      ) {
+        return false;
+      }
 
-        return loadedModelIdSet.has(
-          String(modelId),
-        );
-      },
-    );
-  }, [
-    currentObjects,
-    loadedModelIdSet,
-  ]);
+      return loadedModelIdSet.has(String(modelId));
+    });
+  }, [currentObjects, loadedModelIdSet]);
 
   const items = useMemo(() => {
     const result = [];
 
-    sequenceObjects.forEach(
-      (group) => {
-        const objects =
-          group?.objects || [];
+    sequenceObjects.forEach((group) => {
+      const objects = group?.objects || [];
 
-        objects.forEach(
-          (object) => {
-            const modelId =
-              getObjectModelId(
-                object,
-              );
+      objects.forEach((object) => {
+        const modelId = getObjectModelId(object);
 
-            const runtimeId =
-              getRuntimeId(
-                object,
-              );
+        const runtimeId = getRuntimeId(object);
 
-            const externalId =
-              getExternalId(
-                object,
-              );
+        const externalId = getExternalId(object);
 
-            if (
-              modelId == null ||
-              runtimeId == null ||
-              externalId == null ||
-              object?.objectAvailable ===
-                false ||
-              !loadedModelIdSet.has(
-                String(modelId),
-              )
-            ) {
-              return;
-            }
+        if (
+          modelId == null ||
+          runtimeId == null ||
+          externalId == null ||
+          object?.objectAvailable === false ||
+          !loadedModelIdSet.has(String(modelId))
+        ) {
+          return;
+        }
 
-            result.push({
-              ...object,
+        result.push({
+          ...object,
 
-              externalId,
-              runtimeId,
-              modelId,
+          externalId,
+          runtimeId,
+          modelId,
 
-              planId:
-                object?.planId ??
-                group?.planId ??
-                group?.id,
+          planId: object?.planId ?? group?.planId ?? group?.id,
 
-              subPlanId:
-                object?.subPlanId ??
-                group?.subPlanId,
-            });
-          },
-        );
-      },
-    );
+          subPlanId: object?.subPlanId ?? group?.subPlanId,
+        });
+      });
+    });
 
     return result;
-  }, [
-    sequenceObjects,
-    loadedModelIdSet,
-  ]);
+  }, [sequenceObjects, loadedModelIdSet]);
 
   const updateObjects = useCallback(
     (objects) => {
@@ -873,85 +803,50 @@ const SequenceObjectCollapse = ({
    * Build Viewer selectors directly from hydrated runtime IDs.
    * No conversion is performed inside this component.
    */
-  const resolveViewerModelObjects =
-    useCallback(
-      async (objects) => {
-        if (!objects?.length) {
-          return [];
+  const resolveViewerModelObjects = useCallback(
+    async (objects) => {
+      if (!objects?.length) {
+        return [];
+      }
+
+      const modelGroups = new Map();
+
+      objects.forEach((object) => {
+        const modelId = getObjectModelId(object);
+
+        const runtimeId = getRuntimeId(object);
+
+        if (
+          modelId == null ||
+          runtimeId == null ||
+          object?.objectAvailable === false ||
+          !loadedModelIdSet.has(String(modelId))
+        ) {
+          return;
         }
 
-        const modelGroups =
-          new Map();
+        const modelKey = String(modelId);
 
-        objects.forEach(
-          (object) => {
-            const modelId =
-              getObjectModelId(
-                object,
-              );
+        if (!modelGroups.has(modelKey)) {
+          modelGroups.set(modelKey, {
+            modelId,
+            runtimeIds: new Set(),
+          });
+        }
 
-            const runtimeId =
-              getRuntimeId(
-                object,
-              );
+        modelGroups.get(modelKey).runtimeIds.add(runtimeId);
+      });
 
-            if (
-              modelId == null ||
-              runtimeId == null ||
-              object?.objectAvailable ===
-                false ||
-              !loadedModelIdSet.has(
-                String(modelId),
-              )
-            ) {
-              return;
-            }
+      return [...modelGroups.values()]
+        .map((group) => ({
+          modelId: group.modelId,
 
-            const modelKey =
-              String(modelId);
-
-            if (
-              !modelGroups.has(
-                modelKey,
-              )
-            ) {
-              modelGroups.set(
-                modelKey,
-                {
-                  modelId,
-                  runtimeIds:
-                    new Set(),
-                },
-              );
-            }
-
-            modelGroups
-              .get(modelKey)
-              .runtimeIds.add(
-                runtimeId,
-              );
-          },
-        );
-
-        return [
-          ...modelGroups.values(),
-        ]
-          .map((group) => ({
-            modelId:
-              group.modelId,
-
-            objectRuntimeIds: [
-              ...group.runtimeIds,
-            ],
-          }))
-          .filter(
-            (group) =>
-              group.objectRuntimeIds
-                .length > 0,
-          );
-      },
-      [loadedModelIdSet],
-    );
+          objectRuntimeIds: [...group.runtimeIds],
+        }))
+        .filter((group) => group.objectRuntimeIds.length > 0);
+    },
+    [loadedModelIdSet],
+  );
 
   const selectObjectsInViewer = useCallback(
     async (objects) => {
@@ -999,31 +894,17 @@ const SequenceObjectCollapse = ({
 
       dispatch(
         SetActiveSimulationItem({
-          planId:
-            item.planId,
+          planId: item.planId,
 
-          subPlanId:
-            item.subPlanId,
+          subPlanId: item.subPlanId,
 
-          modelId:
-            getObjectModelId(
-              item,
-            ),
+          modelId: getObjectModelId(item),
 
-          runtimeId:
-            getRuntimeId(
-              item,
-            ),
+          runtimeId: getRuntimeId(item),
 
-          id:
-            getExternalId(
-              item,
-            ),
+          id: getExternalId(item),
 
-          objectId:
-            getExternalId(
-              item,
-            ),
+          objectId: getExternalId(item),
         }),
       );
 
@@ -1039,19 +920,12 @@ const SequenceObjectCollapse = ({
           String(item.subPlanId) === String(activeSimulationItem.subPlanId) &&
           String(getObjectModelId(item)) ===
             String(activeSimulationItem.modelId) &&
-          String(
-            getExternalId(item),
-          ) ===
-            String(
-              activeSimulationItem.objectId ??
-                activeSimulationItem.id,
-            ),
+          String(getExternalId(item)) ===
+            String(activeSimulationItem.objectId ?? activeSimulationItem.id),
       );
     }
 
-    const currentItem =
-      selectedIds[0] ||
-      visibleObjects[focusedIndex];
+    const currentItem = selectedIds[0] || visibleObjects[focusedIndex];
 
     if (!currentItem) {
       return -1;
@@ -1094,50 +968,31 @@ const SequenceObjectCollapse = ({
     changeIndex(currentIndex - 1);
   }, [getCurrentIndex, changeIndex]);
 
-  const setActiveItem =
-    useCallback(
-      (item) => {
-        const externalId =
-          getExternalId(item);
+  const setActiveItem = useCallback(
+    (item) => {
+      const externalId = getExternalId(item);
 
-        dispatch(
-          SetActiveSimulationItem({
-            planId:
-              item.planId,
+      dispatch(
+        SetActiveSimulationItem({
+          planId: item.planId,
 
-            subPlanId:
-              item.subPlanId ||
-              subPlan.id,
+          subPlanId: item.subPlanId || subPlan.id,
 
-            modelId:
-              getObjectModelId(
-                item,
-              ),
+          modelId: getObjectModelId(item),
 
-            runtimeId:
-              getRuntimeId(
-                item,
-              ),
+          runtimeId: getRuntimeId(item),
 
-            id:
-              externalId,
+          id: externalId,
 
-            objectId:
-              externalId,
-          }),
-        );
-      },
-      [
-        dispatch,
-        subPlan.id,
-      ],
-    );
+          objectId: externalId,
+        }),
+      );
+    },
+    [dispatch, subPlan.id],
+  );
 
   useEffect(() => {
-    if (
-      !activeSimulationItem ||
-      !visibleObjects.length
-    ) {
+    if (!activeSimulationItem || !visibleObjects.length) {
       return;
     }
 
@@ -1145,26 +1000,19 @@ const SequenceObjectCollapse = ({
       return;
     }
 
-    const index =
-      visibleObjects.findIndex(
+    const index = visibleObjects.findIndex(
       (item) =>
         String(getObjectModelId(item)) ===
           String(activeSimulationItem.modelId) &&
-        String(
-          getExternalId(item),
-        ) ===
-          String(
-            activeSimulationItem.objectId ??
-              activeSimulationItem.id,
-          ),
+        String(getExternalId(item)) ===
+          String(activeSimulationItem.objectId ?? activeSimulationItem.id),
     );
 
     if (index === -1) {
       return;
     }
 
-    const item =
-      visibleObjects[index];
+    const item = visibleObjects[index];
 
     setFocusedIndex(index);
     setSelectedIds([item]);
@@ -1184,11 +1032,7 @@ const SequenceObjectCollapse = ({
     }, 150);
 
     return () => clearTimeout(timeoutId);
-  }, [
-    activeSimulationItem,
-    visibleObjects,
-    subPlan.id,
-  ]);
+  }, [activeSimulationItem, visibleObjects, subPlan.id]);
 
   const handleKeyDown = useCallback(
     (event) => {
@@ -1208,277 +1052,171 @@ const SequenceObjectCollapse = ({
     [next, prev],
   );
 
-  const onDragEndSubItem =
-    useCallback(
-      ({ active, over }) => {
-        if (!isOwner) {
-          return;
+  const onDragEndSubItem = useCallback(
+    ({ active, over }) => {
+      if (!isOwner) {
+        return;
+      }
+
+      if (!over) {
+        return;
+      }
+
+      const activeKey = String(active.id);
+
+      const overKey = String(over.id);
+
+      if (activeKey === overKey) {
+        return;
+      }
+
+      const oldIndex = visibleObjects.findIndex(
+        (item) => getObjectKey(item) === activeKey,
+      );
+
+      const newIndex = visibleObjects.findIndex(
+        (item) => getObjectKey(item) === overKey,
+      );
+
+      if (oldIndex < 0 || newIndex < 0) {
+        return;
+      }
+
+      const selectedKeySet = new Set(
+        selectedIds.map((item) => getObjectKey(item)),
+      );
+
+      if (!selectedKeySet.has(activeKey)) {
+        selectedKeySet.clear();
+        selectedKeySet.add(activeKey);
+      }
+
+      const movingObjects = visibleObjects.filter((item) =>
+        selectedKeySet.has(getObjectKey(item)),
+      );
+
+      if (movingObjects.length > 1 && selectedKeySet.has(overKey)) {
+        return;
+      }
+
+      const remainingVisibleObjects = visibleObjects.filter(
+        (item) => !selectedKeySet.has(getObjectKey(item)),
+      );
+
+      const overIndexInRemaining = remainingVisibleObjects.findIndex(
+        (item) => getObjectKey(item) === overKey,
+      );
+
+      if (overIndexInRemaining < 0) {
+        return;
+      }
+
+      const movingDown = oldIndex < newIndex;
+
+      const insertIndex = movingDown
+        ? overIndexInRemaining + 1
+        : overIndexInRemaining;
+
+      const safeInsertIndex = Math.max(
+        0,
+        Math.min(insertIndex, remainingVisibleObjects.length),
+      );
+
+      const previousItem =
+        safeInsertIndex > 0
+          ? remainingVisibleObjects[safeInsertIndex - 1]
+          : null;
+
+      const nextItem =
+        safeInsertIndex < remainingVisibleObjects.length
+          ? remainingVisibleObjects[safeInsertIndex]
+          : null;
+
+      let sortDates;
+
+      try {
+        sortDates = createSortDatesBetween({
+          previousItem,
+          nextItem,
+          count: movingObjects.length,
+        });
+      } catch (error) {
+        console.error("Unable to calculate sequence object order:", error);
+
+        return;
+      }
+
+      const updatedMovingObjects = movingObjects.map((object, index) => ({
+        ...object,
+        sortDatetime: sortDates[index],
+      }));
+
+      const reorderedVisible = [
+        ...remainingVisibleObjects.slice(0, safeInsertIndex),
+        ...updatedMovingObjects,
+        ...remainingVisibleObjects.slice(safeInsertIndex),
+      ];
+
+      /*
+       * Giữ nguyên các object thuộc model chưa loaded,
+       * chỉ thay vị trí các object đang visible.
+       */
+      const reorderedVisibleQueue = [...reorderedVisible];
+
+      const reorderedAll = currentObjects.map((object) => {
+        const modelId = getObjectModelId(object);
+
+        if (modelId == null || !loadedModelIdSet.has(String(modelId))) {
+          return object;
         }
 
-        if (!over) {
-          return;
-        }
+        return reorderedVisibleQueue.shift() || object;
+      });
 
-        const activeKey =
-          String(active.id);
+      setLocalObjects(reorderedAll);
 
-        const overKey =
-          String(over.id);
+      dispatch(
+        UpdateSequenceObjectSortDatesRequest({
+          subPlanId: subPlan.id,
 
-        if (
-          activeKey === overKey
-        ) {
-          return;
-        }
+          objects: updatedMovingObjects.map((object) => ({
+            dbId: object.dbId,
 
-        const oldIndex =
-          visibleObjects.findIndex(
-            (item) =>
-              getObjectKey(item) ===
-              activeKey,
-          );
+            subPlanId: subPlan.id,
 
-        const newIndex =
-          visibleObjects.findIndex(
-            (item) =>
-              getObjectKey(item) ===
-              overKey,
-          );
+            externalId: getExternalId(object),
 
-        if (
-          oldIndex < 0 ||
-          newIndex < 0
-        ) {
-          return;
-        }
+            sortDatetime: object.sortDatetime,
+          })),
+        }),
+      );
 
-        const selectedKeySet =
-          new Set(
-            selectedIds.map(
-              (item) =>
-                getObjectKey(item),
-            ),
-          );
+      setSelectedIds(updatedMovingObjects);
 
-        if (
-          !selectedKeySet.has(
-            activeKey,
-          )
-        ) {
-          selectedKeySet.clear();
-          selectedKeySet.add(
-            activeKey,
-          );
-        }
+      const activeItem = updatedMovingObjects.find(
+        (item) => getObjectKey(item) === activeKey,
+      );
 
-        const movingObjects =
-          visibleObjects.filter(
-            (item) =>
-              selectedKeySet.has(
-                getObjectKey(item),
-              ),
-          );
+      if (activeItem) {
+        setLastSelected(activeItem);
+      }
 
-        if (
-          movingObjects.length > 1 &&
-          selectedKeySet.has(
-            overKey,
-          )
-        ) {
-          return;
-        }
+      const nextActiveIndex = reorderedVisible.findIndex(
+        (item) => getObjectKey(item) === activeKey,
+      );
 
-        const remainingVisibleObjects =
-          visibleObjects.filter(
-            (item) =>
-              !selectedKeySet.has(
-                getObjectKey(item),
-              ),
-          );
-
-        const overIndexInRemaining =
-          remainingVisibleObjects.findIndex(
-            (item) =>
-              getObjectKey(item) ===
-              overKey,
-          );
-
-        if (
-          overIndexInRemaining < 0
-        ) {
-          return;
-        }
-
-        const movingDown =
-          oldIndex < newIndex;
-
-        const insertIndex =
-          movingDown
-            ? overIndexInRemaining + 1
-            : overIndexInRemaining;
-
-        const safeInsertIndex =
-          Math.max(
-            0,
-            Math.min(
-              insertIndex,
-              remainingVisibleObjects.length,
-            ),
-          );
-
-        const previousItem =
-          safeInsertIndex > 0
-            ? remainingVisibleObjects[
-                safeInsertIndex - 1
-              ]
-            : null;
-
-        const nextItem =
-          safeInsertIndex <
-          remainingVisibleObjects.length
-            ? remainingVisibleObjects[
-                safeInsertIndex
-              ]
-            : null;
-
-        let sortDates;
-
-        try {
-          sortDates =
-            createSortDatesBetween({
-              previousItem,
-              nextItem,
-              count:
-                movingObjects.length,
-            });
-        } catch (error) {
-          console.error(
-            "Unable to calculate sequence object order:",
-            error,
-          );
-
-          return;
-        }
-
-        const updatedMovingObjects =
-          movingObjects.map(
-            (object, index) => ({
-              ...object,
-              sortDatetime:
-                sortDates[index],
-            }),
-          );
-
-        const reorderedVisible = [
-          ...remainingVisibleObjects.slice(
-            0,
-            safeInsertIndex,
-          ),
-          ...updatedMovingObjects,
-          ...remainingVisibleObjects.slice(
-            safeInsertIndex,
-          ),
-        ];
-
-        /*
-         * Giữ nguyên các object thuộc model chưa loaded,
-         * chỉ thay vị trí các object đang visible.
-         */
-        const reorderedVisibleQueue =
-          [...reorderedVisible];
-
-        const reorderedAll =
-          currentObjects.map(
-            (object) => {
-              const modelId =
-                getObjectModelId(
-                  object,
-                );
-
-              if (
-                modelId == null ||
-                !loadedModelIdSet.has(
-                  String(modelId),
-                )
-              ) {
-                return object;
-              }
-
-              return (
-                reorderedVisibleQueue.shift() ||
-                object
-              );
-            },
-          );
-
-        setLocalObjects(
-          reorderedAll,
-        );
-
-        dispatch(
-          UpdateSequenceObjectSortDatesRequest({
-            subPlanId:
-              subPlan.id,
-
-            objects:
-              updatedMovingObjects.map(
-                (object) => ({
-                  dbId:
-                    object.dbId,
-
-                  subPlanId:
-                    subPlan.id,
-
-                  externalId:
-                    getExternalId(
-                      object,
-                    ),
-
-                  sortDatetime:
-                    object.sortDatetime,
-                }),
-              ),
-          }),
-        );
-
-        setSelectedIds(
-          updatedMovingObjects,
-        );
-
-        const activeItem =
-          updatedMovingObjects.find(
-            (item) =>
-              getObjectKey(item) ===
-              activeKey,
-          );
-
-        if (activeItem) {
-          setLastSelected(
-            activeItem,
-          );
-        }
-
-        const nextActiveIndex =
-          reorderedVisible.findIndex(
-            (item) =>
-              getObjectKey(item) ===
-              activeKey,
-          );
-
-        setFocusedIndex(
-          nextActiveIndex,
-        );
-      },
-      [
-        currentObjects,
-        visibleObjects,
-        selectedIds,
-        dispatch,
-        isOwner,
-        subPlan.id,
-        loadedModelIdSet,
-      ],
-    );
+      setFocusedIndex(nextActiveIndex);
+    },
+    [
+      currentObjects,
+      visibleObjects,
+      selectedIds,
+      dispatch,
+      isOwner,
+      subPlan.id,
+      loadedModelIdSet,
+    ],
+  );
 
   const handleAssignDate = useCallback(
     (date, dateStep) => {
@@ -1501,8 +1239,7 @@ const SequenceObjectCollapse = ({
 
       let dateCount = 0;
 
-      const updated =
-        currentObjects.map((object) => {
+      const updated = currentObjects.map((object) => {
         const key = getObjectKey(object);
 
         if (!selectedKeys.has(key)) {
@@ -1606,24 +1343,16 @@ const SequenceObjectCollapse = ({
       );
 
       if (selectedKeySet.has(triggerKey)) {
-        return visibleObjects.filter(
-          (object) =>
-            selectedKeySet.has(
-              getObjectKey(object),
-            ),
+        return visibleObjects.filter((object) =>
+          selectedKeySet.has(getObjectKey(object)),
         );
       }
 
       return visibleObjects.filter(
-        (object) =>
-          getObjectKey(object) ===
-          triggerKey,
+        (object) => getObjectKey(object) === triggerKey,
       );
     },
-    [
-      visibleObjects,
-      selectedIds,
-    ],
+    [visibleObjects, selectedIds],
   );
 
   const updateSelectedObjectCameras = useCallback(
@@ -1737,13 +1466,9 @@ const SequenceObjectCollapse = ({
         selectedIds.map((item) => getObjectKey(item)),
       );
 
-      const selectedObjects =
-        visibleObjects.filter(
-          (obj) =>
-            selectedKeys.has(
-              getObjectKey(obj),
-            ),
-        );
+      const selectedObjects = visibleObjects.filter((obj) =>
+        selectedKeys.has(getObjectKey(obj)),
+      );
 
       const modelObjectIds = await resolveViewerModelObjects(selectedObjects);
 
@@ -1763,36 +1488,19 @@ const SequenceObjectCollapse = ({
     } catch (error) {
       console.error("Zoom selected objects error:", error);
     }
-  }, [
-    visibleObjects,
-    selectedIds,
-    resolveViewerModelObjects,
-  ]);
+  }, [visibleObjects, selectedIds, resolveViewerModelObjects]);
 
   useEffect(() => {
-    const visibleKeySet =
-      new Set(
-        visibleObjects.map(
-          (object) =>
-            getObjectKey(object),
-        ),
-      );
+    const visibleKeySet = new Set(
+      visibleObjects.map((object) => getObjectKey(object)),
+    );
 
     setSelectedIds((previous) =>
-      previous.filter((object) =>
-        visibleKeySet.has(
-          getObjectKey(object),
-        ),
-      ),
+      previous.filter((object) => visibleKeySet.has(getObjectKey(object))),
     );
 
     setLastSelected((previous) =>
-      previous &&
-      visibleKeySet.has(
-        getObjectKey(previous),
-      )
-        ? previous
-        : null,
+      previous && visibleKeySet.has(getObjectKey(previous)) ? previous : null,
     );
   }, [visibleObjects]);
 
@@ -1802,18 +1510,10 @@ const SequenceObjectCollapse = ({
       return;
     }
 
-    if (
-      focusedIndex >
-      visibleObjects.length - 1
-    ) {
-      setFocusedIndex(
-        visibleObjects.length - 1,
-      );
+    if (focusedIndex > visibleObjects.length - 1) {
+      setFocusedIndex(visibleObjects.length - 1);
     }
-  }, [
-    visibleObjects.length,
-    focusedIndex,
-  ]);
+  }, [visibleObjects.length, focusedIndex]);
 
   if (!visibleObjects.length) {
     return (
@@ -1828,10 +1528,7 @@ const SequenceObjectCollapse = ({
       onDragEnd={isOwner ? onDragEndSubItem : undefined}
     >
       <SortableContext
-        items={visibleObjects.map(
-          (item) =>
-            getObjectKey(item),
-        )}
+        items={visibleObjects.map((item) => getObjectKey(item))}
         strategy={verticalListSortingStrategy}
       >
         <div
