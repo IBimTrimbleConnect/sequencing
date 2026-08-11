@@ -50,12 +50,12 @@ import * as actionType from "./actionTypes";
 
 import {
   getPlansByProject,
-  getExistingPlanProjectId,
   createPlan,
   updatePlan,
   deletePlan,
   createPlansBulk,
   updatePlansOrder,
+  hasPlansInAnotherProject
 } from "../../services/planService";
 
 import {
@@ -109,30 +109,25 @@ function* getPlansSaga(action) {
      * TRIAL PROJECT LIMIT
      * =========================================
      */
-    if (currentUser?.isTrial === true) {
-      /*
-       * Kiểm tra xem hệ thống đã có Plan
-       * thuộc project nào chưa.
-       */
-      const existingProjectId = yield call(getExistingPlanProjectId);
+    // if (currentUser?.isTrial === true) {
+    //   const hasAnotherProject = yield call(
+    //     hasPlansInAnotherProject,
+    //     currentProjectId,
+    //   );
 
-      /*
-       * Có Plan rồi nhưng thuộc project khác.
-       */
-      if (existingProjectId && String(existingProjectId) !== currentProjectId) {
-        yield put(
-          GetPlanFailure({
-            code: "TRIAL_PROJECT_LIMIT",
+    //   if (hasAnotherProject) {
+    //     yield put(
+    //       GetPlanFailure({
+    //         code: "TRIAL_PROJECT_LIMIT",
+    //         message:
+    //           "The Trial License is limited to one Trimble Connect project. " +
+    //           "Please purchase a license to use Sequence Planner on another project.",
+    //       }),
+    //     );
 
-            message:
-              "The Trial License is limited to one Trimble Connect project. " +
-              "Please purchase a license to use Sequence Planner on another project.",
-          }),
-        );
-
-        return;
-      }
-    }
+    //     return;
+    //   }
+    // }
 
     /*
      * =========================================

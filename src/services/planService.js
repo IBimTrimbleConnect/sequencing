@@ -231,19 +231,25 @@ export async function deletePlan(id) {
 
   return id;
 }
-export async function getExistingPlanProjectId() {
-  const { data, error } = await supabase
+
+export async function hasPlansInAnotherProject(currentTrimbleProjectId) {
+  if (!currentTrimbleProjectId) {
+    return false;
+  }
+
+  const { count, error } = await supabase
     .from("plans")
-    .select("trimble_project_id")
+    .select("*", {
+      count: "exact",
+      head: true,
+    })
     .not("trimble_project_id", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .neq("trimble_project_id", currentTrimbleProjectId);
 
   if (error) {
+    console.error("Check plans in another project failed:", error);
     throw error;
   }
 
-  return data?.trimble_project_id
-    ? String(data.trimble_project_id)
-    : null;
+  return (count ?? 0) > 0;
 }
