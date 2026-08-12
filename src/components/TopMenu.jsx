@@ -1,16 +1,25 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Flex, Form, message, Space, Tooltip } from "antd";
 import {
   DownloadOutlined,
   FileSearchOutlined,
   FolderAddOutlined,
   ReloadOutlined,
+  VideoCameraOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useDispatch, useSelector } from "react-redux";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
+
+import {
+  getSimulationFrames,
+  subscribeSimulationFrames,
+} from "../services/simulationVideoService";
 
 import {
   CreateMultiplePlansRequest,
@@ -30,6 +39,9 @@ import { buildGroups } from "./buildExcelGroups";
 import { fillGroups, fillHeader } from "./excelTemplate";
 
 const DEFAULT_FILE_NAME = "Sequencing Report";
+
+const FFMPEG_CORE_BASE_URL =
+  "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd";
 
 const TopMenu = ({
   projectId: projectIdProp = "",
@@ -87,6 +99,24 @@ const TopMenu = ({
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
   const [exporting, setExporting] = useState(false);
+
+  /*
+   * Simulation video export is kept here, separate from the Simulation
+   * playback engine.
+   */
+  const ffmpegRef = useRef(null);
+
+  const [simulationFrameCount, setSimulationFrameCount] = useState(0);
+
+  const [exportingVideo, setExportingVideo] = useState(false);
+
+  const [videoExportProgress, setVideoExportProgress] = useState(0);
+
+  useEffect(() => {
+    return subscribeSimulationFrames((count) => {
+      setSimulationFrameCount(count);
+    });
+  }, []);
 
   const handleCreate = useCallback(async () => {
     try {
@@ -469,6 +499,270 @@ const TopMenu = ({
     }
   }, [exportForm, exportWorkbook]);
 
+  const getFFmpeg = useCallback(async () => {
+    if (ffmpegRef.current) {
+      return ffmpegRef.current;
+    }
+
+    const ffmpeg = new FFmpeg();
+
+    ffmpeg.on("log", ({ message: logMessage }) => {
+      console.log("FFmpeg:", logMessage);
+    });
+
+    await ffmpeg.load({
+      coreURL: await toBlobURL(
+        `${FFMPEG_CORE_BASE_URL}/ffmpeg-core.js`,
+        "text/javascript",
+      ),
+
+      wasmURL: await toBlobURL(
+        `${FFMPEG_CORE_BASE_URL}/ffmpeg-core.wasm`,
+        "application/wasm",
+      ),
+    });
+
+    ffmpegRef.current = ffmpeg;
+
+    return ffmpeg;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const ffmpeg = ffmpegRef.current;
+
+      if (!ffmpeg) {
+        return;
+      }
+
+      try {
+        ffmpeg.terminate();
+      } catch (error) {
+        console.error("Terminate FFmpeg failed:", error);
+      }
+
+      ffmpegRef.current = null;
+    };
+  }, []);
+
+  const handleExportSimulationMp4 = useCallback(async () => {
+    if (exportingVideo) {
+      return;
+    }
+
+    /*
+     * Keep the same license behavior as the other export operation.
+     * The button remains visible but disabled for Free.
+     */
+    if (isFree) {
+      message.warning(
+        "MP4 export is not available with the Free License.",
+      );
+
+      return;
+    }
+
+    const frames = getSimulationFrames();
+
+    if (!frames.length) {
+      message.warning(
+        "Run the simulation first to capture video frames.",
+      );
+
+      return;
+    }
+
+    setExportingVideo(true);
+    setVideoExportProgress(0);
+
+    const temporaryFiles = [];
+
+    try {
+      const ffmpeg = await getFFmpeg();
+
+      const exportId = Date.now();
+
+      const frameNames = [];
+
+      /*
+       * Write all captured snapshots to FFmpeg's virtual file system.
+       */
+      for (let index = 0; index < frames.length; index += 1) {
+        const frame = frames[index];
+
+        const frameName =
+          `simulation_${exportId}_frame_${String(index).padStart(6, "0")}.png`;
+
+        await ffmpeg.writeFile(
+          frameName,
+          await fetchFile(frame.snapshot),
+        );
+
+        frameNames.push(frameName);
+        temporaryFiles.push(frameName);
+
+        setVideoExportProgress(
+          Math.round(((index + 1) / frames.length) * 70),
+        );
+      }
+
+      /*
+       * Use the actual delay captured for every simulation frame.
+       */
+      const concatLines = [];
+
+      for (let index = 0; index < frames.length; index += 1) {
+        const frame = frames[index];
+
+        const durationSeconds =
+          Math.max(50, Number(frame.duration) || 200) / 1000;
+
+        concatLines.push(`file '${frameNames[index]}'`);
+
+        concatLines.push(
+          `duration ${durationSeconds.toFixed(6)}`,
+        );
+      }
+
+      /*
+       * Repeat the final frame because FFmpeg's concat demuxer otherwise
+       * ignores the duration line belonging to the last image.
+       */
+      concatLines.push(
+        `file '${frameNames[frameNames.length - 1]}'`,
+      );
+
+      const concatFileName =
+        `simulation_${exportId}_frames.txt`;
+
+      await ffmpeg.writeFile(
+        concatFileName,
+        new TextEncoder().encode(concatLines.join("\n")),
+      );
+
+      temporaryFiles.push(concatFileName);
+
+      const outputName =
+        `SequencePlanner_Simulation_${exportId}.mp4`;
+
+      temporaryFiles.push(outputName);
+
+      setVideoExportProgress(75);
+
+      /*
+       * Prefer H.264. Fall back to MPEG-4 if this particular FFmpeg core
+       * does not include libx264.
+       */
+      try {
+        await ffmpeg.exec([
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          concatFileName,
+          "-vsync",
+          "vfr",
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          "-movflags",
+          "+faststart",
+          outputName,
+        ]);
+      } catch (h264Error) {
+        console.warn(
+          "H.264 encode failed. Falling back to MPEG-4:",
+          h264Error,
+        );
+
+        await ffmpeg.exec([
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          concatFileName,
+          "-vsync",
+          "vfr",
+          "-c:v",
+          "mpeg4",
+          "-q:v",
+          "3",
+          "-pix_fmt",
+          "yuv420p",
+          outputName,
+        ]);
+      }
+
+      setVideoExportProgress(95);
+
+      const videoData = await ffmpeg.readFile(outputName);
+
+      /*
+       * Copy the Uint8Array into a fresh ArrayBuffer for Blob compatibility
+       * across browsers.
+       */
+      const videoBytes = new Uint8Array(videoData);
+
+      const videoBlob = new Blob(
+        [videoBytes],
+        {
+          type: "video/mp4",
+        },
+      );
+
+      const videoUrl = URL.createObjectURL(videoBlob);
+
+      const anchor = document.createElement("a");
+
+      anchor.href = videoUrl;
+      anchor.download = outputName;
+
+      document.body.appendChild(anchor);
+
+      anchor.click();
+
+      anchor.remove();
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(videoUrl);
+      }, 1000);
+
+      setVideoExportProgress(100);
+
+      message.success("MP4 exported successfully.");
+    } catch (error) {
+      console.error("Export simulation MP4 failed:", error);
+
+      message.error(
+        error?.message || "Unable to export the simulation MP4.",
+      );
+    } finally {
+      /*
+       * Clean FFmpeg's in-memory filesystem where possible.
+       */
+      const ffmpeg = ffmpegRef.current;
+
+      if (ffmpeg) {
+        for (const fileName of temporaryFiles) {
+          try {
+            await ffmpeg.deleteFile(fileName);
+          } catch {
+            // Ignore cleanup errors.
+          }
+        }
+      }
+
+      setExportingVideo(false);
+    }
+  }, [
+    exportingVideo,
+    getFFmpeg,
+    isFree,
+  ]);
+
   const handleRefreshModels = useCallback(async () => {
     if (typeof onRefreshModels !== "function") {
       return;
@@ -584,6 +878,39 @@ const TopMenu = ({
                   />
                 }
                 onClick={handleOpenExportModal}
+              />
+            </Tooltip>
+
+            <Tooltip
+              title={
+                isFree
+                  ? "MP4 export is not available with the Free License."
+                  : exportingVideo
+                    ? `Exporting MP4 ${videoExportProgress}%`
+                    : simulationFrameCount === 0
+                      ? "Run the simulation first to capture video frames."
+                      : `Export MP4 (${simulationFrameCount} frames)`
+              }
+            >
+              <Button
+                size="large"
+                type="text"
+                loading={exportingVideo}
+                disabled={
+                  isFree ||
+                  exportingVideo ||
+                  simulationFrameCount === 0
+                }
+                icon={
+                  !exportingVideo ? (
+                    <VideoCameraOutlined
+                      style={{
+                        fontSize: 22,
+                      }}
+                    />
+                  ) : null
+                }
+                onClick={handleExportSimulationMp4}
               />
             </Tooltip>
 

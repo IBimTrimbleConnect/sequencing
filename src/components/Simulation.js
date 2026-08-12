@@ -29,12 +29,19 @@ import {
   SetSimulationDateRange,
 } from "../store/sequence/action";
 
+import {
+  addSimulationFrame,
+  clearSimulationFrames,
+} from "../services/simulationVideoService";
+
 dayjs.extend(customParseFormat);
 
 const DATE_FORMATS = ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "YYYY/MM/DD"];
 
 const ALL_PLANS_VALUE = "__ALL_PLANS__";
 const ALL_SUBPLANS_VALUE = "__ALL_SUBPLANS__";
+
+const SNAPSHOT_RENDER_DELAY_MS = 150;
 
 const DEFAULT_PROJECT_FORMATTING = {
   massUnit: "kg",
@@ -277,6 +284,16 @@ export default function Simulation({
 
   const gridObjectsRef = useRef(null);
 
+  /*
+   * Simulation only captures snapshots.
+   *
+   * The actual frames are stored in simulationVideoService so TopMenu can
+   * export them later without putting large Data URLs into Redux.
+   */
+  const snapshotIndexRef = useRef(0);
+  const recordingSimulationRef = useRef(false);
+  const simulationPausedRef = useRef(false);
+
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [delay, setDelay] = useState(200);
@@ -303,6 +320,20 @@ export default function Simulation({
    */
   const [pendingSimulationRequest, setPendingSimulationRequest] =
     useState(null);
+
+  /*
+   * Reset the recording session.
+   *
+   * This is called only when a NEW simulation starts. Pause/resume keeps the
+   * existing captured frames.
+   */
+  const clearCapturedFrames = useCallback(() => {
+    clearSimulationFrames();
+
+    snapshotIndexRef.current = 0;
+    recordingSimulationRef.current = false;
+    simulationPausedRef.current = false;
+  }, []);
 
   useEffect(() => {
     indexRef.current = index;
@@ -623,11 +654,19 @@ export default function Simulation({
   // =====================================================
 
   useEffect(() => {
+    recordingSimulationRef.current = false;
     setPlaying(false);
     setIndex(0);
+    clearCapturedFrames();
 
     clearTimeout(intervalRef.current);
-  }, [selectedPlanIds, selectedSubPlanIds, startDate, endDate]);
+  }, [
+    selectedPlanIds,
+    selectedSubPlanIds,
+    startDate,
+    endDate,
+    clearCapturedFrames,
+  ]);
 
   /*
    * Chỉ kiểm tra index.
@@ -673,6 +712,56 @@ export default function Simulation({
 
     return tcapiRef.current;
   }, []);
+
+  const captureSimulationSnapshot = useCallback(
+    async (item, itemIndex) => {
+      if (!recordingSimulationRef.current) {
+        return;
+      }
+
+      try {
+        const tcapi = await getTcapi();
+
+        /*
+         * Viewer API promises are ordered, but give the host viewer a small
+         * render window before taking the screenshot.
+         */
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, SNAPSHOT_RENDER_DELAY_MS);
+        });
+
+        const snapshot = await tcapi.viewer.getSnapshot();
+
+        if (!snapshot) {
+          console.warn("Simulation snapshot is empty:", itemIndex);
+
+          return;
+        }
+
+        addSimulationFrame({
+          index: snapshotIndexRef.current++,
+          itemIndex,
+          planId: item?.planId ?? null,
+          subPlanId: item?.subPlanId ?? null,
+          modelId: item?.modelId ?? null,
+          runtimeId: item?.runtimeId ?? null,
+
+          /*
+           * Keep the delay used for this frame.
+           * TopMenu uses this value when composing the MP4.
+           */
+          duration: Math.max(50, Number(delay) || 200),
+
+          snapshot,
+        });
+
+        console.log("Simulation snapshot captured:", itemIndex);
+      } catch (error) {
+        console.error("Capture simulation snapshot failed:", error);
+      }
+    },
+    [delay, getTcapi],
+  );
 
   const enqueueViewerTask = useCallback((task) => {
     const nextTask = viewerTaskRef.current
@@ -1169,6 +1258,14 @@ export default function Simulation({
            */
           await colorAccumulatedObjects(safeIndex);
 
+          /*
+           * Capture only while simulation playback recording is active.
+           * Manual slider/Next/Previous navigation does not add frames.
+           * Snapshot is taken before selection so selection highlighting is
+           * not baked into the exported video frame.
+           */
+          await captureSimulationSnapshot(item, safeIndex);
+
           await selectObjectInTrimble(item);
         });
       } catch (error) {
@@ -1186,6 +1283,7 @@ export default function Simulation({
       isolateObjectsInTrimble,
       gotoCamera,
       colorAccumulatedObjects,
+      captureSimulationSnapshot,
       selectObjectInTrimble,
     ],
   );
@@ -1234,6 +1332,9 @@ export default function Simulation({
 
     const startSimulation = async () => {
       try {
+        clearCapturedFrames();
+        recordingSimulationRef.current = true;
+
         await goToIndex(0);
 
         if (cancelled) {
@@ -1258,7 +1359,13 @@ export default function Simulation({
     return () => {
       cancelled = true;
     };
-  }, [pendingSimulationRequest, items, goToIndex, onSimulationRequestApplied]);
+  }, [
+    pendingSimulationRequest,
+    items,
+    goToIndex,
+    clearCapturedFrames,
+    onSimulationRequestApplied,
+  ]);
 
   // =====================================================
   // SHOW/HIDE GRID
@@ -1315,16 +1422,58 @@ export default function Simulation({
     if (!items.length) {
       return;
     }
-    if (!playing) {
-      if (index >= items.length - 1) {
-        await goToIndex(0);
-      } else {
-        await goToIndex(index);
-      }
+
+    /*
+     * PAUSE
+     *
+     * Keep all existing frames. The next Play continues the same recording.
+     */
+    if (playing) {
+      setPlaying(false);
+
+      simulationPausedRef.current = true;
+
+      clearTimeout(intervalRef.current);
+
+      return;
     }
 
-    setPlaying((currentPlaying) => !currentPlaying);
-  }, [items.length, playing, index, goToIndex]);
+    /*
+     * RESUME
+     */
+    if (
+      simulationPausedRef.current &&
+      recordingSimulationRef.current
+    ) {
+      simulationPausedRef.current = false;
+
+      setPlaying(true);
+
+      return;
+    }
+
+    /*
+     * NEW RUN
+     *
+     * Every new simulation starts from item 0 and resets old frames.
+     */
+    clearCapturedFrames();
+
+    recordingSimulationRef.current = true;
+    simulationPausedRef.current = false;
+
+    indexRef.current = 0;
+    setIndex(0);
+
+    await goToIndex(0);
+
+    setPlaying(true);
+  }, [
+    items.length,
+    playing,
+    goToIndex,
+    clearCapturedFrames,
+  ]);
 
   // =====================================================
   // AUTO PLAY
@@ -1350,7 +1499,15 @@ export default function Simulation({
         const nextIndex = indexRef.current + 1;
 
         if (nextIndex >= items.length) {
+          /*
+           * Keep frames in simulationVideoService for TopMenu export.
+           */
+          recordingSimulationRef.current = false;
+          simulationPausedRef.current = false;
+
           setPlaying(false);
+
+          console.log("Simulation finished.");
 
           return;
         }
@@ -1380,6 +1537,7 @@ export default function Simulation({
 
   useEffect(() => {
     return () => {
+      recordingSimulationRef.current = false;
       clearTimeout(intervalRef.current);
 
       const tcapi = tcapiRef.current;
@@ -1787,6 +1945,8 @@ export default function Simulation({
               />
             </Space>
           </div>
+
+          {/* VIDEO EXPORT */}
 
           {/* SPEED */}
           <div

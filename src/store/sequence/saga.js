@@ -55,7 +55,7 @@ import {
   deletePlan,
   createPlansBulk,
   updatePlansOrder,
-  hasPlansInAnotherProject
+  hasPlansInAnotherProject,
 } from "../../services/planService";
 
 import {
@@ -899,82 +899,192 @@ function* updateSequenceObjectFieldsSaga(action) {
 
 const DEFAULT_TEMPLATE_PATH = "/templates/SequencingTemplate.xlsx";
 
+/*
+ * ============================================================
+ * GET CELL TEXT
+ * ============================================================
+ */
 function getCellText(cell) {
-  if (typeof cell.value === "string") {
-    return cell.value;
+  const value = cell?.value;
+
+  if (value == null) {
+    return "";
   }
 
-  if (cell.value && Array.isArray(cell.value.richText)) {
-    return cell.value.richText.map((item) => item.text || "").join("");
+  if (typeof value === "string") {
+    return value;
   }
 
-  if (cell.value?.text) {
-    return String(cell.value.text);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
   }
 
-  if (cell.value?.result !== undefined) {
-    return String(cell.value.result ?? "");
+  if (value && Array.isArray(value.richText)) {
+    return value.richText.map((item) => item?.text || "").join("");
+  }
+
+  if (value?.text != null) {
+    return String(value.text);
+  }
+
+  if (value?.result !== undefined) {
+    return String(value.result ?? "");
   }
 
   return "";
 }
 
+/*
+ * ============================================================
+ * FILL TEXT
+ * ============================================================
+ *
+ * Function này CHỈ dùng cho text.
+ * Không dùng cho Index / Qty / Length / Weight.
+ */
 function fillText(value, data) {
   if (typeof value !== "string") {
     return value;
   }
 
-  return value.replace(/\{\{\s*(.*?)\s*\}\}/g, (_, key) => data[key] ?? "");
-}
+  return value.replace(/{{\s*(.*?)\s*}}/g, (_, key) => {
+    const result = data[key.trim()];
 
-function copyRowStyle(fromRow, toRow) {
-  fromRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-    const target = toRow.getCell(columnNumber);
-
-    target.style = JSON.parse(JSON.stringify(cell.style || {}));
-
-    target.numFmt = cell.numFmt;
-    target.alignment = cell.alignment ? { ...cell.alignment } : undefined;
-    target.border = cell.border
-      ? JSON.parse(JSON.stringify(cell.border))
-      : undefined;
-    target.fill = cell.fill ? JSON.parse(JSON.stringify(cell.fill)) : undefined;
-    target.font = cell.font ? { ...cell.font } : undefined;
-  });
-
-  toRow.height = fromRow.height;
-}
-
-function fillHeader(worksheet, data) {
-  worksheet.eachRow((row) => {
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      if (typeof cell.value === "string") {
-        cell.value = fillText(cell.value, data);
-      }
-    });
+    return result == null ? "" : String(result);
   });
 }
 
+/*
+ * ============================================================
+ * CLONE
+ * ============================================================
+ */
+function cloneObject(value) {
+  if (value == null || typeof value !== "object") {
+    return value;
+  }
+
+  return JSON.parse(JSON.stringify(value));
+}
+
+/*
+ * ============================================================
+ * SNAPSHOT TEMPLATE ROW
+ * ============================================================
+ *
+ * Lưu placeholder + style TRƯỚC khi xóa template row.
+ */
+function snapshotTemplateRow(row) {
+  const cells = {};
+
+  row.eachCell(
+    {
+      includeEmpty: true,
+    },
+    (cell, columnNumber) => {
+      cells[columnNumber] = {
+        templateText: getCellText(cell).trim(),
+
+        style: cloneObject(cell.style || {}),
+
+        font: cloneObject(cell.font),
+
+        fill: cloneObject(cell.fill),
+
+        border: cloneObject(cell.border),
+
+        alignment: cloneObject(cell.alignment),
+
+        protection: cloneObject(cell.protection),
+
+        numFmt: cell.numFmt,
+      };
+    },
+  );
+
+  return {
+    height: row.height,
+
+    cells,
+  };
+}
+
+/*
+ * ============================================================
+ * COPY TEMPLATE STYLE
+ * ============================================================
+ */
+function applyTemplateStyle(row, template) {
+  if (!template) {
+    return;
+  }
+
+  row.height = template.height;
+
+  Object.entries(template.cells || {}).forEach(([columnNumber, source]) => {
+    const cell = row.getCell(Number(columnNumber));
+
+    if (source.style) {
+      cell.style = cloneObject(source.style);
+    }
+
+    if (source.font) {
+      cell.font = cloneObject(source.font);
+    }
+
+    if (source.fill) {
+      cell.fill = cloneObject(source.fill);
+    }
+
+    if (source.border) {
+      cell.border = cloneObject(source.border);
+    }
+
+    if (source.alignment) {
+      cell.alignment = cloneObject(source.alignment);
+    }
+
+    if (source.protection) {
+      cell.protection = cloneObject(source.protection);
+    }
+
+    if (source.numFmt) {
+      cell.numFmt = source.numFmt;
+    }
+  });
+}
+
+/*
+ * ============================================================
+ * FIND TEMPLATE ROWS
+ * ============================================================
+ */
 function findTemplateRows(worksheet) {
   let groupRowIndex = null;
+
   let itemRowIndex = null;
 
   worksheet.eachRow((row, rowNumber) => {
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      const text = getCellText(cell);
+    row.eachCell(
+      {
+        includeEmpty: true,
+      },
+      (cell) => {
+        const text = getCellText(cell);
 
-      if (text.includes("{{GroupDate}}") || text.includes("{{Qty}}")) {
-        groupRowIndex = rowNumber;
-      }
+        if (text.includes("{{GroupDate}}") || text.includes("{{Qty}}")) {
+          groupRowIndex = rowNumber;
+        }
 
-      if (
-        text.includes("{{Index}}") ||
-        text.includes("{{AsmName}}") ||
-        text.includes("{{AsmPos}}")
-      ) {
-        itemRowIndex = rowNumber;
-      }
-    });
+        if (
+          text.includes("{{Index}}") ||
+          text.includes("{{AsmName}}") ||
+          text.includes("{{AsmPos}}")
+        ) {
+          itemRowIndex = rowNumber;
+        }
+      },
+    );
   });
 
   if (!groupRowIndex || !itemRowIndex) {
@@ -989,70 +1099,299 @@ function findTemplateRows(worksheet) {
   };
 }
 
+/*
+ * ============================================================
+ * HEADER
+ * ============================================================
+ */
+function fillHeader(worksheet, data) {
+  worksheet.eachRow((row) => {
+    row.eachCell(
+      {
+        includeEmpty: true,
+      },
+      (cell) => {
+        const text = getCellText(cell);
+
+        if (!text || !text.includes("{{")) {
+          return;
+        }
+
+        cell.value = fillText(text, data);
+      },
+    );
+  });
+}
+
+/*
+ * ============================================================
+ * NUMBER CELL
+ * ============================================================
+ */
+function setNumberCell(cell, value, numFmt) {
+  const numberValue = Number(value);
+
+  /*
+   * QUAN TRỌNG:
+   *
+   * cell.value nhận JavaScript Number trực tiếp.
+   *
+   * Không:
+   *
+   * String(...)
+   * toFixed(...)
+   * fillText(...)
+   * replace(...)
+   */
+  cell.value = Number.isFinite(numberValue) ? numberValue : 0;
+
+  if (numFmt) {
+    cell.numFmt = numFmt;
+  }
+}
+
+/*
+ * ============================================================
+ * FILL GROUPS
+ * ============================================================
+ */
 function fillGroups(worksheet, groups) {
   const { groupRowIndex, itemRowIndex } = findTemplateRows(worksheet);
 
+  /*
+   * =========================================
+   * SAVE GROUP TEMPLATE
+   * =========================================
+   */
+
   const groupTemplateRow = worksheet.getRow(groupRowIndex);
+
+  const groupTemplate = {};
+
+  groupTemplateRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+    groupTemplate[columnNumber] = {
+      text: getCellText(cell).trim(),
+
+      style: JSON.parse(JSON.stringify(cell.style || {})),
+    };
+  });
+
+  /*
+   * =========================================
+   * SAVE ITEM TEMPLATE
+   * =========================================
+   */
 
   const itemTemplateRow = worksheet.getRow(itemRowIndex);
 
-  const groupTemplateValues = [...groupTemplateRow.values];
+  const itemTemplate = {};
 
-  const itemTemplateValues = [...itemTemplateRow.values];
+  itemTemplateRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+    itemTemplate[columnNumber] = {
+      text: getCellText(cell).trim(),
 
-  const groupTemplateStyle = worksheet.getRow(groupRowIndex);
+      style: JSON.parse(JSON.stringify(cell.style || {})),
+    };
+  });
 
-  const itemTemplateStyle = worksheet.getRow(itemRowIndex);
-
+  /*
+   * Remove template rows.
+   */
   worksheet.spliceRows(groupRowIndex, itemRowIndex - groupRowIndex + 1);
 
   let insertAt = groupRowIndex;
 
+  /*
+   * =========================================
+   * GROUPS
+   * =========================================
+   */
+
   for (const group of groups) {
-    const currentGroupRowIndex = insertAt;
+    /*
+     * QUAN TRỌNG:
+     *
+     * Insert row trống.
+     *
+     * KHÔNG:
+     * groupTemplateValues
+     */
+    worksheet.spliceRows(insertAt, 0, []);
 
-    worksheet.spliceRows(currentGroupRowIndex, 0, groupTemplateValues);
-
-    const groupRow = worksheet.getRow(currentGroupRowIndex);
-
-    copyRowStyle(groupTemplateStyle, groupRow);
+    const groupRow = worksheet.getRow(insertAt);
 
     const groupData = {
-      GroupDate: group.date || "",
-      Qty: group.items?.length || 0,
+      GroupDate: String(group.date ?? ""),
+
+      Qty: Number(group.items?.length ?? 0),
     };
 
-    groupRow.eachCell({ includeEmpty: true }, (cell) => {
-      cell.value = fillText(cell.value, groupData);
+    Object.entries(groupTemplate).forEach(([columnNumber, templateCell]) => {
+      const cell = groupRow.getCell(Number(columnNumber));
+
+      /*
+       * Copy style.
+       */
+      cell.style = JSON.parse(JSON.stringify(templateCell.style || {}));
+
+      const templateText = templateCell.text;
+
+      /*
+       * Qty = NUMBER
+       */
+      if (templateText === "{{Qty}}") {
+        cell.value = Number(groupData.Qty);
+
+        return;
+      }
+
+      /*
+       * Group text.
+       */
+      cell.value = fillText(templateText, groupData);
     });
 
     insertAt += 1;
 
-    const items = group.items || [];
+    /*
+     * =========================================
+     * ITEMS
+     * =========================================
+     */
+
+    const items = Array.isArray(group.items) ? group.items : [];
 
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
-      const currentItemRowIndex = insertAt;
 
-      worksheet.spliceRows(currentItemRowIndex, 0, itemTemplateValues);
+      /*
+       * =======================================
+       * INSERT EMPTY ROW
+       * =======================================
+       *
+       * RẤT QUAN TRỌNG:
+       *
+       * Không dùng:
+       *
+       * worksheet.spliceRows(
+       *   insertAt,
+       *   0,
+       *   itemTemplateValues
+       * )
+       */
+      worksheet.spliceRows(insertAt, 0, []);
 
-      const itemRow = worksheet.getRow(currentItemRowIndex);
+      const itemRow = worksheet.getRow(insertAt);
 
-      copyRowStyle(itemTemplateStyle, itemRow);
-
+      /*
+       * Values giữ đúng datatype.
+       */
       const itemData = {
+        /*
+         * NUMBER
+         */
         Index: index + 1,
-        AsmName: item.AsmName || "",
-        AsmPos: item.AsmPos || "",
-        MainProfile: item.MainProfile || "",
-        GridPos: item.GridPos || "",
-        Length: item.Length ?? "",
-        Weight: item.Weight ?? "",
-        Comment: item.Comment || "",
+
+        Length: Number(item.Length ?? 0),
+
+        Weight: Number(item.Weight ?? 0),
+
+        /*
+         * TEXT
+         */
+        AsmName: String(item.AsmName ?? ""),
+
+        AsmPos: String(item.AsmPos ?? ""),
+
+        MainProfile: String(item.MainProfile ?? ""),
+
+        GridPos: String(item.GridPos ?? ""),
+
+        Comment: String(item.Comment ?? ""),
       };
 
-      itemRow.eachCell({ includeEmpty: true }, (cell) => {
-        cell.value = fillText(cell.value, itemData);
+      /*
+       * =======================================
+       * WRITE CELLS
+       * =======================================
+       */
+
+      Object.entries(itemTemplate).forEach(([columnNumber, templateCell]) => {
+        const cell = itemRow.getCell(Number(columnNumber));
+
+        /*
+         * Copy style ONLY.
+         */
+        cell.style = JSON.parse(JSON.stringify(templateCell.style || {}));
+
+        const templateText = templateCell.text;
+
+        /*
+         * ===================================
+         * INDEX = NUMBER
+         * ===================================
+         */
+
+        if (templateText === "{{Index}}") {
+          cell.value = Number(itemData.Index);
+
+          return;
+        }
+
+        /*
+         * ===================================
+         * LENGTH = NUMBER
+         * ===================================
+         */
+
+        if (templateText === "{{Length}}") {
+          const value = Number(itemData.Length);
+
+          cell.value = Number.isFinite(value) ? value : 0;
+
+          return;
+        }
+
+        /*
+         * ===================================
+         * WEIGHT = NUMBER
+         * ===================================
+         */
+
+        if (templateText === "{{Weight}}") {
+          const value = Number(itemData.Weight);
+
+          cell.value = Number.isFinite(value) ? value : 0;
+
+          return;
+        }
+
+        /*
+         * ===================================
+         * TEXT
+         * ===================================
+         */
+
+        cell.value = fillText(templateText, itemData);
+      });
+
+      /*
+       * DEBUG
+       */
+      Object.entries(itemTemplate).forEach(([columnNumber, templateCell]) => {
+        if (templateCell.text !== "{{Weight}}") {
+          return;
+        }
+
+        const weightCell = itemRow.getCell(Number(columnNumber));
+
+        console.log(
+          "WEIGHT CELL",
+          weightCell.address,
+          weightCell.value,
+          typeof weightCell.value,
+          weightCell.type,
+        );
       });
 
       insertAt += 1;
@@ -1060,31 +1399,68 @@ function fillGroups(worksheet, groups) {
   }
 }
 
+/*
+ * ============================================================
+ * BUILD GROUPS
+ * ============================================================
+ */
 function buildGroupsFromSequenceObjects(plans = [], sequenceObjects = []) {
-  return sequenceObjects
+  return (sequenceObjects || [])
     .filter((group) => group && Array.isArray(group.objects))
     .map((group) => {
-      const plan = plans.find(
+      const plan = (plans || []).find(
         (item) => String(item.id) === String(group.planId),
       );
 
       return {
-        name: plan?.name || "",
+        name: String(plan?.name ?? ""),
+
         date: group.objects[0]?.date || group.objects[0]?.assignedDate || "",
-        items: group.objects.map((object) => ({
-          AsmName: object.name || object.asmName || "",
-          AsmPos: object.asmPos || "",
-          MainProfile: object.profile || object.mainProfile || "",
-          GridPos:
-            object.positionCode || object.gridPos || object.location || "",
-          Length: object.length ?? "",
-          Weight: Math.round(Number(object.weight || 0) * 100) / 100,
-          Comment: object.comment || "",
-        })),
+
+        items: group.objects.map((object) => {
+          /*
+           * Convert Number NGAY TỪ ĐÂY.
+           */
+          const length = Number(object.length ?? object.rawLength ?? 0);
+
+          const weight = Number(object.weight ?? object.rawWeight ?? 0);
+
+          return {
+            AsmName: String(object.name ?? object.asmName ?? ""),
+
+            AsmPos: String(object.asmPos ?? ""),
+
+            MainProfile: String(object.profile ?? object.mainProfile ?? ""),
+
+            GridPos: String(
+              object.positionCode ?? object.gridPos ?? object.location ?? "",
+            ),
+
+            /*
+             * NUMBER
+             */
+            Length: Number.isFinite(length) ? length : 0,
+
+            /*
+             * NUMBER
+             *
+             * Không Math.round()
+             * Không toFixed()
+             */
+            Weight: Number.isFinite(weight) ? weight : 0,
+
+            Comment: String(object.comment ?? ""),
+          };
+        }),
       };
     });
 }
 
+/*
+ * ============================================================
+ * DOWNLOAD TEMPLATE
+ * ============================================================
+ */
 function* downloadPublicTemplateBuffer(templatePath = DEFAULT_TEMPLATE_PATH) {
   const response = yield call(fetch, templatePath);
 
@@ -1095,6 +1471,11 @@ function* downloadPublicTemplateBuffer(templatePath = DEFAULT_TEMPLATE_PATH) {
   return yield call([response, response.arrayBuffer]);
 }
 
+/*
+ * ============================================================
+ * EXPORT
+ * ============================================================
+ */
 function* exportTemplateSaga(action) {
   try {
     const { projectName, plans, sequenceObjects, templatePath, fileName } =
@@ -1108,6 +1489,7 @@ function* exportTemplateSaga(action) {
 
     const buffer = yield call(
       downloadPublicTemplateBuffer,
+
       templatePath || DEFAULT_TEMPLATE_PATH,
     );
 
@@ -1121,13 +1503,53 @@ function* exportTemplateSaga(action) {
       throw new Error("No worksheet was found in the Excel template.");
     }
 
+    /*
+     * HEADER
+     */
     fillHeader(worksheet, {
-      ProjectName: projectName || "",
+      ProjectName: String(projectName ?? ""),
+
       ReportDate: new Date().toLocaleDateString("en-AU"),
     });
 
+    /*
+     * GROUP + ITEMS
+     */
     fillGroups(worksheet, groups);
 
+    /*
+     * ========================================================
+     * DEBUG
+     * ========================================================
+     *
+     * Numeric cells phải:
+     *
+     * typeof === "number"
+     * cell.type === 2
+     */
+    worksheet.eachRow((row, rowNumber) => {
+      row.eachCell((cell) => {
+        if (typeof cell.value === "number") {
+          console.log("EXCEL NUMBER:", {
+            row: rowNumber,
+
+            address: cell.address,
+
+            value: cell.value,
+
+            jsType: typeof cell.value,
+
+            excelType: cell.type,
+
+            numFmt: cell.numFmt,
+          });
+        }
+      });
+    });
+
+    /*
+     * WRITE XLSX
+     */
     const output = yield call([workbook.xlsx, workbook.xlsx.writeBuffer]);
 
     const safeFileName = String(fileName || "Sequencing")
@@ -1138,6 +1560,7 @@ function* exportTemplateSaga(action) {
       new Blob([output], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       }),
+
       `${safeFileName}.xlsx`,
     );
 
