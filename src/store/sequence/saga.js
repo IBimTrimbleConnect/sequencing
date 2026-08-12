@@ -506,41 +506,232 @@ function* createSubPlanSaga(action) {
   try {
     const payload = action.payload || {};
 
-    const projectId = payload.projectId || payload.trimbleProjectId;
+    const projectId =
+      payload.projectId ||
+      payload.trimbleProjectId;
 
-    const planId = payload.planId || payload.phaseFolderId;
+    const planId =
+      payload.planId ||
+      payload.phaseFolderId;
 
     if (!projectId) {
-      throw new Error("Trimble project ID is required.");
+      throw new Error(
+        "Trimble project ID is required.",
+      );
     }
 
     if (!planId) {
-      throw new Error("Plan ID is required.");
+      throw new Error(
+        "Plan ID is required.",
+      );
     }
 
     if (!payload.name?.trim()) {
-      throw new Error("SubPlan name is required.");
+      throw new Error(
+        "SubPlan name is required.",
+      );
     }
 
-    const newSubPlan = yield call(createSubPlan, {
-      trimbleProjectId: projectId,
-      planId,
-      name: payload.name.trim(),
-      color: payload.color || null,
-      sortDatetime: payload.sortDatetime ?? payload.sort_datetime ?? null,
-    });
+    /*
+     * ==========================================
+     * SPLIT NAMES
+     * ==========================================
+     *
+     * Example:
+     *
+     * "Steel, Concrete, Roof"
+     *
+     * =>
+     *
+     * ["Steel", "Concrete", "Roof"]
+     */
+    const names = [
+      ...new Set(
+        String(payload.name)
+          .split(",")
+          .map((name) =>
+            name.trim(),
+          )
+          .filter(Boolean),
+      ),
+    ];
 
-    yield put(
-      CreateSubPlanSuccess({
+    if (!names.length) {
+      throw new Error(
+        "SubPlan name is required.",
+      );
+    }
+
+    /*
+     * ==========================================
+     * BASIC RGB COLORS
+     * ==========================================
+     */
+    const BASIC_COLORS = [
+      {
+        r: 244,
+        g: 67,
+        b: 54,
+      }, // Red
+
+      {
+        r: 33,
+        g: 150,
+        b: 243,
+      }, // Blue
+
+      {
+        r: 76,
+        g: 175,
+        b: 80,
+      }, // Green
+
+      {
+        r: 255,
+        g: 152,
+        b: 0,
+      }, // Orange
+
+      {
+        r: 156,
+        g: 39,
+        b: 176,
+      }, // Purple
+
+      {
+        r: 0,
+        g: 188,
+        b: 212,
+      }, // Cyan
+
+      {
+        r: 255,
+        g: 235,
+        b: 59,
+      }, // Yellow
+
+      {
+        r: 121,
+        g: 85,
+        b: 72,
+      }, // Brown
+
+      {
+        r: 233,
+        g: 30,
+        b: 99,
+      }, // Pink
+
+      {
+        r: 63,
+        g: 81,
+        b: 181,
+      }, // Indigo
+
+      {
+        r: 0,
+        g: 150,
+        b: 136,
+      }, // Teal
+
+      {
+        r: 139,
+        g: 195,
+        b: 74,
+      }, // Light Green
+    ];
+
+    /*
+     * ==========================================
+     * CREATE SUBPLANS
+     * ==========================================
+     */
+    const newSubPlans = [];
+
+    for (
+      let index = 0;
+      index < names.length;
+      index += 1
+    ) {
+      const name = names[index];
+
+      let color;
+
+      /*
+       * Nếu chỉ tạo 1 SubPlan:
+       * dùng màu user chọn.
+       *
+       * Nếu tạo nhiều:
+       * tự động dùng BASIC_COLORS.
+       */
+      if (
+        names.length === 1 &&
+        payload.color
+      ) {
+        color = payload.color;
+      } else {
+        color =
+          BASIC_COLORS[
+            index %
+              BASIC_COLORS.length
+          ];
+      }
+
+      const newSubPlan =
+        yield call(
+          createSubPlan,
+          {
+            trimbleProjectId:
+              projectId,
+
+            planId,
+
+            name,
+
+            color,
+
+            sortDatetime:
+              payload.sortDatetime ??
+              payload.sort_datetime ??
+              null,
+          },
+        );
+
+      newSubPlans.push(
         newSubPlan,
-      }),
-    );
+      );
+    }
+
+    /*
+     * ==========================================
+     * UPDATE REDUX
+     * ==========================================
+     *
+     * Dispatch từng SubPlan để không cần
+     * thay đổi reducer hiện tại.
+     */
+    for (
+      const newSubPlan of
+      newSubPlans
+    ) {
+      yield put(
+        CreateSubPlanSuccess({
+          newSubPlan,
+        }),
+      );
+    }
   } catch (error) {
-    console.error("Failed to create sub plan:", error);
+    console.error(
+      "Failed to create sub plan:",
+      error,
+    );
 
     yield put(
       CreateSubPlanFailure(
-        getErrorMessage(error, "Failed to create sub plan."),
+        getErrorMessage(
+          error,
+          "Failed to create sub plan.",
+        ),
       ),
     );
   }

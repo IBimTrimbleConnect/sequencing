@@ -322,12 +322,6 @@ const SubPlanModal = ({
             <ColorPicker
               value={color}
               disabled={pending}
-              showText={(selectedColor) => {
-                const rgb =
-                  selectedColor.toRgb();
-
-                return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
-              }}
               format="rgb"
               onChange={
                 handleColorChange
