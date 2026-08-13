@@ -305,7 +305,7 @@ const SubPlanModal = ({
             ]}
           >
             <Input
-              placeholder="Sub Plan Name"
+              placeholder="Grid 1-2, Grid 2-4"
               maxLength={255}
               allowClear
               autoFocus
