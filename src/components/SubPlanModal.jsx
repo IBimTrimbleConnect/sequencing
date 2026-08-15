@@ -401,7 +401,7 @@ const SubPlanModal = ({
     form.resetFields();
 
     form.setFieldsValue({
-      serialPrefix: "SEQ",
+      serialPrefix: "Lot",
 
       serialStart: 1,
 
