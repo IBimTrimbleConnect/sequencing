@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
   ColorPicker,
+  DatePicker,
   Form,
   Input,
   InputNumber,
@@ -15,6 +16,8 @@ import {
 
 import { ReloadOutlined } from "@ant-design/icons";
 
+import dayjs from "dayjs";
+
 import { useDispatch, useSelector } from "react-redux";
 
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
@@ -25,7 +28,7 @@ import {
 } from "../store/sequence/action";
 
 /* -------------------------------------------------------------------------- */
-/*                                   CONSTANTS                                */
+/* CONSTANTS                                                                  */
 /* -------------------------------------------------------------------------- */
 
 const DEFAULT_COLOR = {
@@ -37,6 +40,7 @@ const DEFAULT_COLOR = {
 const CREATE_MODE = {
   MANUAL: "manual",
   SERIAL: "serial",
+  DATES: "dates",
   ASSEMBLY_NAME: "assemblyName",
 };
 
@@ -50,23 +54,29 @@ const CREATE_MODE_OPTIONS = [
     label: "Serial Numbers",
   },
   {
+    value: CREATE_MODE.DATES,
+    label: "Dates",
+  },
+  {
     value: CREATE_MODE.ASSEMBLY_NAME,
     label: "Assembly Names",
   },
 ];
 
-const ASSEMBLY_PROPERTY_NAMES = new Set([
-  "ASSEMBLY NAME",
-  "ASSEMBLY_NAME",
-  "ASSEMBLYNAME",
-  "ASSEMBLY NAME.",
-  "NAME",
-]);
-
 const PROPERTY_BATCH_SIZE = 300;
 
+const DEFAULT_COUNTRY_CODE = "AU";
+
+/*
+ * Nager.Date
+ */
+const NAGER_COUNTRIES_URL = "https://date.nager.at/api/v3/AvailableCountries";
+
+const getNagerHolidayUrl = (countryCode, year) =>
+  `https://date.nager.at/api/v4/Holidays/${countryCode}/${year}`;
+
 /* -------------------------------------------------------------------------- */
-/*                                   HELPERS                                  */
+/* COLOR                                                                      */
 /* -------------------------------------------------------------------------- */
 
 const clampColorValue = (value) =>
@@ -83,6 +93,10 @@ const normalizeColor = (value, fallback = DEFAULT_COLOR) => {
     b: clampColorValue(source?.b ?? fallback.b),
   };
 };
+
+/* -------------------------------------------------------------------------- */
+/* SERIAL                                                                     */
+/* -------------------------------------------------------------------------- */
 
 const buildSerialNames = ({ prefix, start, quantity }) => {
   const cleanPrefix = String(prefix || "").trim();
@@ -112,6 +126,196 @@ const buildSerialNames = ({ prefix, start, quantity }) => {
   return result;
 };
 
+/* -------------------------------------------------------------------------- */
+/* COUNTRY                                                                    */
+/* -------------------------------------------------------------------------- */
+
+const normalizeCountryOptions = (countries) => {
+  if (!Array.isArray(countries)) {
+    return [];
+  }
+
+  return countries
+    .map((country) => {
+      /*
+       * Nager v3:
+       *
+       * {
+       *   countryCode: "AU",
+       *   name: "Australia"
+       * }
+       */
+      const code = String(country?.countryCode ?? country?.code ?? "")
+        .trim()
+        .toUpperCase();
+
+      const name = String(country?.name ?? country?.commonName ?? code).trim();
+
+      if (!code || !name) {
+        return null;
+      }
+
+      return {
+        value: code,
+        label: name,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) =>
+      left.label.localeCompare(right.label, undefined, {
+        sensitivity: "base",
+      }),
+    );
+};
+
+const fetchCountryOptions = async () => {
+  const response = await fetch(NAGER_COUNTRIES_URL);
+
+  if (!response.ok) {
+    throw new Error(`Unable to load countries: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  return normalizeCountryOptions(data);
+};
+
+/* -------------------------------------------------------------------------- */
+/* PUBLIC HOLIDAYS                                                            */
+/* -------------------------------------------------------------------------- */
+
+const getYearsInRange = (startDate, endDate) => {
+  if (!startDate || !endDate) {
+    return [];
+  }
+
+  const start = dayjs(startDate);
+
+  const end = dayjs(endDate);
+
+  if (!start.isValid() || !end.isValid() || start.isAfter(end, "day")) {
+    return [];
+  }
+
+  const years = [];
+
+  for (let year = start.year(); year <= end.year(); year += 1) {
+    years.push(year);
+  }
+
+  return years;
+};
+
+const fetchPublicHolidayDates = async ({ countryCode, startDate, endDate }) => {
+  const code = String(countryCode || "")
+    .trim()
+    .toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(code)) {
+    throw new Error("Invalid country code.");
+  }
+
+  const years = getYearsInRange(startDate, endDate);
+
+  const result = new Set();
+
+  for (const year of years) {
+    const response = await fetch(getNagerHolidayUrl(code, year));
+
+    if (!response.ok) {
+      throw new Error(`Unable to load public holidays for ${code} ${year}.`);
+    }
+
+    const holidays = await response.json();
+
+    for (const holiday of holidays || []) {
+      if (!holiday?.date) {
+        continue;
+      }
+
+      /*
+       * Nager v4:
+       *
+       * holidayTypes:
+       * [
+       *   "Public"
+       * ]
+       */
+      const types = Array.isArray(holiday?.holidayTypes)
+        ? holiday.holidayTypes
+        : [];
+
+      const isPublic = types.length === 0 || types.includes("Public");
+
+      /*
+       * Chỉ national holiday.
+       *
+       * State / subdivision holidays
+       * có thể thêm ở bước sau.
+       */
+      const isNational = holiday?.nationalHoliday !== false;
+
+      if (isPublic && isNational) {
+        result.add(String(holiday.date));
+      }
+    }
+  }
+
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* WORKING DATES                                                              */
+/* -------------------------------------------------------------------------- */
+
+const buildWorkingDateNames = ({
+  startDate,
+  endDate,
+  publicHolidayDates = new Set(),
+}) => {
+  if (!startDate || !endDate) {
+    return [];
+  }
+
+  const start = dayjs(startDate).startOf("day");
+
+  const end = dayjs(endDate).startOf("day");
+
+  if (!start.isValid() || !end.isValid() || start.isAfter(end, "day")) {
+    return [];
+  }
+
+  const result = [];
+
+  let current = start;
+
+  while (current.isBefore(end, "day") || current.isSame(end, "day")) {
+    const dayOfWeek = current.day();
+
+    /*
+     * Sunday = 0
+     * Saturday = 6
+     */
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    const isoDate = current.format("YYYY-MM-DD");
+
+    const isHoliday = publicHolidayDates.has(isoDate);
+
+    if (!isWeekend && !isHoliday) {
+      result.push(current.format("DD-MM-YYYY"));
+    }
+
+    current = current.add(1, "day");
+  }
+
+  return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/* ASSEMBLY HELPERS                                                           */
+/* -------------------------------------------------------------------------- */
+
 const getPropertySets = (objectProperty) => {
   if (Array.isArray(objectProperty?.properties)) {
     return objectProperty.properties;
@@ -136,11 +340,9 @@ const getPropertiesFromSet = (propertySet) => {
   return [];
 };
 
-/*
- * Extract Assembly Name from ObjectProperties.
- */
 const getAssemblyNameFromProperties = (objectProperty) => {
   const propertySets = getPropertySets(objectProperty);
+
   for (const propertySet of propertySets) {
     const groupName = String(propertySet?.name ?? propertySet?.groupName ?? "")
       .trim()
@@ -191,7 +393,7 @@ const getAssemblyNameFromProperties = (objectProperty) => {
 };
 
 /* -------------------------------------------------------------------------- */
-/*                              SUB PLAN MODAL                                */
+/* COMPONENT                                                                  */
 /* -------------------------------------------------------------------------- */
 
 const SubPlanModal = ({
@@ -217,6 +419,25 @@ const SubPlanModal = ({
 
   const [createMode, setCreateMode] = useState(CREATE_MODE.MANUAL);
 
+  /*
+   * Countries.
+   */
+  const [countryOptions, setCountryOptions] = useState([]);
+
+  const [loadingCountries, setLoadingCountries] = useState(false);
+
+  /*
+   * Holidays.
+   */
+  const [publicHolidayDates, setPublicHolidayDates] = useState(new Set());
+
+  const [loadingPublicHolidays, setLoadingPublicHolidays] = useState(false);
+
+  const [publicHolidayError, setPublicHolidayError] = useState("");
+
+  /*
+   * Assemblies.
+   */
   const [assemblyNames, setAssemblyNames] = useState([]);
 
   const [loadingAssemblyNames, setLoadingAssemblyNames] = useState(false);
@@ -230,7 +451,7 @@ const SubPlanModal = ({
   const submitButtonName = buttonName || (isEditing ? "Update" : "Create");
 
   /* ------------------------------------------------------------------------ */
-  /*                                  RESET                                   */
+  /* RESET                                                                    */
   /* ------------------------------------------------------------------------ */
 
   const resetModal = useCallback(() => {
@@ -245,6 +466,12 @@ const SubPlanModal = ({
     setAssemblyNames([]);
 
     setLoadingAssemblyNames(false);
+
+    setPublicHolidayDates(new Set());
+
+    setLoadingPublicHolidays(false);
+
+    setPublicHolidayError("");
   }, [form]);
 
   const handleCancel = useCallback(() => {
@@ -254,7 +481,31 @@ const SubPlanModal = ({
   }, [resetModal, onCancel]);
 
   /* ------------------------------------------------------------------------ */
-  /*                         LOAD ASSEMBLY NAMES                              */
+  /* COUNTRIES                                                                */
+  /* ------------------------------------------------------------------------ */
+
+  const loadCountries = useCallback(async () => {
+    if (countryOptions.length) {
+      return;
+    }
+
+    try {
+      setLoadingCountries(true);
+
+      const options = await fetchCountryOptions();
+
+      setCountryOptions(options);
+    } catch (error) {
+      console.error("Load countries failed:", error);
+
+      message.error(error?.message || "Unable to load country list.");
+    } finally {
+      setLoadingCountries(false);
+    }
+  }, [countryOptions.length]);
+
+  /* ------------------------------------------------------------------------ */
+  /* ASSEMBLY                                                                 */
   /* ------------------------------------------------------------------------ */
 
   const loadAssemblyNames = useCallback(async () => {
@@ -265,11 +516,15 @@ const SubPlanModal = ({
 
       const tcapi = await WorkspaceAPI.connect(window.parent);
 
+      /*
+       * Assembly level.
+       */
       const assemblyGroups = await tcapi.viewer.getObjects({
         parameter: {
           class: "IFCELEMENTASSEMBLY",
         },
       });
+
       if (!Array.isArray(assemblyGroups) || !assemblyGroups.length) {
         message.warning(
           "No assembly-level objects were found in the loaded models.",
@@ -280,11 +535,6 @@ const SubPlanModal = ({
 
       const uniqueNames = new Set();
 
-      /*
-       * =====================================================
-       * EACH MODEL
-       * =====================================================
-       */
       for (const modelGroup of assemblyGroups) {
         const modelId = modelGroup?.modelId;
 
@@ -296,10 +546,6 @@ const SubPlanModal = ({
           ? modelGroup.objects
           : [];
 
-        /*
-         * ModelObjects object IDs returned by viewer are
-         * runtime entity IDs.
-         */
         const runtimeIds = objects
           .map((object) => object?.id ?? object?.runtimeId)
           .filter((id) => id != null);
@@ -308,16 +554,8 @@ const SubPlanModal = ({
           continue;
         }
 
-        /*
-         * Remove duplicated runtime IDs.
-         */
         const uniqueRuntimeIds = [...new Set(runtimeIds)];
 
-        /*
-         * ===================================================
-         * GET PROPERTIES IN BATCHES
-         * ===================================================
-         */
         for (
           let startIndex = 0;
           startIndex < uniqueRuntimeIds.length;
@@ -333,7 +571,6 @@ const SubPlanModal = ({
             batch,
           );
 
-          console.log("Object Properties:", objectProperties);
           for (const objectProperty of objectProperties || []) {
             const assemblyName = getAssemblyNameFromProperties(objectProperty);
 
@@ -343,20 +580,20 @@ const SubPlanModal = ({
           }
         }
       }
+
       const result = Array.from(uniqueNames).sort((left, right) =>
         left.localeCompare(right, undefined, {
           numeric: true,
+
           sensitivity: "base",
         }),
       );
 
       setAssemblyNames(result);
 
-      console.log("Unique Assembly Names:", result);
-
       if (!result.length) {
         message.warning(
-          "Assembly objects were found, but no Assembly Name properties were available.",
+          "Assembly objects were found, but no Assembly Names were available.",
         );
       }
     } catch (error) {
@@ -374,7 +611,7 @@ const SubPlanModal = ({
   }, []);
 
   /* ------------------------------------------------------------------------ */
-  /*                                OPEN MODAL                                */
+  /* OPEN                                                                     */
   /* ------------------------------------------------------------------------ */
 
   useEffect(() => {
@@ -382,9 +619,6 @@ const SubPlanModal = ({
       return;
     }
 
-    /*
-     * EDIT
-     */
     if (isEditing && editingSubPlan) {
       form.setFieldsValue({
         planName: editingSubPlan.name || "",
@@ -395,18 +629,30 @@ const SubPlanModal = ({
       return;
     }
 
-    /*
-     * CREATE
-     */
     form.resetFields();
 
     form.setFieldsValue({
+      /*
+       * Serial.
+       */
       serialPrefix: "Lot",
 
       serialStart: 1,
 
       serialQuantity: 1,
 
+      /*
+       * Dates.
+       */
+      dateCountryCode: DEFAULT_COUNTRY_CODE,
+
+      startDate: null,
+
+      endDate: null,
+
+      /*
+       * Assembly.
+       */
       assemblyNames: [],
     });
 
@@ -417,22 +663,32 @@ const SubPlanModal = ({
     setCreateMode(CREATE_MODE.MANUAL);
 
     setAssemblyNames([]);
+
+    setPublicHolidayDates(new Set());
+
+    setPublicHolidayError("");
   }, [open, isEditing, editingSubPlan, form]);
 
   /* ------------------------------------------------------------------------ */
-  /*                    LOAD WHEN ASSEMBLY MODE SELECTED                      */
+  /* LOAD MODE DATA                                                           */
   /* ------------------------------------------------------------------------ */
 
   useEffect(() => {
-    if (!open || isEditing || createMode !== CREATE_MODE.ASSEMBLY_NAME) {
+    if (!open || isEditing) {
       return;
     }
 
-    loadAssemblyNames();
-  }, [open, isEditing, createMode, loadAssemblyNames]);
+    if (createMode === CREATE_MODE.ASSEMBLY_NAME) {
+      loadAssemblyNames();
+    }
+
+    if (createMode === CREATE_MODE.DATES) {
+      loadCountries();
+    }
+  }, [open, isEditing, createMode, loadAssemblyNames, loadCountries]);
 
   /* ------------------------------------------------------------------------ */
-  /*                                  COLOR                                   */
+  /* COLOR                                                                    */
   /* ------------------------------------------------------------------------ */
 
   const handleColorChange = useCallback((value) => {
@@ -442,19 +698,20 @@ const SubPlanModal = ({
   }, []);
 
   /* ------------------------------------------------------------------------ */
-  /*                               CREATE MODE                                */
+  /* MODE                                                                     */
   /* ------------------------------------------------------------------------ */
 
   const handleCreateModeChange = useCallback(
     (mode) => {
       setCreateMode(mode);
 
-      /*
-       * Clear selected values belonging to another mode.
-       */
       if (mode !== CREATE_MODE.ASSEMBLY_NAME) {
         form.setFieldValue("assemblyNames", []);
       }
+
+      setPublicHolidayDates(new Set());
+
+      setPublicHolidayError("");
 
       form.setFields([
         {
@@ -478,6 +735,21 @@ const SubPlanModal = ({
         },
 
         {
+          name: "dateCountryCode",
+          errors: [],
+        },
+
+        {
+          name: "startDate",
+          errors: [],
+        },
+
+        {
+          name: "endDate",
+          errors: [],
+        },
+
+        {
           name: "assemblyNames",
           errors: [],
         },
@@ -487,7 +759,7 @@ const SubPlanModal = ({
   );
 
   /* ------------------------------------------------------------------------ */
-  /*                             SERIAL PREVIEW                               */
+  /* SERIAL WATCH                                                             */
   /* ------------------------------------------------------------------------ */
 
   const serialPrefix = Form.useWatch("serialPrefix", form);
@@ -513,19 +785,134 @@ const SubPlanModal = ({
       return names.join(", ");
     }
 
-    return `${names.slice(0, 4).join(", ")}, ... ${
-      names[names.length - 1]
-    } (${names.length} Sub Plans)`;
+    return `${names.slice(0, 4).join(", ")}, ... ${names[names.length - 1]} (${
+      names.length
+    } Sub Plans)`;
   }, [serialPrefix, serialStart, serialQuantity]);
 
   /* ------------------------------------------------------------------------ */
-  /*                              BUILD NAMES                                 */
+  /* DATE WATCH                                                               */
+  /* ------------------------------------------------------------------------ */
+
+  const dateCountryCode = Form.useWatch("dateCountryCode", form);
+
+  const selectedStartDate = Form.useWatch("startDate", form);
+
+  const selectedEndDate = Form.useWatch("endDate", form);
+
+  const selectedCountry = useMemo(
+    () =>
+      countryOptions.find((country) => country.value === dateCountryCode) ||
+      null,
+    [countryOptions, dateCountryCode],
+  );
+
+  /* ------------------------------------------------------------------------ */
+  /* PUBLIC HOLIDAYS                                                          */
+  /* ------------------------------------------------------------------------ */
+
+  useEffect(() => {
+    if (
+      !open ||
+      isEditing ||
+      createMode !== CREATE_MODE.DATES ||
+      !dateCountryCode ||
+      !selectedStartDate ||
+      !selectedEndDate
+    ) {
+      setPublicHolidayDates(new Set());
+
+      return;
+    }
+
+    if (dayjs(selectedStartDate).isAfter(dayjs(selectedEndDate), "day")) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadHolidays = async () => {
+      try {
+        setLoadingPublicHolidays(true);
+
+        setPublicHolidayError("");
+
+        const holidays = await fetchPublicHolidayDates({
+          countryCode: dateCountryCode,
+
+          startDate: selectedStartDate,
+
+          endDate: selectedEndDate,
+        });
+
+        if (!cancelled) {
+          setPublicHolidayDates(holidays);
+        }
+      } catch (error) {
+        console.error("Load public holidays failed:", error);
+
+        if (!cancelled) {
+          setPublicHolidayDates(new Set());
+
+          setPublicHolidayError(
+            error?.message || "Unable to load public holidays.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPublicHolidays(false);
+        }
+      }
+    };
+
+    loadHolidays();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    isEditing,
+    createMode,
+    dateCountryCode,
+    selectedStartDate,
+    selectedEndDate,
+  ]);
+
+  const dateNames = useMemo(
+    () =>
+      buildWorkingDateNames({
+        startDate: selectedStartDate,
+
+        endDate: selectedEndDate,
+
+        publicHolidayDates,
+      }),
+    [selectedStartDate, selectedEndDate, publicHolidayDates],
+  );
+
+  const datePreview = useMemo(() => {
+    if (!dateNames.length) {
+      return "";
+    }
+
+    if (dateNames.length <= 5) {
+      return dateNames.join(", ");
+    }
+
+    return `${dateNames.slice(0, 4).join(", ")}, ... ${
+      dateNames[dateNames.length - 1]
+    } (${dateNames.length} working days)`;
+  }, [dateNames]);
+
+  /* ------------------------------------------------------------------------ */
+  /* BUILD NAMES                                                              */
   /* ------------------------------------------------------------------------ */
 
   const getCreateNames = useCallback(
     (values) => {
       /*
-       * MANUAL
+       * Manual.
        */
       if (createMode === CREATE_MODE.MANUAL) {
         return String(values.planName || "")
@@ -535,7 +922,7 @@ const SubPlanModal = ({
       }
 
       /*
-       * SERIAL
+       * Serial.
        */
       if (createMode === CREATE_MODE.SERIAL) {
         return buildSerialNames({
@@ -548,23 +935,42 @@ const SubPlanModal = ({
       }
 
       /*
-       * ASSEMBLY NAME
+       * Dates.
+       */
+      if (createMode === CREATE_MODE.DATES) {
+        return buildWorkingDateNames({
+          startDate: values.startDate,
+
+          endDate: values.endDate,
+
+          publicHolidayDates,
+        });
+      }
+
+      /*
+       * Assembly.
        */
       if (createMode === CREATE_MODE.ASSEMBLY_NAME) {
         return Array.isArray(values.assemblyNames)
           ? values.assemblyNames
               .map((name) => String(name).trim())
               .filter(Boolean)
+              .sort((a, b) =>
+                a.localeCompare(b, undefined, {
+                  numeric: true,
+                  sensitivity: "base",
+                }),
+              )
           : [];
       }
 
       return [];
     },
-    [createMode],
+    [createMode, publicHolidayDates],
   );
 
   /* ------------------------------------------------------------------------ */
-  /*                                  SUBMIT                                  */
+  /* SUBMIT                                                                   */
   /* ------------------------------------------------------------------------ */
 
   const handleSubmit = useCallback(async () => {
@@ -574,9 +980,7 @@ const SubPlanModal = ({
       const normalizedColor = normalizeColor(color);
 
       /*
-       * =====================================================
-       * EDIT
-       * =====================================================
+       * Edit.
        */
       if (isEditing) {
         const subPlanName = String(values.planName || "").trim();
@@ -607,11 +1011,8 @@ const SubPlanModal = ({
       }
 
       /*
-       * =====================================================
-       * CREATE
-       * =====================================================
+       * Create.
        */
-
       if (!projectId) {
         message.error("Unable to retrieve the current Trimble project ID.");
 
@@ -624,11 +1025,32 @@ const SubPlanModal = ({
         return;
       }
 
+      /*
+       * Do not allow Date create
+       * before holiday request finishes.
+       */
+      if (createMode === CREATE_MODE.DATES) {
+        if (loadingCountries) {
+          message.warning("Countries are still loading.");
+
+          return;
+        }
+
+        if (loadingPublicHolidays) {
+          message.warning("Public holidays are still loading.");
+
+          return;
+        }
+
+        if (publicHolidayError) {
+          message.error(publicHolidayError);
+
+          return;
+        }
+      }
+
       let names = getCreateNames(values);
 
-      /*
-       * Unique.
-       */
       names = [...new Set(names)];
 
       if (!names.length) {
@@ -644,7 +1066,7 @@ const SubPlanModal = ({
       }
 
       /*
-       * Existing Saga splits names by comma.
+       * Existing Saga splits by comma.
        */
       dispatch(
         CreateSubPlanRequest({
@@ -678,10 +1100,14 @@ const SubPlanModal = ({
     dispatch,
     handleCancel,
     getCreateNames,
+    createMode,
+    loadingCountries,
+    loadingPublicHolidays,
+    publicHolidayError,
   ]);
 
   /* ------------------------------------------------------------------------ */
-  /*                            ASSEMBLY OPTIONS                              */
+  /* OPTIONS                                                                  */
   /* ------------------------------------------------------------------------ */
 
   const assemblyNameOptions = useMemo(
@@ -695,7 +1121,7 @@ const SubPlanModal = ({
   );
 
   /* ------------------------------------------------------------------------ */
-  /*                                    UI                                    */
+  /* UI                                                                       */
   /* ------------------------------------------------------------------------ */
 
   return (
@@ -709,15 +1135,6 @@ const SubPlanModal = ({
       keyboard={!pending}
       closable={!pending}
       width={560}
-      styles={{
-        header: {
-          marginBottom: 12,
-        },
-
-        body: {
-          padding: 0,
-        },
-      }}
     >
       <Form
         form={form}
@@ -725,17 +1142,10 @@ const SubPlanModal = ({
         autoComplete="off"
         onFinish={handleSubmit}
       >
-        {/* ================================================= */}
-        {/* CREATE BY                                        */}
-        {/* ================================================= */}
+        {/* CREATE BY */}
 
         {!isEditing && (
-          <Form.Item
-            label="Create By"
-            style={{
-              marginBottom: 16,
-            }}
-          >
+          <Form.Item label="Create By">
             <Select
               value={createMode}
               options={CREATE_MODE_OPTIONS}
@@ -748,18 +1158,16 @@ const SubPlanModal = ({
           </Form.Item>
         )}
 
-        {/* ================================================= */}
-        {/* MANUAL / EDIT                                    */}
-        {/* ================================================= */}
+        {/* MANUAL */}
 
         {(isEditing || createMode === CREATE_MODE.MANUAL) && (
           <div
             style={{
               display: "flex",
 
-              alignItems: "flex-start",
-
               gap: 8,
+
+              alignItems: "flex-start",
             }}
           >
             <Form.Item
@@ -768,11 +1176,8 @@ const SubPlanModal = ({
               style={{
                 flex: 1,
 
-                marginBottom: 16,
-
                 minWidth: 0,
               }}
-              normalize={(value) => value?.replace(/^\s+/, "")}
               rules={[
                 {
                   required: true,
@@ -781,42 +1186,23 @@ const SubPlanModal = ({
 
                   message: "Please enter the SubPlan name.",
                 },
-
-                {
-                  max: 255,
-
-                  message: "The SubPlan name cannot exceed 255 characters.",
-                },
               ]}
             >
-              <Input
-                placeholder="Grid 1-2, Grid 2-4"
-                maxLength={255}
-                allowClear
-                autoFocus
-                disabled={pending}
-              />
+              <Input placeholder="Grid 1-2, Grid 2-4" disabled={pending} />
             </Form.Item>
 
-            <Form.Item
-              label="Color"
-              style={{
-                marginBottom: 16,
-              }}
-            >
+            <Form.Item label="Color">
               <ColorPicker
                 value={color}
-                disabled={pending}
                 format="rgb"
+                disabled={pending}
                 onChange={handleColorChange}
               />
             </Form.Item>
           </div>
         )}
 
-        {/* ================================================= */}
-        {/* SERIAL                                           */}
-        {/* ================================================= */}
+        {/* SERIAL */}
 
         {!isEditing && createMode === CREATE_MODE.SERIAL && (
           <>
@@ -832,11 +1218,8 @@ const SubPlanModal = ({
                   message: "Please enter a prefix.",
                 },
               ]}
-              style={{
-                marginBottom: 12,
-              }}
             >
-              <Input placeholder="Lot" allowClear disabled={pending} />
+              <Input placeholder="Lot" disabled={pending} />
             </Form.Item>
 
             <div
@@ -846,8 +1229,6 @@ const SubPlanModal = ({
                 gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
 
                 gap: 12,
-
-                width: "100%",
               }}
             >
               <Form.Item
@@ -860,18 +1241,12 @@ const SubPlanModal = ({
                     message: "Please enter the start number.",
                   },
                 ]}
-                style={{
-                  marginBottom: 12,
-
-                  minWidth: 0,
-                }}
               >
                 <InputNumber
                   precision={0}
                   style={{
                     width: "100%",
                   }}
-                  disabled={pending}
                 />
               </Form.Item>
 
@@ -881,23 +1256,14 @@ const SubPlanModal = ({
                 rules={[
                   {
                     required: true,
-
-                    message: "Please enter the quantity.",
                   },
 
                   {
                     type: "number",
 
                     min: 1,
-
-                    message: "Quantity must be at least 1.",
                   },
                 ]}
-                style={{
-                  marginBottom: 12,
-
-                  minWidth: 0,
-                }}
               >
                 <InputNumber
                   min={1}
@@ -906,7 +1272,6 @@ const SubPlanModal = ({
                   style={{
                     width: "100%",
                   }}
-                  disabled={pending}
                 />
               </Form.Item>
             </div>
@@ -925,49 +1290,189 @@ const SubPlanModal = ({
                   borderRadius: 6,
 
                   fontSize: 12,
-
-                  color: "#666",
-
-                  overflowWrap: "anywhere",
                 }}
               >
                 <strong>Preview:</strong> {serialPreview}
               </div>
             )}
-
-            <Form.Item>
-              <Space align="center" wrap>
-                <span
-                  style={{
-                    fontSize: 12,
-
-                    color: "#888",
-                  }}
-                >
-                  Multiple Sub Plans will use different colors automatically.
-                </span>
-              </Space>
-            </Form.Item>
           </>
         )}
 
-        {/* ================================================= */}
-        {/* ASSEMBLY NAME                                    */}
-        {/* ================================================= */}
+        {/* DATES */}
+
+        {!isEditing && createMode === CREATE_MODE.DATES && (
+          <>
+            {/* COUNTRY */}
+
+            <Form.Item
+              name="dateCountryCode"
+              label="Country"
+              rules={[
+                {
+                  required: true,
+
+                  message: "Please select a country.",
+                },
+              ]}
+            >
+              <Select
+                showSearch
+                allowClear
+                optionFilterProp="label"
+                placeholder={
+                  loadingCountries ? "Loading countries..." : "Select Country"
+                }
+                loading={loadingCountries}
+                disabled={pending || loadingCountries}
+                options={countryOptions}
+                style={{
+                  width: "100%",
+                }}
+              />
+            </Form.Item>
+
+            {/* DATE RANGE */}
+
+            <div
+              style={{
+                display: "grid",
+
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+
+                gap: 12,
+              }}
+            >
+              <Form.Item
+                name="startDate"
+                label="Start Date"
+                rules={[
+                  {
+                    required: true,
+
+                    message: "Please select Start Date.",
+                  },
+                ]}
+              >
+                <DatePicker
+                  format="DD-MM-YYYY"
+                  style={{
+                    width: "100%",
+                  }}
+                  disabled={pending}
+                />
+              </Form.Item>
+
+              <Form.Item
+                name="endDate"
+                label="End Date"
+                dependencies={["startDate"]}
+                rules={[
+                  {
+                    required: true,
+
+                    message: "Please select End Date.",
+                  },
+
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      const start = getFieldValue("startDate");
+
+                      if (!start || !value) {
+                        return Promise.resolve();
+                      }
+
+                      if (dayjs(value).isBefore(dayjs(start), "day")) {
+                        return Promise.reject(
+                          new Error("End Date must be on or after Start Date."),
+                        );
+                      }
+
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
+              >
+                <DatePicker
+                  format="DD-MM-YYYY"
+                  style={{
+                    width: "100%",
+                  }}
+                  disabled={pending}
+                />
+              </Form.Item>
+            </div>
+
+            {/* DATE INFORMATION */}
+
+            <div
+              style={{
+                marginBottom: 16,
+
+                padding: "10px 12px",
+
+                background: "#fafafa",
+
+                border: "1px solid #f0f0f0",
+
+                borderRadius: 6,
+
+                fontSize: 12,
+              }}
+            >
+              {loadingPublicHolidays ? (
+                <Space>
+                  <Spin size="small" />
+                  Loading public holidays...
+                </Space>
+              ) : publicHolidayError ? (
+                <span
+                  style={{
+                    color: "#ff4d4f",
+                  }}
+                >
+                  {publicHolidayError}
+                </span>
+              ) : datePreview ? (
+                <>
+                  <div>
+                    <strong>Preview:</strong> {datePreview}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 6,
+
+                      color: "#888",
+                    }}
+                  >
+                    {selectedCountry?.label
+                      ? `Country: ${selectedCountry.label}. `
+                      : ""}
+                    Saturdays, Sundays and national public holidays are
+                    excluded.
+                  </div>
+                </>
+              ) : (
+                <span
+                  style={{
+                    color: "#888",
+                  }}
+                >
+                  Select Country, Start Date and End Date.
+                </span>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ASSEMBLY */}
 
         {!isEditing && createMode === CREATE_MODE.ASSEMBLY_NAME && (
           <>
-            <Form.Item
-              label="Assembly Names"
-              style={{
-                marginBottom: 8,
-              }}
-            >
+            <Form.Item label="Assembly Names">
               <div
                 style={{
                   display: "flex",
-
-                  alignItems: "flex-start",
 
                   gap: 8,
                 }}
@@ -989,45 +1494,30 @@ const SubPlanModal = ({
                 >
                   <Select
                     mode="multiple"
-                    allowClear
                     showSearch
-                    maxTagCount="responsive"
+                    allowClear
                     optionFilterProp="label"
+                    maxTagCount="responsive"
+                    loading={loadingAssemblyNames}
+                    disabled={pending || loadingAssemblyNames}
+                    options={assemblyNameOptions}
                     placeholder={
                       loadingAssemblyNames
                         ? "Loading Assembly Names..."
                         : "Select Assembly Names"
                     }
-                    loading={loadingAssemblyNames}
-                    disabled={pending || loadingAssemblyNames}
-                    options={assemblyNameOptions}
                     style={{
                       flex: 1,
 
                       minWidth: 0,
                     }}
-                    notFoundContent={
-                      loadingAssemblyNames ? (
-                        <div
-                          style={{
-                            textAlign: "center",
-
-                            padding: 12,
-                          }}
-                        >
-                          <Spin size="small" />
-                        </div>
-                      ) : (
-                        "No Assembly Names found"
-                      )
-                    }
                   />
                 </Form.Item>
 
                 <Button
                   icon={<ReloadOutlined />}
-                  disabled={pending || loadingAssemblyNames}
                   loading={loadingAssemblyNames}
+                  disabled={pending || loadingAssemblyNames}
                   onClick={loadAssemblyNames}
                 />
               </div>
@@ -1037,36 +1527,17 @@ const SubPlanModal = ({
               style={{
                 marginBottom: 16,
 
-                color: "#888",
-
                 fontSize: 12,
+
+                color: "#888",
               }}
             >
-              {assemblyNames.length > 0
-                ? `${assemblyNames.length} unique Assembly Names found`
-                : "Assembly Names are read from assembly-level objects in the loaded models."}
+              {assemblyNames.length} unique Assembly Names found.
             </div>
-
-            <Form.Item>
-              <Space align="center" wrap>
-                <span
-                  style={{
-                    fontSize: 12,
-
-                    color: "#888",
-                  }}
-                >
-                  Selected Assembly Names will become Sub Plans with different
-                  colors.
-                </span>
-              </Space>
-            </Form.Item>
           </>
         )}
 
-        {/* ================================================= */}
-        {/* FOOTER                                           */}
-        {/* ================================================= */}
+        {/* FOOTER */}
 
         <Form.Item
           style={{
@@ -1086,7 +1557,12 @@ const SubPlanModal = ({
               Cancel
             </Button>
 
-            <Button type="primary" htmlType="submit" loading={pending}>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={pending}
+              disabled={loadingCountries || loadingPublicHolidays}
+            >
               {submitButtonName}
             </Button>
           </div>
