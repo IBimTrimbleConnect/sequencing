@@ -117,9 +117,7 @@ export default function App() {
     (state) => state.sequence?.refreshModelsError || "",
   );
 
-  const sequenceError = useSelector(
-    (state) => state.sequence?.error || null,
-  );
+  const sequenceError = useSelector((state) => state.sequence?.error || null);
 
   const [projectId, setProjectId] = useState("");
 
@@ -135,10 +133,7 @@ export default function App() {
    *
    * requestId makes repeated clicks on the same Plan trigger again.
    */
-  const [
-    simulationRequest,
-    setSimulationRequest,
-  ] = useState(null);
+  const [simulationRequest, setSimulationRequest] = useState(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -405,14 +400,9 @@ export default function App() {
         return;
       }
 
-      const planId =
-        value?.planId ??
-        value?.id ??
-        null;
+      const planId = value?.planId ?? value?.id ?? null;
 
-      const subPlanId =
-        value?.subPlanId ??
-        null;
+      const subPlanId = value?.subPlanId ?? null;
 
       if (!planId) {
         return;
@@ -421,10 +411,7 @@ export default function App() {
       setSimulationRequest({
         planId: String(planId),
 
-        subPlanId:
-          subPlanId != null
-            ? String(subPlanId)
-            : null,
+        subPlanId: subPlanId != null ? String(subPlanId) : null,
 
         requestId: Date.now(),
       });
@@ -432,10 +419,9 @@ export default function App() {
     [isFree],
   );
 
-  const handleSimulationRequestApplied =
-    useCallback(() => {
-      setSimulationRequest(null);
-    }, []);
+  const handleSimulationRequestApplied = useCallback(() => {
+    setSimulationRequest(null);
+  }, []);
 
   if (loading) {
     return (
@@ -618,9 +604,7 @@ export default function App() {
           isFree={isFree}
           readOnly={!isOwner}
           loadedModelIds={loadedModelIds}
-          onSimulation={
-            handleSimulationRequest
-          }
+          onSimulation={handleSimulationRequest}
         />
       </Content>
 
@@ -632,19 +616,11 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        {!isFree && (
-          <Simulation
-            loadedModelIds={
-              loadedModelIds
-            }
-            simulationRequest={
-              simulationRequest
-            }
-            onSimulationPlanApplied={
-              handleSimulationRequestApplied
-            }
-          />
-        )}
+        <Simulation
+          loadedModelIds={loadedModelIds}
+          simulationRequest={simulationRequest}
+          onSimulationPlanApplied={handleSimulationRequestApplied}
+        />
       </Footer>
     </Layout>
   );
