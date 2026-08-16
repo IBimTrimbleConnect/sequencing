@@ -1,5 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useDispatch, useSelector } from "react-redux";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
+  useDispatch,
+  useSelector,
+} from "react-redux";
 
 import {
   DndContext,
@@ -15,7 +24,17 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
-import { Collapse, Button, Modal, Form, Input, Spin, message } from "antd";
+import {
+  Collapse,
+  Button,
+  Modal,
+  Form,
+  Input,
+  Spin,
+  message,
+} from "antd";
+
+import dayjs from "dayjs";
 
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
@@ -23,12 +42,62 @@ import {
   DeletePlanRequest,
   UpdatePlanRequest,
   UpdatePlansOrderRequest,
+  SetObjectsRequest,
 } from "../store/sequence/action";
 
 import SubPlanModal from "./SubPlanModal";
 import SubPlanCollapse from "./SubPlanCollapse";
 import SortableHeader from "./SortableHeader";
 import CopySubPlanModal from "./CopySubPlanModal";
+
+/* ========================================================================== */
+/* DATE                                                                       */
+/* ========================================================================== */
+
+const DATE_FORMATS = [
+  "YYYY-MM-DD",
+  "DD-MM-YYYY",
+  "DD/MM/YYYY",
+  "YYYY/MM/DD",
+];
+
+/*
+ * Parse date từ nhiều format cũ.
+ */
+const parseDate = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (dayjs.isDayjs(value)) {
+    return value.isValid()
+      ? value
+      : null;
+  }
+
+  for (const format of DATE_FORMATS) {
+    const parsed = dayjs(
+      value,
+      format,
+      true,
+    );
+
+    if (parsed.isValid()) {
+      return parsed;
+    }
+  }
+
+  const fallback =
+    dayjs(value);
+
+  return fallback.isValid()
+    ? fallback
+    : null;
+};
+
+/* ========================================================================== */
+/* MAIN                                                                       */
+/* ========================================================================== */
 
 const Main = ({
   isOwner = false,
@@ -37,67 +106,147 @@ const Main = ({
   loadedModelIds = [],
   onSimulation,
 }) => {
-  const dispatch = useDispatch();
-  const [form] = Form.useForm();
+  const dispatch =
+    useDispatch();
 
-  const plans = useSelector((state) => state.sequence.plans || []);
+  const [form] =
+    Form.useForm();
 
-  const sequenceObjects = useSelector(
-    (state) => state.sequence.sequenceObjects || [],
-  );
+  /* ------------------------------------------------------------------------ */
+  /* REDUX                                                                    */
+  /* ------------------------------------------------------------------------ */
 
-  const loading = useSelector((state) => state.sequence.pending);
+  const plans =
+    useSelector(
+      (state) =>
+        state.sequence.plans ||
+        [],
+    );
 
-  const activeSimulationItem = useSelector(
-    (state) => state.sequence.activeSimulationItem,
-  );
+  const sequenceObjects =
+    useSelector(
+      (state) =>
+        state.sequence
+          .sequenceObjects ||
+        [],
+    );
 
-  const [isEditFormOpen, setIsEditFormOpen] = useState(false);
+  const projectId =
+    useSelector(
+      (state) =>
+        state.sequence
+          .projectId ||
+        "",
+    );
 
-  const [isCreateSubPlanOpen, setIsCreateSubPlanOpen] = useState(false);
+  const loading =
+    useSelector(
+      (state) =>
+        state.sequence.pending,
+    );
 
-  const [isCopySubPlanOpen, setIsCopySubPlanOpen] = useState(false);
+  const activeSimulationItem =
+    useSelector(
+      (state) =>
+        state.sequence
+          .activeSimulationItem,
+    );
 
-  const [planName, setPlanName] = useState("");
+  /* ------------------------------------------------------------------------ */
+  /* STATE                                                                    */
+  /* ------------------------------------------------------------------------ */
 
-  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [
+    isEditFormOpen,
+    setIsEditFormOpen,
+  ] = useState(false);
 
-  const [activePlanKeys, setActivePlanKeys] = useState([]);
+  const [
+    isCreateSubPlanOpen,
+    setIsCreateSubPlanOpen,
+  ] = useState(false);
 
-  const [localPlans, setLocalPlans] = useState([]);
+  const [
+    isCopySubPlanOpen,
+    setIsCopySubPlanOpen,
+  ] = useState(false);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    }),
-  );
+  const [
+    planName,
+    setPlanName,
+  ] = useState("");
+
+  const [
+    selectedPlan,
+    setSelectedPlan,
+  ] = useState(null);
+
+  const [
+    activePlanKeys,
+    setActivePlanKeys,
+  ] = useState([]);
+
+  const [
+    localPlans,
+    setLocalPlans,
+  ] = useState([]);
+
+  /* ------------------------------------------------------------------------ */
+  /* DND                                                                      */
+  /* ------------------------------------------------------------------------ */
+
+  const sensors =
+    useSensors(
+      useSensor(
+        PointerSensor,
+        {
+          activationConstraint: {
+            distance: 5,
+          },
+        },
+      ),
+    );
 
   /*
    * Keep local drag-and-drop order synchronized
    * with the latest Redux data.
    */
   useEffect(() => {
-    const sortedPlans = [...plans].sort(
-      (first, second) => {
-        const firstTime = new Date(
-          first?.sortDatetime ??
-            first?.sort_datetime ??
-            0,
-        ).getTime();
+    const sortedPlans = [
+      ...plans,
+    ].sort(
+      (
+        first,
+        second,
+      ) => {
+        const firstTime =
+          new Date(
+            first
+              ?.sortDatetime ??
+              first
+                ?.sort_datetime ??
+              0,
+          ).getTime();
 
-        const secondTime = new Date(
-          second?.sortDatetime ??
-            second?.sort_datetime ??
-            0,
-        ).getTime();
+        const secondTime =
+          new Date(
+            second
+              ?.sortDatetime ??
+              second
+                ?.sort_datetime ??
+              0,
+          ).getTime();
 
-        return firstTime - secondTime;
+        return (
+          firstTime -
+          secondTime
+        );
       },
     );
 
-    setLocalPlans(sortedPlans);
+    setLocalPlans(
+      sortedPlans,
+    );
   }, [plans]);
 
   /*
@@ -105,459 +254,1175 @@ const Main = ({
    * during simulation.
    */
   useEffect(() => {
-    if (!localPlans.length) {
+    if (
+      !localPlans.length
+    ) {
       return;
     }
 
-    if (!activeSimulationItem?.planId) {
+    if (
+      !activeSimulationItem
+        ?.planId
+    ) {
       return;
     }
 
-    const planKey = String(activeSimulationItem.planId);
+    const planKey =
+      String(
+        activeSimulationItem
+          .planId,
+      );
 
-    const exists = localPlans.some(
-      (plan) =>
-        String(plan.id) ===
-        planKey,
-    );
+    const exists =
+      localPlans.some(
+        (plan) =>
+          String(plan.id) ===
+          planKey,
+      );
 
     if (!exists) {
       return;
     }
 
-    setActivePlanKeys((previousKeys) => {
-      const keys = previousKeys.map(String);
+    setActivePlanKeys(
+      (previousKeys) => {
+        const keys =
+          previousKeys.map(
+            String,
+          );
 
-      if (keys.includes(planKey)) {
-        return keys;
-      }
+        if (
+          keys.includes(
+            planKey,
+          )
+        ) {
+          return keys;
+        }
 
-      return [...keys, planKey];
-    });
+        return [
+          ...keys,
+          planKey,
+        ];
+      },
+    );
   }, [
     localPlans,
-    activeSimulationItem?.planId,
+    activeSimulationItem
+      ?.planId,
   ]);
 
-  /*
-   * Reorder plans.
-   *
-   * The saga updates sort_datetime
-   * for every plan in Supabase.
-   */
-  const handleDragEnd = useCallback(
-    ({ active, over }) => {
-      if (!isOwner || !over) {
-        return;
-      }
+  /* ======================================================================== */
+  /* REORDER PLAN                                                             */
+  /* ======================================================================== */
 
-      const activeId = String(active.id);
-      const overId = String(over.id);
+  const handleDragEnd =
+    useCallback(
+      ({
+        active,
+        over,
+      }) => {
+        if (
+          !isOwner ||
+          !over
+        ) {
+          return;
+        }
 
-      if (activeId === overId) {
-        return;
-      }
+        const activeId =
+          String(active.id);
 
-      const oldIndex = localPlans.findIndex(
-        (plan) =>
-          String(plan.id) === activeId,
-      );
+        const overId =
+          String(over.id);
 
-      const newIndex = localPlans.findIndex(
-        (plan) =>
-          String(plan.id) === overId,
-      );
+        if (
+          activeId ===
+          overId
+        ) {
+          return;
+        }
 
-      if (oldIndex < 0 || newIndex < 0) {
-        return;
-      }
+        const oldIndex =
+          localPlans.findIndex(
+            (plan) =>
+              String(
+                plan.id,
+              ) ===
+              activeId,
+          );
 
-      const reorderedPlans = arrayMove(
-        localPlans,
-        oldIndex,
-        newIndex,
-      );
+        const newIndex =
+          localPlans.findIndex(
+            (plan) =>
+              String(
+                plan.id,
+              ) ===
+              overId,
+          );
 
-      /*
-       * Rebalance every sort_datetime after each move.
-       * Each Plan is spaced one second apart.
-       */
-      const baseTime = Date.now();
+        if (
+          oldIndex < 0 ||
+          newIndex < 0
+        ) {
+          return;
+        }
 
-      const updatedPlans = reorderedPlans.map(
-        (plan, index) => ({
-          ...plan,
+        const reorderedPlans =
+          arrayMove(
+            localPlans,
+            oldIndex,
+            newIndex,
+          );
 
-          sortDatetime: new Date(
-            baseTime + index * 1000,
-          ).toISOString(),
-        }),
-      );
+        /*
+         * Rebalance sort_datetime.
+         */
+        const baseTime =
+          Date.now();
 
-      /*
-       * Optimistic UI update.
-       */
-      setLocalPlans(updatedPlans);
+        const updatedPlans =
+          reorderedPlans.map(
+            (
+              plan,
+              index,
+            ) => ({
+              ...plan,
 
-      dispatch(
-        UpdatePlansOrderRequest({
-          plans: updatedPlans.map(
-            (plan) => ({
-              id: plan.id,
               sortDatetime:
-                plan.sortDatetime,
+                new Date(
+                  baseTime +
+                    index *
+                      1000,
+                ).toISOString(),
             }),
-          ),
-        }),
+          );
+
+        /*
+         * Optimistic update.
+         */
+        setLocalPlans(
+          updatedPlans,
+        );
+
+        dispatch(
+          UpdatePlansOrderRequest({
+            plans:
+              updatedPlans.map(
+                (plan) => ({
+                  id:
+                    plan.id,
+
+                  sortDatetime:
+                    plan
+                      .sortDatetime,
+                }),
+              ),
+          }),
+        );
+      },
+      [
+        dispatch,
+        isOwner,
+        localPlans,
+      ],
+    );
+
+  /* ======================================================================== */
+  /* EDIT PLAN                                                                */
+  /* ======================================================================== */
+
+  const handleEdit =
+    useCallback(
+      (plan) => {
+        if (!isOwner) {
+          return;
+        }
+
+        setSelectedPlan(
+          plan,
+        );
+
+        setPlanName(
+          plan?.name || "",
+        );
+
+        form.setFieldsValue({
+          planName:
+            plan?.name || "",
+        });
+
+        setIsEditFormOpen(
+          true,
+        );
+      },
+      [
+        form,
+        isOwner,
+      ],
+    );
+
+  /* ======================================================================== */
+  /* ADD SUB PLAN                                                             */
+  /* ======================================================================== */
+
+  const handleAddSubPlan =
+    useCallback(
+      (plan) => {
+        if (!isOwner) {
+          return;
+        }
+
+        setSelectedPlan(
+          plan,
+        );
+
+        setIsCreateSubPlanOpen(
+          true,
+        );
+      },
+      [isOwner],
+    );
+
+  /* ======================================================================== */
+  /* COPY SUB PLAN                                                            */
+  /* ======================================================================== */
+
+  const handleCopySubPlan =
+    useCallback(
+      (plan) => {
+        if (!isOwner) {
+          return;
+        }
+
+        setSelectedPlan(
+          plan,
+        );
+
+        setIsCopySubPlanOpen(
+          true,
+        );
+      },
+      [isOwner],
+    );
+
+  /* ======================================================================== */
+  /* DELETE PLAN                                                              */
+  /* ======================================================================== */
+
+  const handleDelete =
+    useCallback(
+      (plan) => {
+        if (
+          !isOwner ||
+          !plan?.id
+        ) {
+          return;
+        }
+
+        dispatch(
+          DeletePlanRequest({
+            planId:
+              plan.id,
+          }),
+        );
+      },
+      [
+        dispatch,
+        isOwner,
+      ],
+    );
+
+  /* ======================================================================== */
+  /* MODIFY PLAN NAME                                                         */
+  /* ======================================================================== */
+
+  const handleModifyName =
+    useCallback(
+      async () => {
+        try {
+          if (
+            !isOwner ||
+            !selectedPlan?.id
+          ) {
+            return;
+          }
+
+          const values =
+            await form
+              .validateFields();
+
+          const trimmedPlanName =
+            values.planName.trim();
+
+          dispatch(
+            UpdatePlanRequest({
+              id:
+                selectedPlan.id,
+
+              name:
+                trimmedPlanName,
+            }),
+          );
+
+          setIsEditFormOpen(
+            false,
+          );
+
+          setSelectedPlan(
+            null,
+          );
+
+          setPlanName("");
+
+          form.resetFields();
+        } catch (error) {
+          if (
+            !error?.errorFields
+          ) {
+            console.error(
+              "Failed to update plan:",
+              error,
+            );
+
+            message.error(
+              error?.message ||
+                "Unable to update the plan.",
+            );
+          }
+        }
+      },
+      [
+        dispatch,
+        form,
+        isOwner,
+        selectedPlan,
+      ],
+    );
+
+  const handleCloseEditModal =
+    useCallback(() => {
+      setIsEditFormOpen(
+        false,
       );
-    },
-    [
-      dispatch,
-      isOwner,
-      localPlans,
-    ],
-  );
 
-  const handleEdit = useCallback(
-    (plan) => {
-      if (!isOwner) {
-        return;
-      }
-
-      setSelectedPlan(plan);
-      setPlanName(plan?.name || "");
-
-      form.setFieldsValue({
-        planName: plan?.name || "",
-      });
-
-      setIsEditFormOpen(true);
-    },
-    [form, isOwner],
-  );
-
-  const handleAddSubPlan = useCallback(
-    (plan) => {
-      if (!isOwner) {
-        return;
-      }
-
-      setSelectedPlan(plan);
-      setIsCreateSubPlanOpen(true);
-    },
-    [isOwner],
-  );
-
-  const handleCopySubPlan = useCallback(
-    (plan) => {
-      if (!isOwner) {
-        return;
-      }
-
-      setSelectedPlan(plan);
-      setIsCopySubPlanOpen(true);
-    },
-    [isOwner],
-  );
-
-  /*
-   * Supabase only requires the plan ID.
-   *
-   * Foreign keys with ON DELETE CASCADE
-   * remove related subplans and objects.
-   */
-  const handleDelete = useCallback(
-    (plan) => {
-      if (!isOwner || !plan?.id) {
-        return;
-      }
-
-      dispatch(
-        DeletePlanRequest({
-          planId: plan.id,
-        }),
-      );
-    },
-    [dispatch, isOwner],
-  );
-
-  /*
-   * Update only the selected plan.
-   */
-  const handleModifyName = useCallback(async () => {
-    try {
-      if (!isOwner || !selectedPlan?.id) {
-        return;
-      }
-
-      const values = await form.validateFields();
-
-      const trimmedPlanName = values.planName.trim();
-
-      dispatch(
-        UpdatePlanRequest({
-          id: selectedPlan.id,
-          name: trimmedPlanName,
-        }),
+      setSelectedPlan(
+        null,
       );
 
-      setIsEditFormOpen(false);
-      setSelectedPlan(null);
       setPlanName("");
+
       form.resetFields();
-    } catch (error) {
-      if (!error?.errorFields) {
-        console.error("Failed to update plan:", error);
+    }, [form]);
 
-        message.error(error?.message || "Unable to update the plan.");
-      }
-    }
-  }, [dispatch, form, isOwner, selectedPlan]);
+  /* ======================================================================== */
+  /* COLLAPSE                                                                 */
+  /* ======================================================================== */
 
-  const handleCloseEditModal = useCallback(() => {
-    setIsEditFormOpen(false);
-    setSelectedPlan(null);
-    setPlanName("");
-    form.resetFields();
-  }, [form]);
+  const handlePlanCollapseChange =
+    useCallback(
+      (activeKeys) => {
+        const keys =
+          Array.isArray(
+            activeKeys,
+          )
+            ? activeKeys.map(
+                String,
+              )
+            : activeKeys
+              ? [
+                  String(
+                    activeKeys,
+                  ),
+                ]
+              : [];
 
-  const handlePlanCollapseChange = useCallback((activeKeys) => {
-    const keys = Array.isArray(activeKeys)
-      ? activeKeys.map(String)
-      : activeKeys
-        ? [String(activeKeys)]
-        : [];
+        setActivePlanKeys(
+          keys,
+        );
+      },
+      [],
+    );
 
-    setActivePlanKeys(keys);
-  }, []);
+  /* ======================================================================== */
+  /* HIGHLIGHT ALL OBJECTS IN PLAN                                            */
+  /* ======================================================================== */
 
-  const handleHighlightObject = useCallback(
-    async (plan) => {
-      try {
-        if (!plan?.id) {
+  const handleHighlightObject =
+    useCallback(
+      async (plan) => {
+        try {
+          if (!plan?.id) {
+            return;
+          }
+
+          const tcapi =
+            await WorkspaceAPI.connect(
+              window.parent,
+            );
+
+          const objects =
+            sequenceObjects
+              .filter(
+                (group) =>
+                  group &&
+                  String(
+                    group.planId,
+                  ) ===
+                    String(
+                      plan.id,
+                    ),
+              )
+              .flatMap(
+                (group) =>
+                  Array.isArray(
+                    group.objects,
+                  )
+                    ? group.objects
+                    : [],
+              );
+
+          if (
+            !objects.length
+          ) {
+            await tcapi.viewer
+              .setSelection(
+                {
+                  modelObjectIds:
+                    [],
+                },
+                "set",
+              );
+
+            message.warning(
+              "No objects were found in this plan.",
+            );
+
+            return;
+          }
+
+          const modelGroups =
+            new Map();
+
+          for (
+            const object of
+            objects
+          ) {
+            const modelId =
+              object?.modelId;
+
+            const runtimeId =
+              Number(
+                object
+                  ?.runtimeId ??
+                  object?.id,
+              );
+
+            if (
+              modelId == null ||
+              !Number.isFinite(
+                runtimeId,
+              )
+            ) {
+              continue;
+            }
+
+            const modelKey =
+              String(modelId);
+
+            if (
+              !modelGroups.has(
+                modelKey,
+              )
+            ) {
+              modelGroups.set(
+                modelKey,
+                {
+                  modelId,
+
+                  objectRuntimeIds:
+                    new Set(),
+                },
+              );
+            }
+
+            modelGroups
+              .get(modelKey)
+              .objectRuntimeIds
+              .add(
+                runtimeId,
+              );
+          }
+
+          const modelObjectIds =
+            [
+              ...modelGroups.values(),
+            ]
+              .map(
+                (group) => ({
+                  modelId:
+                    group.modelId,
+
+                  objectRuntimeIds:
+                    [
+                      ...group
+                        .objectRuntimeIds,
+                    ],
+                }),
+              )
+              .filter(
+                (group) =>
+                  group
+                    .objectRuntimeIds
+                    .length > 0,
+              );
+
+          if (
+            !modelObjectIds.length
+          ) {
+            await tcapi.viewer
+              .setSelection(
+                {
+                  modelObjectIds:
+                    [],
+                },
+                "set",
+              );
+
+            message.warning(
+              "The objects could not be resolved in the current model version.",
+            );
+
+            return;
+          }
+
+          await tcapi.viewer
+            .setSelection(
+              {
+                modelObjectIds,
+              },
+              "set",
+            );
+        } catch (error) {
+          console.error(
+            "Failed to highlight plan objects:",
+            error,
+          );
+
+          message.error(
+            "Unable to highlight the plan objects.",
+          );
+        }
+      },
+      [sequenceObjects],
+    );
+
+  /* ======================================================================== */
+  /* ASSIGN / MODIFY DATE - WHOLE PLAN                                        */
+  /* ======================================================================== */
+
+  const handleAssignPlanDate =
+    useCallback(
+      (
+        selectedPlan,
+        date,
+        dateStep,
+      ) => {
+        if (
+          !isOwner ||
+          !selectedPlan?.id
+        ) {
           return;
         }
 
-        const tcapi = await WorkspaceAPI.connect(window.parent);
+        const step =
+          Number(
+            dateStep,
+          ) || 0;
 
-        const objects = sequenceObjects
-          .filter((group) => group && String(group.planId) === String(plan.id))
-          .flatMap((group) =>
-            Array.isArray(group.objects) ? group.objects : [],
+        /*
+         * Không chọn Date
+         * và Step = 0
+         *
+         * => không thay đổi.
+         */
+        if (
+          !date &&
+          step === 0
+        ) {
+          return;
+        }
+
+        /*
+         * ================================================================
+         * LẤY TẤT CẢ SEQUENCE GROUP THUỘC PLAN
+         * ================================================================
+         *
+         * Mỗi group thường tương ứng với một SubPlan.
+         */
+        const planGroups =
+          sequenceObjects.filter(
+            (group) =>
+              String(
+                group?.planId,
+              ) ===
+              String(
+                selectedPlan.id,
+              ),
           );
 
-        if (!objects.length) {
-          await tcapi.viewer.setSelection(
-            {
-              modelObjectIds: [],
-            },
-            "set",
+        if (
+          !planGroups.length
+        ) {
+          message.info(
+            "There are no objects in this Plan.",
           );
-
-          message.warning("No objects were found in this plan.");
 
           return;
         }
 
-        const modelGroups = new Map();
+        /*
+         * ================================================================
+         * GLOBAL COUNTER
+         * ================================================================
+         *
+         * Counter KHÔNG reset khi chuyển SubPlan.
+         *
+         * Ví dụ:
+         *
+         * Date = 16-08
+         * Step = 1
+         *
+         * SubPlan A
+         *   A1 -> 16
+         *   A2 -> 17
+         *
+         * SubPlan B
+         *   B1 -> 18
+         *   B2 -> 19
+         */
+        let dateCount = 0;
 
-        for (const object of objects) {
-          const modelId = object?.modelId;
+        let updatedCount =
+          0;
 
-          const runtimeId = Number(object?.runtimeId ?? object?.id);
+        /*
+         * ================================================================
+         * UPDATE TỪNG SUBPLAN
+         * ================================================================
+         */
+        for (
+          const group of
+          planGroups
+        ) {
+          const currentObjects =
+            Array.isArray(
+              group?.objects,
+            )
+              ? group.objects
+              : [];
 
-          if (modelId == null || !Number.isFinite(runtimeId)) {
+          if (
+            !currentObjects.length
+          ) {
             continue;
           }
 
-          const modelKey = String(modelId);
+          const updatedObjects =
+            currentObjects.map(
+              (object) => {
+                let nextDate =
+                  null;
 
-          if (!modelGroups.has(modelKey)) {
-            modelGroups.set(modelKey, {
-              modelId,
-              objectRuntimeIds: new Set(),
-            });
-          }
+                /*
+                 * ========================================================
+                 * ASSIGN DATE
+                 * ========================================================
+                 *
+                 * Có Date:
+                 *
+                 * Step = 0
+                 *
+                 * tất cả objects cùng ngày.
+                 *
+                 * Step = 1
+                 *
+                 * object tiếp theo +1 day.
+                 *
+                 * Step = 2
+                 *
+                 * object tiếp theo +2 days.
+                 */
+                if (date) {
+                  nextDate =
+                    date
+                      .startOf(
+                        "day",
+                      )
+                      .add(
+                        dateCount,
+                        "day",
+                      );
 
-          modelGroups.get(modelKey).objectRuntimeIds.add(runtimeId);
+                  dateCount +=
+                    step;
+                }
+
+                /*
+                 * ========================================================
+                 * MODIFY EXISTING DATE
+                 * ========================================================
+                 *
+                 * Không chọn Date:
+                 *
+                 * Step = 1
+                 * => current date + 1
+                 *
+                 * Step = -1
+                 * => current date - 1
+                 */
+                else {
+                  const currentDate =
+                    object
+                      ?.assignedDate ||
+                    object?.date;
+
+                  /*
+                   * Object chưa có date:
+                   *
+                   * giữ nguyên.
+                   */
+                  if (
+                    !currentDate
+                  ) {
+                    return object;
+                  }
+
+                  const parsedDate =
+                    parseDate(
+                      currentDate,
+                    );
+
+                  if (
+                    !parsedDate
+                  ) {
+                    return object;
+                  }
+
+                  nextDate =
+                    parsedDate.add(
+                      step,
+                      "day",
+                    );
+                }
+
+                if (
+                  !nextDate ||
+                  !nextDate.isValid()
+                ) {
+                  return object;
+                }
+
+                const formattedDate =
+                  nextDate.format(
+                    "YYYY-MM-DD",
+                  );
+
+                updatedCount +=
+                  1;
+
+                return {
+                  ...object,
+
+                  assignedDate:
+                    formattedDate,
+
+                  date:
+                    formattedDate,
+                };
+              },
+            );
+
+          /*
+           * ==============================================================
+           * SAVE
+           * ==============================================================
+           *
+           * SetObjectsRequest lưu theo từng SubPlan.
+           *
+           * Vì Plan có nhiều SubPlan nên dispatch từng group.
+           */
+          dispatch(
+            SetObjectsRequest({
+              projectId,
+
+              planId:
+                selectedPlan.id,
+
+              subPlanId:
+                group.subPlanId,
+
+              objects:
+                updatedObjects,
+            }),
+          );
         }
 
-        const modelObjectIds = [...modelGroups.values()]
-          .map((group) => ({
-            modelId: group.modelId,
-            objectRuntimeIds: [...group.objectRuntimeIds],
-          }))
-          .filter((group) => group.objectRuntimeIds.length > 0);
-
-        if (!modelObjectIds.length) {
-          await tcapi.viewer.setSelection(
-            {
-              modelObjectIds: [],
-            },
-            "set",
+        if (
+          updatedCount > 0
+        ) {
+          message.success(
+            `${updatedCount} object(s) updated.`,
           );
-
-          message.warning(
-            "The objects could not be resolved in the current model version.",
-          );
-
-          return;
         }
+      },
+      [
+        dispatch,
+        isOwner,
+        sequenceObjects,
+        projectId,
+      ],
+    );
 
-        await tcapi.viewer.setSelection(
-          {
-            modelObjectIds,
+  /* ======================================================================== */
+  /* COLLAPSE ITEMS                                                           */
+  /* ======================================================================== */
+
+  const collapseItems =
+    useMemo(
+      () =>
+        localPlans.map(
+          (plan) => {
+            /*
+             * Tổng số Sequence Objects
+             * thuộc Plan.
+             */
+            const objectCount =
+              sequenceObjects
+                .filter(
+                  (group) =>
+                    String(
+                      group
+                        ?.planId,
+                    ) ===
+                    String(
+                      plan.id,
+                    ),
+                )
+                .reduce(
+                  (
+                    total,
+                    group,
+                  ) =>
+                    total +
+                    (
+                      Array.isArray(
+                        group
+                          ?.objects,
+                      )
+                        ? group
+                            .objects
+                            .length
+                        : 0
+                    ),
+                  0,
+                );
+
+            return {
+              key:
+                String(
+                  plan.id,
+                ),
+
+              label: (
+                <SortableHeader
+                  plan={
+                    plan
+                  }
+                  objectCount={
+                    objectCount
+                  }
+                  isOwner={
+                    isOwner
+                  }
+                  isFree={
+                    isFree
+                  }
+
+                  /*
+                   * ======================================================
+                   * PLAN DATE
+                   * ======================================================
+                   *
+                   * SortableHeader sử dụng cùng layout:
+                   *
+                   * [DatePicker] [Step] [Edit]
+                   *
+                   * giống Sequence Objects và SubPlan.
+                   */
+                  onAssignDate={
+                    isOwner
+                      ? handleAssignPlanDate
+                      : undefined
+                  }
+
+                  onEdit={
+                    handleEdit
+                  }
+
+                  onDelete={
+                    handleDelete
+                  }
+
+                  onAddSubPlan={
+                    handleAddSubPlan
+                  }
+
+                  onCopySubPlan={
+                    handleCopySubPlan
+                  }
+
+                  onHighlightObject={
+                    handleHighlightObject
+                  }
+
+                  /*
+                   * Always provide the callback
+                   * so Run Simulation remains
+                   * visible.
+                   *
+                   * SortableHeader disables it
+                   * for Free.
+                   */
+                  onSimulation={(
+                    selectedPlan,
+                  ) => {
+                    if (
+                      isFree
+                    ) {
+                      return;
+                    }
+
+                    onSimulation?.(
+                      selectedPlan,
+                    );
+                  }}
+                />
+              ),
+
+              children: (
+                <SubPlanCollapse
+                  plan={
+                    plan
+                  }
+
+                  activeSimulationItem={
+                    activeSimulationItem
+                  }
+
+                  isOwner={
+                    isOwner
+                  }
+
+                  isViewer={
+                    isViewer
+                  }
+
+                  isFree={
+                    isFree
+                  }
+
+                  readOnly={
+                    !isOwner
+                  }
+
+                  loadedModelIds={
+                    loadedModelIds
+                  }
+
+                  onSimulation={(
+                    request,
+                  ) => {
+                    if (
+                      isFree
+                    ) {
+                      return;
+                    }
+
+                    onSimulation?.(
+                      request,
+                    );
+                  }}
+                />
+              ),
+            };
           },
-          "set",
-        );
-      } catch (error) {
-        console.error("Failed to highlight plan objects:", error);
+        ),
+      [
+        localPlans,
 
-        message.error("Unable to highlight the plan objects.");
-      }
-    },
-    [sequenceObjects],
-  );
+        sequenceObjects,
 
-  const collapseItems = useMemo(
-    () =>
-      localPlans.map((plan) => {
-        const objectCount = sequenceObjects
-          .filter((group) => String(group?.planId) === String(plan.id))
-          .reduce(
-            (total, group) =>
-              total +
-              (Array.isArray(group?.objects) ? group.objects.length : 0),
-            0,
-          );
+        activeSimulationItem,
 
-        return {
-          key: String(plan.id),
+        isOwner,
 
-          label: (
-            <SortableHeader
-              plan={plan}
-              objectCount={objectCount}
-              isOwner={isOwner}
-              isFree={isFree}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onAddSubPlan={handleAddSubPlan}
-              onCopySubPlan={handleCopySubPlan}
-              onHighlightObject={handleHighlightObject}
-              /*
-               * Always provide the callback so the menu item is visible
-               * for every license type.
-               *
-               * SortableHeader itself disables Run Simulation for Free.
-               */
-              onSimulation={(selectedPlan) => {
-                if (isFree) {
-                  return;
-                }
+        isViewer,
 
-                onSimulation?.(selectedPlan);
-              }}
-            />
-          ),
+        isFree,
 
-          children: (
-            <SubPlanCollapse
-              plan={plan}
-              activeSimulationItem={activeSimulationItem}
-              isOwner={isOwner}
-              isViewer={isViewer}
-              isFree={isFree}
-              readOnly={!isOwner}
-              loadedModelIds={loadedModelIds}
-              onSimulation={(request) => {
-                if (isFree) {
-                  return;
-                }
+        loadedModelIds,
 
-                onSimulation?.(request);
-              }}
-            />
-          ),
-        };
-      }),
-    [
-      localPlans,
-      sequenceObjects,
-      activeSimulationItem,
-      isOwner,
-      isViewer,
-      isFree,
-      loadedModelIds,
-      onSimulation,
-      handleEdit,
-      handleDelete,
-      handleAddSubPlan,
-      handleCopySubPlan,
-      handleHighlightObject,
-    ],
-  );
+        onSimulation,
+
+        handleEdit,
+
+        handleDelete,
+
+        handleAddSubPlan,
+
+        handleCopySubPlan,
+
+        handleHighlightObject,
+
+        handleAssignPlanDate,
+      ],
+    );
+
+  /* ======================================================================== */
+  /* UI                                                                       */
+  /* ======================================================================== */
 
   return (
     <>
       {isOwner && (
         <>
           <CopySubPlanModal
-            selectedPlan={selectedPlan}
-            open={isCopySubPlanOpen}
+            selectedPlan={
+              selectedPlan
+            }
+
+            open={
+              isCopySubPlanOpen
+            }
+
             onCancel={() => {
-              setIsCopySubPlanOpen(false);
-              setSelectedPlan(null);
+              setIsCopySubPlanOpen(
+                false,
+              );
+
+              setSelectedPlan(
+                null,
+              );
             }}
           />
 
           <SubPlanModal
             title="Create Sub Plan"
+
             buttonName="Create"
-            plan={selectedPlan}
-            open={isCreateSubPlanOpen}
+
+            plan={
+              selectedPlan
+            }
+
+            open={
+              isCreateSubPlanOpen
+            }
+
             onCancel={() => {
-              setIsCreateSubPlanOpen(false);
-              setSelectedPlan(null);
+              setIsCreateSubPlanOpen(
+                false,
+              );
+
+              setSelectedPlan(
+                null,
+              );
             }}
           />
         </>
       )}
 
+      {/* ================================================================ */}
+      {/* EDIT PLAN NAME                                                   */}
+      {/* ================================================================ */}
+
       <Modal
         title="Edit Plan Name"
-        open={isOwner && isEditFormOpen}
-        footer={null}
-        onCancel={handleCloseEditModal}
+
+        open={
+          isOwner &&
+          isEditFormOpen
+        }
+
+        footer={
+          null
+        }
+
+        onCancel={
+          handleCloseEditModal
+        }
+
         destroyOnHidden
       >
-        <Form form={form} autoComplete="off" onFinish={handleModifyName}>
+        <Form
+          form={
+            form
+          }
+
+          autoComplete="off"
+
+          onFinish={
+            handleModifyName
+          }
+        >
           <Form.Item
             name="planName"
+
             rules={[
               {
-                required: true,
-                whitespace: true,
-                message: "Please enter the plan name.",
+                required:
+                  true,
+
+                whitespace:
+                  true,
+
+                message:
+                  "Please enter the plan name.",
               },
             ]}
           >
             <Input
               placeholder="Plan Name"
-              value={planName}
-              onChange={(event) => setPlanName(event.target.value)}
+
+              value={
+                planName
+              }
+
+              onChange={(
+                event,
+              ) =>
+                setPlanName(
+                  event
+                    .target
+                    .value,
+                )
+              }
             />
           </Form.Item>
 
           <Form.Item
             style={{
-              marginBottom: 0,
+              marginBottom:
+                0,
             }}
           >
             <Button
               type="primary"
+
               htmlType="submit"
-              disabled={!planName.trim()}
+
+              disabled={
+                !planName.trim()
+              }
             >
               Modify
             </Button>
@@ -565,34 +1430,76 @@ const Main = ({
         </Form>
       </Modal>
 
-      <Spin spinning={loading}>
+      {/* ================================================================ */}
+      {/* PLAN COLLAPSE                                                    */}
+      {/* ================================================================ */}
+
+      <Spin
+        spinning={
+          loading
+        }
+      >
         <DndContext
-          sensors={isOwner ? sensors : []}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
+          sensors={
+            isOwner
+              ? sensors
+              : []
+          }
+
+          collisionDetection={
+            closestCenter
+          }
+
+          onDragEnd={
+            handleDragEnd
+          }
         >
           <SortableContext
-            items={localPlans.map(
-              (plan) =>
-                String(plan.id),
-            )}
-            strategy={verticalListSortingStrategy}
+            items={
+              localPlans.map(
+                (plan) =>
+                  String(
+                    plan.id,
+                  ),
+              )
+            }
+
+            strategy={
+              verticalListSortingStrategy
+            }
           >
             <Collapse
-              activeKey={activePlanKeys}
+              activeKey={
+                activePlanKeys
+              }
+
               size="small"
-              items={collapseItems}
-              onChange={handlePlanCollapseChange}
+
+              items={
+                collapseItems
+              }
+
+              onChange={
+                handlePlanCollapseChange
+              }
+
               style={{
-                borderRadius: 0,
+                borderRadius:
+                  0,
               }}
+
               styles={{
                 header: {
-                  padding: "4px 8px",
-                  alignItems: "center",
+                  padding:
+                    "4px 8px",
+
+                  alignItems:
+                    "center",
                 },
+
                 body: {
-                  padding: 8,
+                  padding:
+                    8,
                 },
               }}
             />
@@ -603,4 +1510,6 @@ const Main = ({
   );
 };
 
-export default React.memo(Main);
+export default React.memo(
+  Main,
+);

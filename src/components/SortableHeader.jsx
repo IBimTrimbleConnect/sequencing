@@ -6,7 +6,9 @@ import React, {
 
 import {
   Button,
+  DatePicker,
   Dropdown,
+  Input,
   Popconfirm,
 } from "antd";
 
@@ -30,6 +32,10 @@ import {
 import {
   CSS,
 } from "@dnd-kit/utilities";
+
+/* -------------------------------------------------------------------------- */
+/* MENU BUTTON                                                                */
+/* -------------------------------------------------------------------------- */
 
 const MenuButton = ({
   icon,
@@ -62,9 +68,12 @@ const MenuButton = ({
       }
       style={{
         width: "100%",
+
         display: "flex",
+
         justifyContent:
           "flex-start",
+
         alignItems:
           "center",
       }}
@@ -73,6 +82,10 @@ const MenuButton = ({
     </Button>
   );
 };
+
+/* -------------------------------------------------------------------------- */
+/* SORTABLE HEADER                                                            */
+/* -------------------------------------------------------------------------- */
 
 const SortableHeader = ({
   plan,
@@ -84,14 +97,35 @@ const SortableHeader = ({
   isFree = false,
 
   onEdit,
+
   onDelete,
+
   onAddSubPlan,
+
   onAssignObject,
+
   onAutoAssign,
+
   onCopySubPlan,
+
   onSortByDate,
+
   onHighlightObject,
+
   onSimulation,
+
+  /*
+   * Date assignment.
+   *
+   * Signature:
+   *
+   * onAssignDate(
+   *   plan,
+   *   date,
+   *   dateStep,
+   * )
+   */
+  onAssignDate,
 }) => {
   const [
     dropdownOpen,
@@ -102,6 +136,29 @@ const SortableHeader = ({
     deleteConfirmOpen,
     setDeleteConfirmOpen,
   ] = useState(false);
+
+  /*
+   * ============================================================
+   * DATE
+   * ============================================================
+   *
+   * Giữ giống Sequence Objects:
+   *
+   * [ DatePicker ] [ Step ] [ Edit ]
+   */
+  const [
+    assignDate,
+    setAssignDate,
+  ] = useState(null);
+
+  const [
+    dateStep,
+    setDateStep,
+  ] = useState("");
+
+  /* ------------------------------------------------------------------------ */
+  /* SORTABLE                                                                 */
+  /* ------------------------------------------------------------------------ */
 
   const {
     attributes,
@@ -119,6 +176,10 @@ const SortableHeader = ({
       !isOwner,
   });
 
+  /* ------------------------------------------------------------------------ */
+  /* DROPDOWN                                                                 */
+  /* ------------------------------------------------------------------------ */
+
   const closeDropdown =
     useCallback(() => {
       setDropdownOpen(
@@ -131,13 +192,19 @@ const SortableHeader = ({
       (callback) => {
         closeDropdown();
 
-        callback?.(plan);
+        callback?.(
+          plan,
+        );
       },
       [
         closeDropdown,
         plan,
       ],
     );
+
+  /* ------------------------------------------------------------------------ */
+  /* MENU ITEM                                                                */
+  /* ------------------------------------------------------------------------ */
 
   const createMenuItem =
     useCallback(
@@ -154,10 +221,16 @@ const SortableHeader = ({
         label: (
           <MenuButton
             icon={icon}
-            danger={danger}
-            disabled={disabled}
+            danger={
+              danger
+            }
+            disabled={
+              disabled
+            }
             onClick={() => {
-              if (disabled) {
+              if (
+                disabled
+              ) {
                 return;
               }
 
@@ -175,6 +248,10 @@ const SortableHeader = ({
       ],
     );
 
+  /* ------------------------------------------------------------------------ */
+  /* MENU                                                                     */
+  /* ------------------------------------------------------------------------ */
+
   const menuItems =
     useMemo(() => {
       const items = [];
@@ -189,13 +266,187 @@ const SortableHeader = ({
         isOwner;
 
       /*
+       * ============================================================
+       * ASSIGN / MODIFY DATE
+       * ============================================================
+       *
+       * ĐẨY LÊN ĐẦU MENU.
+       *
+       * Layout giống Sequence Objects:
+       *
+       * [ DatePicker ] [ Step ] [ Edit ]
+       *
+       * RULES:
+       *
+       * Date + Step 0
+       * => tất cả object cùng ngày.
+       *
+       * Date + Step 1
+       * => Object 1 = Date
+       *    Object 2 = Date + 1
+       *    Object 3 = Date + 2
+       *
+       * Date + Step 2
+       * => Object 1 = Date
+       *    Object 2 = Date + 2
+       *    Object 3 = Date + 4
+       *
+       * Date empty + Step 1
+       * => current date + 1 day.
+       *
+       * Date empty + Step -1
+       * => current date - 1 day.
+       */
+      if (
+        onAssignDate
+      ) {
+        items.push({
+          key:
+            "assignDate",
+
+          label: (
+            <div
+              style={{
+                display:
+                  "flex",
+
+                gap:
+                  8,
+
+                alignItems:
+                  "center",
+              }}
+              onClick={(
+                event,
+              ) => {
+                event.stopPropagation();
+              }}
+              onMouseDown={(
+                event,
+              ) => {
+                event.stopPropagation();
+              }}
+              onPointerDown={(
+                event,
+              ) => {
+                event.stopPropagation();
+              }}
+            >
+              {/*
+               * Giữ nguyên size
+               * giống Sequence Objects.
+               */}
+              <DatePicker
+                size="small"
+                value={
+                  assignDate
+                }
+                onChange={(
+                  date,
+                ) => {
+                  setAssignDate(
+                    date,
+                  );
+                }}
+              />
+
+              {/*
+               * Giữ width = 40
+               * giống Sequence Objects.
+               */}
+              <Input
+                size="small"
+                style={{
+                  width:
+                    40,
+                }}
+                value={
+                  dateStep
+                }
+                onChange={(
+                  event,
+                ) => {
+                  setDateStep(
+                    event
+                      .target
+                      .value,
+                  );
+                }}
+              />
+
+              <Button
+                size="small"
+                type="text"
+                disabled={
+                  !canEdit ||
+                  (
+                    !assignDate &&
+                    !Number(
+                      dateStep,
+                    )
+                  )
+                }
+                icon={
+                  <EditOutlined />
+                }
+                onClick={(
+                  event,
+                ) => {
+                  event.stopPropagation();
+
+                  if (
+                    !canEdit
+                  ) {
+                    return;
+                  }
+
+                  /*
+                   * Date empty
+                   * Step empty / 0
+                   *
+                   * => không làm gì.
+                   */
+                  if (
+                    !assignDate &&
+                    !Number(
+                      dateStep,
+                    )
+                  ) {
+                    return;
+                  }
+
+                  onAssignDate?.(
+                    plan,
+                    assignDate,
+                    dateStep,
+                  );
+                }}
+              />
+            </div>
+          ),
+        });
+
+        /*
+         * Divider ngay dưới Date.
+         */
+        items.push({
+          type:
+            "divider",
+        });
+      }
+
+      /*
+       * ============================================================
        * RUN SIMULATION
+       * ============================================================
        *
        * Free   -> visible + disabled
        * Viewer -> enabled
        * Owner  -> enabled
        */
-      if (onSimulation) {
+      if (
+        onSimulation
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -218,10 +469,9 @@ const SortableHeader = ({
       }
 
       /*
+       * ============================================================
        * HIGHLIGHT
-       *
-       * Free / Viewer / Owner
-       * are all allowed.
+       * ============================================================
        */
       if (
         onHighlightObject
@@ -248,24 +498,35 @@ const SortableHeader = ({
       }
 
       /*
-       * Divider before Owner-only actions.
+       * Divider.
        */
       if (
-        items.length > 0
+        (
+          onSimulation ||
+          onHighlightObject
+        ) &&
+        (
+          onAssignObject ||
+          onAutoAssign ||
+          onAddSubPlan ||
+          onSortByDate ||
+          onCopySubPlan
+        )
       ) {
         items.push({
-          type: "divider",
+          type:
+            "divider",
         });
       }
 
       /*
-       * OWNER-ONLY ACTIONS
-       *
-       * Viewer / Free:
-       * visible but disabled.
+       * ============================================================
+       * ASSIGN MULTIPLE ASSEMBLIES
+       * ============================================================
        */
-
-      if (onAssignObject) {
+      if (
+        onAssignObject
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -287,7 +548,14 @@ const SortableHeader = ({
         );
       }
 
-      if (onAutoAssign) {
+      /*
+       * ============================================================
+       * ASSIGN PICKED ASSEMBLIES IN ORDER
+       * ============================================================
+       */
+      if (
+        onAutoAssign
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -309,7 +577,14 @@ const SortableHeader = ({
         );
       }
 
-      if (onAddSubPlan) {
+      /*
+       * ============================================================
+       * CREATE SUB PLAN
+       * ============================================================
+       */
+      if (
+        onAddSubPlan
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -331,7 +606,14 @@ const SortableHeader = ({
         );
       }
 
-      if (onSortByDate) {
+      /*
+       * ============================================================
+       * SORT BY DATE
+       * ============================================================
+       */
+      if (
+        onSortByDate
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -353,7 +635,14 @@ const SortableHeader = ({
         );
       }
 
-      if (onCopySubPlan) {
+      /*
+       * ============================================================
+       * COPY SUB PLAN
+       * ============================================================
+       */
+      if (
+        onCopySubPlan
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -375,19 +664,34 @@ const SortableHeader = ({
         );
       }
 
+      /*
+       * Divider before Edit/Delete.
+       */
       const hasEditActions =
-        Boolean(onEdit) ||
-        Boolean(onDelete);
+        Boolean(
+          onEdit,
+        ) ||
+        Boolean(
+          onDelete,
+        );
 
       if (
         hasEditActions
       ) {
         items.push({
-          type: "divider",
+          type:
+            "divider",
         });
       }
 
-      if (onEdit) {
+      /*
+       * ============================================================
+       * EDIT
+       * ============================================================
+       */
+      if (
+        onEdit
+      ) {
         items.push(
           createMenuItem({
             key:
@@ -409,7 +713,14 @@ const SortableHeader = ({
         );
       }
 
-      if (onDelete) {
+      /*
+       * ============================================================
+       * DELETE
+       * ============================================================
+       */
+      if (
+        onDelete
+      ) {
         items.push({
           key:
             "delete",
@@ -431,7 +742,9 @@ const SortableHeader = ({
               onOpenChange={(
                 open,
               ) => {
-                if (!canEdit) {
+                if (
+                  !canEdit
+                ) {
                   return;
                 }
 
@@ -439,7 +752,9 @@ const SortableHeader = ({
                   open,
                 );
 
-                if (open) {
+                if (
+                  open
+                ) {
                   setDropdownOpen(
                     true,
                   );
@@ -451,7 +766,9 @@ const SortableHeader = ({
                 event
                   ?.stopPropagation?.();
 
-                if (!canEdit) {
+                if (
+                  !canEdit
+                ) {
                   return;
                 }
 
@@ -461,7 +778,7 @@ const SortableHeader = ({
 
                 closeDropdown();
 
-                onDelete(
+                onDelete?.(
                   plan,
                 );
               }}
@@ -488,7 +805,9 @@ const SortableHeader = ({
                     !canEdit
                   }
                   onClick={() => {
-                    if (!canEdit) {
+                    if (
+                      !canEdit
+                    ) {
                       return;
                     }
 
@@ -506,7 +825,15 @@ const SortableHeader = ({
       }
 
       /*
-       * Remove accidental consecutive/trailing dividers.
+       * ============================================================
+       * CLEAN DIVIDERS
+       * ============================================================
+       *
+       * Remove:
+       *
+       * - divider đầu tiên
+       * - divider cuối cùng
+       * - divider liền nhau
        */
       return items.filter(
         (
@@ -522,13 +849,18 @@ const SortableHeader = ({
           }
 
           const previous =
-            array[index - 1];
+            array[
+              index - 1
+            ];
 
           const next =
-            array[index + 1];
+            array[
+              index + 1
+            ];
 
           return (
-            index > 0 &&
+            index >
+              0 &&
             index <
               array.length -
                 1 &&
@@ -541,25 +873,53 @@ const SortableHeader = ({
       );
     }, [
       createMenuItem,
+
       isOwner,
+
       isFree,
+
       plan,
+
       onEdit,
+
       onDelete,
+
       onAddSubPlan,
+
       onAssignObject,
+
       onAutoAssign,
+
       onCopySubPlan,
+
       onSortByDate,
+
       onHighlightObject,
+
       onSimulation,
+
+      onAssignDate,
+
+      assignDate,
+
+      dateStep,
+
       deleteConfirmOpen,
+
       closeDropdown,
     ]);
+
+  /* ------------------------------------------------------------------------ */
+  /* DROPDOWN OPEN                                                            */
+  /* ------------------------------------------------------------------------ */
 
   const handleDropdownChange =
     useCallback(
       (open) => {
+        /*
+         * Popconfirm đang mở thì
+         * không đóng Dropdown.
+         */
         if (
           !open &&
           deleteConfirmOpen
@@ -576,6 +936,10 @@ const SortableHeader = ({
       ],
     );
 
+  /* ------------------------------------------------------------------------ */
+  /* EVENTS                                                                   */
+  /* ------------------------------------------------------------------------ */
+
   const handleStopPropagation =
     useCallback(
       (event) => {
@@ -583,6 +947,10 @@ const SortableHeader = ({
       },
       [],
     );
+
+  /* ------------------------------------------------------------------------ */
+  /* STYLE                                                                    */
+  /* ------------------------------------------------------------------------ */
 
   const containerStyle =
     useMemo(
@@ -616,10 +984,16 @@ const SortableHeader = ({
       }),
       [
         transform,
+
         transition,
+
         isDragging,
       ],
     );
+
+  /* ------------------------------------------------------------------------ */
+  /* OBJECT COUNT                                                             */
+  /* ------------------------------------------------------------------------ */
 
   const safeObjectCount =
     Number.isFinite(
@@ -634,6 +1008,10 @@ const SortableHeader = ({
           ),
         )
       : 0;
+
+  /* ------------------------------------------------------------------------ */
+  /* UI                                                                       */
+  /* ------------------------------------------------------------------------ */
 
   return (
     <div
@@ -652,12 +1030,14 @@ const SortableHeader = ({
           alignItems:
             "center",
 
-          gap: 8,
+          gap:
+            8,
 
           minWidth:
             0,
 
-          flex: 1,
+          flex:
+            1,
         }}
       >
         {isOwner && (
@@ -698,12 +1078,14 @@ const SortableHeader = ({
             alignItems:
               "center",
 
-            gap: 8,
+            gap:
+              8,
 
             minWidth:
               0,
 
-            flex: 1,
+            flex:
+              1,
           }}
         >
           <span
@@ -729,7 +1111,11 @@ const SortableHeader = ({
           </span>
 
           <span>
-            [{safeObjectCount}]
+            [
+            {
+              safeObjectCount
+            }
+            ]
           </span>
         </div>
       </div>

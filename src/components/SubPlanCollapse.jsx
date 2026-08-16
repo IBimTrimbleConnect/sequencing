@@ -1,4 +1,9 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Collapse, DatePicker, Empty, Modal, Spin, App } from "antd";
 import dayjs from "dayjs";
@@ -39,41 +44,21 @@ const normalizeRgbColor = (color) => {
   }
 
   if (typeof color === "string") {
-    const normalized = color
-      .trim()
-      .replace(/^#/, "");
+    const normalized = color.trim().replace(/^#/, "");
 
     if (/^[0-9a-fA-F]{3}$/.test(normalized)) {
       return {
-        r: Number.parseInt(
-          normalized[0] + normalized[0],
-          16,
-        ),
-        g: Number.parseInt(
-          normalized[1] + normalized[1],
-          16,
-        ),
-        b: Number.parseInt(
-          normalized[2] + normalized[2],
-          16,
-        ),
+        r: Number.parseInt(normalized[0] + normalized[0], 16),
+        g: Number.parseInt(normalized[1] + normalized[1], 16),
+        b: Number.parseInt(normalized[2] + normalized[2], 16),
       };
     }
 
     if (/^[0-9a-fA-F]{6}$/.test(normalized)) {
       return {
-        r: Number.parseInt(
-          normalized.slice(0, 2),
-          16,
-        ),
-        g: Number.parseInt(
-          normalized.slice(2, 4),
-          16,
-        ),
-        b: Number.parseInt(
-          normalized.slice(4, 6),
-          16,
-        ),
+        r: Number.parseInt(normalized.slice(0, 2), 16),
+        g: Number.parseInt(normalized.slice(2, 4), 16),
+        b: Number.parseInt(normalized.slice(4, 6), 16),
       };
     }
 
@@ -85,11 +70,7 @@ const normalizeRgbColor = (color) => {
     const g = Number(color.g);
     const b = Number(color.b);
 
-    if (
-      Number.isFinite(r) &&
-      Number.isFinite(g) &&
-      Number.isFinite(b)
-    ) {
+    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
       return {
         r: Math.max(0, Math.min(255, r)),
         g: Math.max(0, Math.min(255, g)),
@@ -112,22 +93,13 @@ const getRgbColor = (color) => {
 };
 
 const getExternalId = (object) =>
-  object?.externalId ??
-  object?.external_id ??
-  object?.objectId ??
-  null;
+  object?.externalId ?? object?.external_id ?? object?.objectId ?? null;
 
 const getRuntimeId = (object) =>
-  object?.runtimeId ??
-  object?.objectRuntimeId ??
-  null;
+  object?.runtimeId ?? object?.objectRuntimeId ?? null;
 
 const getObjectKey = (object) =>
-  String(
-    object?.dbId ??
-      getExternalId(object) ??
-      "",
-  );
+  String(object?.dbId ?? getExternalId(object) ?? "");
 
 const SubPlanCollapse = ({
   plan,
@@ -155,25 +127,13 @@ const SubPlanCollapse = ({
   const [selectedSubPlan, setSelectedSubPlan] = React.useState(null);
   const [activeKeys, setActiveKeys] = React.useState([]);
 
-  const [
-    assignDateModalOpen,
-    setAssignDateModalOpen,
-  ] = React.useState(false);
+  const [assignDateModalOpen, setAssignDateModalOpen] = React.useState(false);
 
-  const [
-    assignDate,
-    setAssignDate,
-  ] = React.useState(dayjs());
+  const [assignDate, setAssignDate] = React.useState(dayjs());
 
-  const [
-    pendingAssignMode,
-    setPendingAssignMode,
-  ] = React.useState(null);
+  const [pendingAssignMode, setPendingAssignMode] = React.useState(null);
 
-  const [
-    pendingAssignSubPlan,
-    setPendingAssignSubPlan,
-  ] = React.useState(null);
+  const [pendingAssignSubPlan, setPendingAssignSubPlan] = React.useState(null);
 
   const messageListenerRef = useRef(null);
   const keyListenerRef = useRef(null);
@@ -283,179 +243,106 @@ const SubPlanCollapse = ({
     }
 
     try {
-      const tcapi =
-        await WorkspaceAPI.connect(
-          window.parent,
-        );
+      const tcapi = await WorkspaceAPI.connect(window.parent);
 
-      const selections =
-        await tcapi.viewer.getSelection();
+      const selections = await tcapi.viewer.getSelection();
 
       if (!selections?.length) {
-        message.info(
-          "Please select at least one object.",
-        );
+        message.info("Please select at least one object.");
 
         return;
       }
 
-      tcapi.viewer.activateTool(
-        "pointMarkup",
-      );
+      tcapi.viewer.activateTool("pointMarkup");
 
       const onMessage = async (event) => {
-        if (
-          event.data.event !==
-          "viewer.onMarkupChanged"
-        ) {
+        if (event.data.event !== "viewer.onMarkupChanged") {
           return;
         }
 
-        window.removeEventListener(
-          "message",
-          onMessage,
-        );
+        window.removeEventListener("message", onMessage);
 
         try {
-          const startPoint =
-            event.data?.data?.data
-              ?.markup?.start;
+          const startPoint = event.data?.data?.data?.markup?.start;
 
           if (!startPoint) {
             return;
           }
 
           const refPoint = [
-            Number(
-              startPoint.positionX,
-            ),
-            Number(
-              startPoint.positionY,
-            ),
-            Number(
-              startPoint.positionZ,
-            ),
+            Number(startPoint.positionX),
+            Number(startPoint.positionY),
+            Number(startPoint.positionZ),
           ];
 
-          const existingExternalIds =
-            new Set();
+          const existingExternalIds = new Set();
 
-          sequenceObjects.forEach(
-            (group) => {
-              (
-                group?.objects || []
-              ).forEach((object) => {
-                const externalId =
-                  getExternalId(
-                    object,
-                  );
+          sequenceObjects.forEach((group) => {
+            (group?.objects || []).forEach((object) => {
+              const externalId = getExternalId(object);
 
-                if (
-                  externalId != null
-                ) {
-                  existingExternalIds.add(
-                    String(
-                      externalId,
-                    ),
-                  );
-                }
-              });
-            },
-          );
+              if (externalId != null) {
+                existingExternalIds.add(String(externalId));
+              }
+            });
+          });
 
-          const newExternalIds =
-            new Set();
+          const newExternalIds = new Set();
 
           const newObjects = [];
 
           let duplicateCount = 0;
 
-          await tcapi.viewer.activateTool(
-            "selection",
-          );
+          await tcapi.viewer.activateTool("selection");
 
-          for (
-            const selection of
-            selections
-          ) {
-            const runtimeIds =
-              selection.objectRuntimeIds ||
-              [];
+          for (const selection of selections) {
+            const runtimeIds = selection.objectRuntimeIds || [];
 
             if (!runtimeIds.length) {
               continue;
             }
 
-            const [
-              objectIds,
-              boundingBoxes,
-              propertyItems,
-            ] = await Promise.all([
-              tcapi.viewer.convertToObjectIds(
-                selection.modelId,
-                runtimeIds,
-              ),
+            const [objectIds, boundingBoxes, propertyItems] = await Promise.all(
+              [
+                tcapi.viewer.convertToObjectIds(selection.modelId, runtimeIds),
 
-              tcapi.viewer.getObjectBoundingBoxes(
-                selection.modelId,
-                runtimeIds,
-              ),
+                tcapi.viewer.getObjectBoundingBoxes(
+                  selection.modelId,
+                  runtimeIds,
+                ),
 
-              tcapi.viewer.getObjectProperties(
-                selection.modelId,
-                runtimeIds,
-              ),
-            ]);
+                tcapi.viewer.getObjectProperties(selection.modelId, runtimeIds),
+              ],
+            );
 
-            for (
-              let index = 0;
-              index < runtimeIds.length;
-              index += 1
-            ) {
-              const runtimeId =
-                runtimeIds[index];
+            for (let index = 0; index < runtimeIds.length; index += 1) {
+              const runtimeId = runtimeIds[index];
 
-              const externalId =
-                objectIds?.[index];
+              const externalId = objectIds?.[index];
 
-              if (
-                externalId == null
-              ) {
+              if (externalId == null) {
                 continue;
               }
 
-              const externalKey =
-                String(externalId);
+              const externalKey = String(externalId);
 
               if (
-                existingExternalIds.has(
-                  externalKey,
-                ) ||
-                newExternalIds.has(
-                  externalKey,
-                )
+                existingExternalIds.has(externalKey) ||
+                newExternalIds.has(externalKey)
               ) {
                 duplicateCount += 1;
                 continue;
               }
 
-              newExternalIds.add(
-                externalKey,
-              );
+              newExternalIds.add(externalKey);
 
-              const box =
-                boundingBoxes?.[index];
+              const box = boundingBoxes?.[index];
 
-              const propertyItem =
-                propertyItems?.[index];
+              const propertyItem = propertyItems?.[index];
 
-              const properties =
-                propertyItem?.properties ||
-                [];
+              const properties = propertyItem?.properties || [];
 
-              let asmName =
-                propertyItem?.product
-                  ?.name || "";
+              let asmName = propertyItem?.product?.name || "";
 
               let asmPos = "";
               let positionCode = "";
@@ -466,43 +353,21 @@ const SubPlanCollapse = ({
               let cogY = null;
               let cogZ = null;
 
-              for (
-                const property of
-                properties
-              ) {
-                for (
-                  const asmProperty of
-                  property.properties ||
-                  []
-                ) {
-                  const name =
-                    String(
-                      asmProperty.name ||
-                        "",
-                    ).trim();
+              for (const property of properties) {
+                for (const asmProperty of property.properties || []) {
+                  const name = String(asmProperty.name || "").trim();
 
-                  const upperName =
-                    name.toUpperCase();
+                  const upperName = name.toUpperCase();
 
-                  const value =
-                    asmProperty.value;
+                  const value = asmProperty.value;
 
                   if (
                     !asmPos &&
-                    (
-                      name ===
-                        "Assembly/Cast unit Mark" ||
-                      upperName ===
-                        "ASSEMBLY_POS"
-                    )
+                    (name === "Assembly/Cast unit Mark" ||
+                      upperName === "ASSEMBLY_POS")
                   ) {
-                    asmPos = String(
-                      value || "",
-                    )
-                      .replace(
-                        "(?)",
-                        "",
-                      )
+                    asmPos = String(value || "")
+                      .replace("(?)", "")
                       .trim();
 
                     continue;
@@ -510,188 +375,98 @@ const SubPlanCollapse = ({
 
                   if (
                     !positionCode &&
-                    (
-                      name ===
-                        "Assembly/Cast unit position code" ||
-                      upperName ===
-                        "ASSEMBLY_POSITION_CODE"
-                    )
+                    (name === "Assembly/Cast unit position code" ||
+                      upperName === "ASSEMBLY_POSITION_CODE")
                   ) {
-                    positionCode =
-                      String(
-                        value || "",
-                      ).trim();
+                    positionCode = String(value || "").trim();
 
                     continue;
                   }
 
                   if (
                     !weight &&
-                    upperName.includes(
-                      "WEIGHT",
-                    ) &&
+                    upperName.includes("WEIGHT") &&
                     value != null
                   ) {
-                    weight =
-                      Number(value);
+                    weight = Number(value);
 
                     continue;
                   }
 
-                  if (
-                    !asmName &&
-                    upperName.includes(
-                      "NAME",
-                    ) &&
-                    value != null
-                  ) {
-                    asmName =
-                      String(
-                        value,
-                      ).trim();
+                  if (!asmName && upperName.includes("NAME") && value != null) {
+                    asmName = String(value).trim();
 
                     continue;
                   }
 
                   if (
                     !asmLength &&
-                    upperName.includes(
-                      "LENGTH",
-                    ) &&
+                    upperName.includes("LENGTH") &&
                     value != null
                   ) {
-                    asmLength =
-                      Number(
-                        value,
-                      ).toFixed(0);
+                    asmLength = Number(value).toFixed(0);
 
                     continue;
                   }
 
                   if (
                     cogX === null &&
-                    (
-                      upperName.includes(
-                        "GRAVITY X",
-                      ) ||
-                      upperName.includes(
-                        "GRAVITYX",
-                      ) ||
-                      upperName.includes(
-                        "OX",
-                      )
-                    )
+                    (upperName.includes("GRAVITY X") ||
+                      upperName.includes("GRAVITYX") ||
+                      upperName.includes("OX"))
                   ) {
-                    cogX =
-                      Number(
-                        value,
-                      ).toFixed(0);
+                    cogX = Number(value).toFixed(0);
 
                     continue;
                   }
 
                   if (
                     cogY === null &&
-                    (
-                      upperName.includes(
-                        "GRAVITY Y",
-                      ) ||
-                      upperName.includes(
-                        "GRAVITYY",
-                      ) ||
-                      upperName.includes(
-                        "OY",
-                      )
-                    )
+                    (upperName.includes("GRAVITY Y") ||
+                      upperName.includes("GRAVITYY") ||
+                      upperName.includes("OY"))
                   ) {
-                    cogY =
-                      Number(
-                        value,
-                      ).toFixed(0);
+                    cogY = Number(value).toFixed(0);
 
                     continue;
                   }
 
                   if (
                     cogZ === null &&
-                    (
-                      upperName.includes(
-                        "GRAVITY Z",
-                      ) ||
-                      upperName.includes(
-                        "GRAVITYZ",
-                      ) ||
-                      upperName.includes(
-                        "OZ",
-                      )
-                    )
+                    (upperName.includes("GRAVITY Z") ||
+                      upperName.includes("GRAVITYZ") ||
+                      upperName.includes("OZ"))
                   ) {
-                    cogZ =
-                      Number(
-                        value,
-                      ).toFixed(0);
+                    cogZ = Number(value).toFixed(0);
                   }
                 }
               }
 
-              let center = [
-                0,
-                0,
-                0,
-              ];
+              let center = [0, 0, 0];
 
               if (box?.boundingBox) {
                 center = math.divide(
                   math.add(
                     [
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .min.x,
-                      ).toFixed(0),
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .min.y,
-                      ).toFixed(0),
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .min.z,
-                      ).toFixed(0),
+                      Number(1000 * box.boundingBox.min.x).toFixed(0),
+                      Number(1000 * box.boundingBox.min.y).toFixed(0),
+                      Number(1000 * box.boundingBox.min.z).toFixed(0),
                     ],
                     [
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .max.x,
-                      ).toFixed(0),
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .max.y,
-                      ).toFixed(0),
-                      Number(
-                        1000 *
-                          box.boundingBox
-                            .max.z,
-                      ).toFixed(0),
+                      Number(1000 * box.boundingBox.max.x).toFixed(0),
+                      Number(1000 * box.boundingBox.max.y).toFixed(0),
+                      Number(1000 * box.boundingBox.max.z).toFixed(0),
                     ],
                   ),
                   2,
                 );
               }
 
-              const distance =
-                math.distance(
-                  refPoint,
-                  center,
-                );
+              const distance = math.distance(refPoint, center);
 
               newObjects.push({
                 externalId,
-                modelId:
-                  selection.modelId,
+                modelId: selection.modelId,
                 runtimeId,
 
                 /*
@@ -700,63 +475,39 @@ const SubPlanCollapse = ({
                  */
                 id: runtimeId,
 
-                planId:
-                  plan.id,
+                planId: plan.id,
 
-                subPlanId:
-                  subPlan.id,
+                subPlanId: subPlan.id,
 
                 asmPos,
 
-                assignedDate:
-                  selectedDate.format(
-                    "YYYY-MM-DD",
-                  ),
+                assignedDate: selectedDate.format("YYYY-MM-DD"),
 
-                date:
-                  selectedDate.format(
-                    "YYYY-MM-DD",
-                  ),
+                date: selectedDate.format("YYYY-MM-DD"),
 
                 positionCode,
 
                 cog:
-                  cogX !== null &&
-                  cogY !== null &&
-                  cogZ !== null
-                    ? [
-                        cogX,
-                        cogY,
-                        cogZ,
-                      ]
+                  cogX !== null && cogY !== null && cogZ !== null
+                    ? [cogX, cogY, cogZ]
                     : null,
 
                 weight,
-                length:
-                  asmLength,
-                name:
-                  asmName,
+                length: asmLength,
+                name: asmName,
 
-                distance:
-                  math.round(
-                    distance,
-                  ),
+                distance: math.round(distance),
 
                 center,
 
-                objectAvailable:
-                  true,
+                objectAvailable: true,
               });
             }
           }
 
-          await tcapi.markup.removeMarkups(
-            undefined,
-          );
+          await tcapi.markup.removeMarkups(undefined);
 
-          if (
-            duplicateCount > 0
-          ) {
+          if (duplicateCount > 0) {
             message.warning(
               `${duplicateCount} object(s) already exist in the sequence.`,
             );
@@ -767,66 +518,36 @@ const SubPlanCollapse = ({
           }
 
           newObjects.sort(
-            (first, second) =>
-              Number(
-                first.distance,
-              ) -
-              Number(
-                second.distance,
-              ),
+            (first, second) => Number(first.distance) - Number(second.distance),
           );
 
           const existingObjects =
             sequenceObjects.find(
-              (group) =>
-                String(
-                  group?.subPlanId,
-                ) ===
-                String(
-                  subPlan.id,
-                ),
+              (group) => String(group?.subPlanId) === String(subPlan.id),
             )?.objects || [];
 
           dispatch(
             SetObjectsRequest({
               projectId,
-              planId:
-                plan.id,
+              planId: plan.id,
 
-              subPlanId:
-                subPlan.id,
+              subPlanId: subPlan.id,
 
-              objects: [
-                ...existingObjects,
-                ...newObjects,
-              ],
+              objects: [...existingObjects, ...newObjects],
             }),
           );
         } catch (error) {
-          console.error(
-            "Assign object failed:",
-            error,
-          );
+          console.error("Assign object failed:", error);
 
-          message.error(
-            "Assign object failed.",
-          );
+          message.error("Assign object failed.");
         }
       };
 
-      window.addEventListener(
-        "message",
-        onMessage,
-      );
+      window.addEventListener("message", onMessage);
     } catch (error) {
-      console.error(
-        "Start assign object failed:",
-        error,
-      );
+      console.error("Start assign object failed:", error);
 
-      message.error(
-        "Cannot start assigning objects.",
-      );
+      message.error("Cannot start assigning objects.");
     }
   };
 
@@ -850,128 +571,73 @@ const SubPlanCollapse = ({
     }
 
     try {
-      const tcapi =
-        await WorkspaceAPI.connect(
-          window.parent,
-        );
+      const tcapi = await WorkspaceAPI.connect(window.parent);
 
-      const selections =
-        await tcapi.viewer.getSelection();
+      const selections = await tcapi.viewer.getSelection();
 
       if (!selections?.length) {
-        message.info(
-          "Please select at least one object.",
-        );
+        message.info("Please select at least one object.");
 
         return;
       }
 
-      const existingExternalIds =
-        new Set();
+      const existingExternalIds = new Set();
 
-      sequenceObjects.forEach(
-        (group) => {
-          (
-            group?.objects || []
-          ).forEach((object) => {
-            const externalId =
-              getExternalId(
-                object,
-              );
+      sequenceObjects.forEach((group) => {
+        (group?.objects || []).forEach((object) => {
+          const externalId = getExternalId(object);
 
-            if (
-              externalId != null
-            ) {
-              existingExternalIds.add(
-                String(
-                  externalId,
-                ),
-              );
-            }
-          });
-        },
-      );
+          if (externalId != null) {
+            existingExternalIds.add(String(externalId));
+          }
+        });
+      });
 
-      const newExternalIds =
-        new Set();
+      const newExternalIds = new Set();
 
       const newObjects = [];
 
       let duplicateCount = 0;
 
-      for (
-        const selection of
-        selections
-      ) {
-        const runtimeIds =
-          selection.objectRuntimeIds ||
-          [];
+      for (const selection of selections) {
+        const runtimeIds = selection.objectRuntimeIds || [];
 
         if (!runtimeIds.length) {
           continue;
         }
 
-        const [
-          objectIds,
-          propertyItems,
-        ] = await Promise.all([
-          tcapi.viewer.convertToObjectIds(
-            selection.modelId,
-            runtimeIds,
-          ),
+        const [objectIds, propertyItems] = await Promise.all([
+          tcapi.viewer.convertToObjectIds(selection.modelId, runtimeIds),
 
-          tcapi.viewer.getObjectProperties(
-            selection.modelId,
-            runtimeIds,
-          ),
+          tcapi.viewer.getObjectProperties(selection.modelId, runtimeIds),
         ]);
 
-        for (
-          let index = 0;
-          index < runtimeIds.length;
-          index += 1
-        ) {
-          const runtimeId =
-            runtimeIds[index];
+        for (let index = 0; index < runtimeIds.length; index += 1) {
+          const runtimeId = runtimeIds[index];
 
-          const externalId =
-            objectIds?.[index];
+          const externalId = objectIds?.[index];
 
-          if (
-            externalId == null
-          ) {
+          if (externalId == null) {
             continue;
           }
 
-          const externalKey =
-            String(externalId);
+          const externalKey = String(externalId);
 
           if (
-            existingExternalIds.has(
-              externalKey,
-            ) ||
-            newExternalIds.has(
-              externalKey,
-            )
+            existingExternalIds.has(externalKey) ||
+            newExternalIds.has(externalKey)
           ) {
             duplicateCount += 1;
             continue;
           }
 
-          newExternalIds.add(
-            externalKey,
-          );
+          newExternalIds.add(externalKey);
 
-          const propertyItem =
-            propertyItems?.[index];
+          const propertyItem = propertyItems?.[index];
 
-          const properties =
-            propertyItem?.properties ||
-            [];
+          const properties = propertyItem?.properties || [];
 
-          let asmName =
-            propertyItem?.product
-              ?.name || "";
+          let asmName = propertyItem?.product?.name || "";
 
           let asmPos = "";
           let positionCode = "";
@@ -982,43 +648,21 @@ const SubPlanCollapse = ({
           let cogY = null;
           let cogZ = null;
 
-          for (
-            const property of
-            properties
-          ) {
-            for (
-              const asmProperty of
-              property.properties ||
-              []
-            ) {
-              const name =
-                String(
-                  asmProperty.name ||
-                    "",
-                ).trim();
+          for (const property of properties) {
+            for (const asmProperty of property.properties || []) {
+              const name = String(asmProperty.name || "").trim();
 
-              const upperName =
-                name.toUpperCase();
+              const upperName = name.toUpperCase();
 
-              const value =
-                asmProperty.value;
+              const value = asmProperty.value;
 
               if (
                 !asmPos &&
-                (
-                  name ===
-                    "Assembly/Cast unit Mark" ||
-                  upperName ===
-                    "ASSEMBLY_POS"
-                )
+                (name === "Assembly/Cast unit Mark" ||
+                  upperName === "ASSEMBLY_POS")
               ) {
-                asmPos = String(
-                  value || "",
-                )
-                  .replace(
-                    "(?)",
-                    "",
-                  )
+                asmPos = String(value || "")
+                  .replace("(?)", "")
                   .trim();
 
                 continue;
@@ -1026,126 +670,61 @@ const SubPlanCollapse = ({
 
               if (
                 !positionCode &&
-                (
-                  name ===
-                    "Assembly/Cast unit position code" ||
-                  upperName ===
-                    "ASSEMBLY_POSITION_CODE"
-                )
+                (name === "Assembly/Cast unit position code" ||
+                  upperName === "ASSEMBLY_POSITION_CODE")
               ) {
-                positionCode =
-                  String(
-                    value || "",
-                  ).trim();
+                positionCode = String(value || "").trim();
 
                 continue;
               }
 
-              if (
-                !weight &&
-                upperName.includes(
-                  "WEIGHT",
-                ) &&
-                value != null
-              ) {
-                weight =
-                  Number(value);
+              if (!weight && upperName.includes("WEIGHT") && value != null) {
+                weight = Number(value);
 
                 continue;
               }
 
-              if (
-                !asmName &&
-                upperName.includes(
-                  "NAME",
-                ) &&
-                value != null
-              ) {
-                asmName =
-                  String(
-                    value,
-                  ).trim();
+              if (!asmName && upperName.includes("NAME") && value != null) {
+                asmName = String(value).trim();
 
                 continue;
               }
 
-              if (
-                !asmLength &&
-                upperName.includes(
-                  "LENGTH",
-                ) &&
-                value != null
-              ) {
-                asmLength =
-                  Number(
-                    value,
-                  ).toFixed(0);
+              if (!asmLength && upperName.includes("LENGTH") && value != null) {
+                asmLength = Number(value).toFixed(0);
 
                 continue;
               }
 
               if (
                 cogX === null &&
-                (
-                  upperName.includes(
-                    "GRAVITY X",
-                  ) ||
-                  upperName.includes(
-                    "GRAVITYX",
-                  ) ||
-                  upperName.includes(
-                    "OX",
-                  )
-                )
+                (upperName.includes("GRAVITY X") ||
+                  upperName.includes("GRAVITYX") ||
+                  upperName.includes("OX"))
               ) {
-                cogX =
-                  Number(
-                    value,
-                  ).toFixed(0);
+                cogX = Number(value).toFixed(0);
 
                 continue;
               }
 
               if (
                 cogY === null &&
-                (
-                  upperName.includes(
-                    "GRAVITY Y",
-                  ) ||
-                  upperName.includes(
-                    "GRAVITYY",
-                  ) ||
-                  upperName.includes(
-                    "OY",
-                  )
-                )
+                (upperName.includes("GRAVITY Y") ||
+                  upperName.includes("GRAVITYY") ||
+                  upperName.includes("OY"))
               ) {
-                cogY =
-                  Number(
-                    value,
-                  ).toFixed(0);
+                cogY = Number(value).toFixed(0);
 
                 continue;
               }
 
               if (
                 cogZ === null &&
-                (
-                  upperName.includes(
-                    "GRAVITY Z",
-                  ) ||
-                  upperName.includes(
-                    "GRAVITYZ",
-                  ) ||
-                  upperName.includes(
-                    "OZ",
-                  )
-                )
+                (upperName.includes("GRAVITY Z") ||
+                  upperName.includes("GRAVITYZ") ||
+                  upperName.includes("OZ"))
               ) {
-                cogZ =
-                  Number(
-                    value,
-                  ).toFixed(0);
+                cogZ = Number(value).toFixed(0);
               }
             }
           }
@@ -1153,69 +732,44 @@ const SubPlanCollapse = ({
           newObjects.push({
             externalId,
 
-            modelId:
-              selection.modelId,
+            modelId: selection.modelId,
 
             runtimeId,
 
-            id:
-              runtimeId,
+            id: runtimeId,
 
-            planId:
-              plan.id,
+            planId: plan.id,
 
-            subPlanId:
-              subPlan.id,
+            subPlanId: subPlan.id,
 
             asmPos,
 
-            assignedDate:
-              selectedDate.format(
-                "YYYY-MM-DD",
-              ),
+            assignedDate: selectedDate.format("YYYY-MM-DD"),
 
-            date:
-              selectedDate.format(
-                "YYYY-MM-DD",
-              ),
+            date: selectedDate.format("YYYY-MM-DD"),
 
             positionCode,
 
             cog:
-              cogX !== null &&
-              cogY !== null &&
-              cogZ !== null
-                ? [
-                    cogX,
-                    cogY,
-                    cogZ,
-                  ]
+              cogX !== null && cogY !== null && cogZ !== null
+                ? [cogX, cogY, cogZ]
                 : null,
 
             weight,
-            length:
-              asmLength,
+            length: asmLength,
 
-            name:
-              asmName,
+            name: asmName,
 
             distance: 0,
 
-            center: [
-              0,
-              0,
-              0,
-            ],
+            center: [0, 0, 0],
 
-            objectAvailable:
-              true,
+            objectAvailable: true,
           });
         }
       }
 
-      if (
-        duplicateCount > 0
-      ) {
+      if (duplicateCount > 0) {
         message.warning(
           `${duplicateCount} object(s) already exist in the sequence.`,
         );
@@ -1227,140 +781,80 @@ const SubPlanCollapse = ({
 
       const existingObjects =
         sequenceObjects.find(
-          (group) =>
-            String(
-              group?.subPlanId,
-            ) ===
-            String(
-              subPlan.id,
-            ),
+          (group) => String(group?.subPlanId) === String(subPlan.id),
         )?.objects || [];
 
       dispatch(
         SetObjectsRequest({
           projectId,
 
-          planId:
-            plan.id,
+          planId: plan.id,
 
-          subPlanId:
-            subPlan.id,
+          subPlanId: subPlan.id,
 
-          objects: [
-            ...existingObjects,
-            ...newObjects,
-          ],
+          objects: [...existingObjects, ...newObjects],
         }),
       );
     } catch (error) {
-      console.error(
-        "Auto assign failed:",
-        error,
-      );
+      console.error("Auto assign failed:", error);
 
-      message.error(
-        "Auto assign failed.",
-      );
+      message.error("Auto assign failed.");
     }
   };
 
-  const openAssignDateModal = (
-    subPlan,
-    mode,
-  ) => {
+  const openAssignDateModal = (subPlan, mode) => {
     if (!canEdit) {
       return;
     }
 
-    setPendingAssignSubPlan(
-      subPlan,
-    );
+    setPendingAssignSubPlan(subPlan);
 
-    setPendingAssignMode(
-      mode,
-    );
+    setPendingAssignMode(mode);
 
-    setAssignDate(
-      dayjs(),
-    );
+    setAssignDate(dayjs());
 
-    setAssignDateModalOpen(
-      true,
-    );
+    setAssignDateModalOpen(true);
   };
 
-  const closeAssignDateModal =
-    () => {
-      setAssignDateModalOpen(
-        false,
-      );
+  const closeAssignDateModal = () => {
+    setAssignDateModalOpen(false);
 
-      setPendingAssignMode(
-        null,
-      );
+    setPendingAssignMode(null);
 
-      setPendingAssignSubPlan(
-        null,
-      );
+    setPendingAssignSubPlan(null);
 
-      setAssignDate(
-        dayjs(),
-      );
-    };
+    setAssignDate(dayjs());
+  };
 
-  const confirmAssignDate =
-    async () => {
-      if (
-        !pendingAssignSubPlan ||
-        !pendingAssignMode
-      ) {
-        closeAssignDateModal();
-
-        return;
-      }
-
-      if (
-        !assignDate ||
-        !assignDate.isValid()
-      ) {
-        message.warning(
-          "Please select an assigned date.",
-        );
-
-        return;
-      }
-
-      const selectedSubPlan =
-        pendingAssignSubPlan;
-
-      const selectedMode =
-        pendingAssignMode;
-
-      const selectedDate =
-        assignDate.startOf(
-          "day",
-        );
-
+  const confirmAssignDate = async () => {
+    if (!pendingAssignSubPlan || !pendingAssignMode) {
       closeAssignDateModal();
 
-      if (
-        selectedMode ===
-        "auto"
-      ) {
-        await executeAutoAssign(
-          selectedSubPlan,
-          selectedDate,
-        );
+      return;
+    }
 
-        return;
-      }
+    if (!assignDate || !assignDate.isValid()) {
+      message.warning("Please select an assigned date.");
 
-      await executeAssignObject(
-        selectedSubPlan,
-        selectedDate,
-      );
-    };
+      return;
+    }
 
+    const selectedSubPlan = pendingAssignSubPlan;
+
+    const selectedMode = pendingAssignMode;
+
+    const selectedDate = assignDate.startOf("day");
+
+    closeAssignDateModal();
+
+    if (selectedMode === "auto") {
+      await executeAutoAssign(selectedSubPlan, selectedDate);
+
+      return;
+    }
+
+    await executeAssignObject(selectedSubPlan, selectedDate);
+  };
 
   /*
    * SubPlan simulation uses the shared Simulation component.
@@ -1368,9 +862,7 @@ const SubPlanCollapse = ({
    */
   const handleSimulation = (subPlan) => {
     if (isFree) {
-      message.warning(
-        "Simulation is not available with the Free License.",
-      );
+      message.warning("Simulation is not available with the Free License.");
       return;
     }
 
@@ -1384,12 +876,7 @@ const SubPlanCollapse = ({
     });
   };
 
-  const DATE_FORMATS = [
-    "DD-MM-YYYY",
-    "DD/MM/YYYY",
-    "YYYY-MM-DD",
-    "YYYY/MM/DD",
-  ];
+  const DATE_FORMATS = ["DD-MM-YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "YYYY/MM/DD"];
 
   const parseDate = (value) => {
     if (!value) return null;
@@ -1398,11 +885,7 @@ const SubPlanCollapse = ({
       return value.isValid() ? value : null;
     }
 
-    const strictDate = dayjs(
-      value,
-      DATE_FORMATS,
-      true,
-    );
+    const strictDate = dayjs(value, DATE_FORMATS, true);
 
     if (strictDate.isValid()) {
       return strictDate;
@@ -1410,9 +893,7 @@ const SubPlanCollapse = ({
 
     const normalDate = dayjs(value);
 
-    return normalDate.isValid()
-      ? normalDate
-      : null;
+    return normalDate.isValid() ? normalDate : null;
   };
 
   const handleSortByDate = (subPlan) => {
@@ -1495,18 +976,13 @@ const SubPlanCollapse = ({
 
       subPlanId: subPlan.id,
 
-      externalId:
-        getExternalId(
-          object,
-        ),
+      externalId: getExternalId(object),
 
       sortDatetime: createUtcSortDate(baseDate, index),
     }));
 
     const invalidObject = updates.find(
-      (object) =>
-        !object.dbId &&
-        object.externalId == null,
+      (object) => !object.dbId && object.externalId == null,
     );
 
     if (invalidObject) {
@@ -1542,90 +1018,47 @@ const SubPlanCollapse = ({
         return;
       }
 
-      const tcapi =
-        await WorkspaceAPI.connect(
-          window.parent,
-        );
+      const tcapi = await WorkspaceAPI.connect(window.parent);
 
-      const currentGroup =
-        sequenceObjects.find(
-          (group) =>
-            String(
-              group?.subPlanId,
-            ) ===
-            String(
-              subPlan.id,
-            ),
-        );
+      const currentGroup = sequenceObjects.find(
+        (group) => String(group?.subPlanId) === String(subPlan.id),
+      );
 
-      const runtimeGroups =
-        new Map();
+      const runtimeGroups = new Map();
 
-      for (
-        const object of
-        currentGroup?.objects || []
-      ) {
-        const modelId =
-          object?.modelId;
+      for (const object of currentGroup?.objects || []) {
+        const modelId = object?.modelId;
 
-        const runtimeId =
-          getRuntimeId(
-            object,
-          );
+        const runtimeId = getRuntimeId(object);
 
         if (
           modelId == null ||
           runtimeId == null ||
-          object?.objectAvailable ===
-            false
+          object?.objectAvailable === false
         ) {
           continue;
         }
 
-        const modelKey =
-          String(
+        const modelKey = String(modelId);
+
+        if (!runtimeGroups.has(modelKey)) {
+          runtimeGroups.set(modelKey, {
             modelId,
-          );
 
-        if (
-          !runtimeGroups.has(
-            modelKey,
-          )
-        ) {
-          runtimeGroups.set(
-            modelKey,
-            {
-              modelId,
-
-              runtimeIds:
-                new Set(),
-            },
-          );
+            runtimeIds: new Set(),
+          });
         }
 
-        runtimeGroups
-          .get(modelKey)
-          .runtimeIds.add(
-            runtimeId,
-          );
+        runtimeGroups.get(modelKey).runtimeIds.add(runtimeId);
       }
 
-      const modelObjectIds = [
-        ...runtimeGroups.values(),
-      ]
+      const modelObjectIds = [...runtimeGroups.values()]
         .map((group) => ({
-          modelId:
-            group.modelId,
+          modelId: group.modelId,
 
-          objectRuntimeIds: [
-            ...group.runtimeIds,
-          ],
+          objectRuntimeIds: [...group.runtimeIds],
         }))
-        .filter(
-          (group) =>
-            group.objectRuntimeIds
-              .length > 0,
-        );
+        .filter((group) => group.objectRuntimeIds.length > 0);
 
       await tcapi.viewer.setSelection(
         {
@@ -1635,21 +1068,97 @@ const SubPlanCollapse = ({
       );
 
       if (!modelObjectIds.length) {
-        message.info(
-          "No loaded objects are available for highlighting.",
-        );
+        message.info("No loaded objects are available for highlighting.");
       }
     } catch (error) {
-      console.error(
-        "Failed to highlight objects:",
-        error,
-      );
+      console.error("Failed to highlight objects:", error);
 
-      message.error(
-        "Failed to highlight objects.",
-      );
+      message.error("Failed to highlight objects.");
     }
   };
+  const handleAssignSubPlanDate = useCallback(
+    (subPlan, date, dateStep) => {
+      if (!canEdit || !subPlan?.id) {
+        return;
+      }
+
+      const step = Number(dateStep) || 0;
+
+      /*
+       * Không có Date và Step = 0
+       * => không thay đổi.
+       */
+      if (!date && step === 0) {
+        return;
+      }
+
+      const group = sequenceObjects.find(
+        (item) => String(item?.subPlanId) === String(subPlan.id),
+      );
+
+      const currentObjects = Array.isArray(group?.objects) ? group.objects : [];
+
+      if (!currentObjects.length) {
+        message.info("There are no objects in this Sub Plan.");
+
+        return;
+      }
+
+      let dateCount = 0;
+
+      const updatedObjects = currentObjects.map((object) => {
+        let nextDate = null;
+
+        if (date) {
+          nextDate = date.startOf("day").add(dateCount, "day");
+
+          dateCount += step;
+        } else {
+          /*
+           * ==================================================
+           * MODIFY EXISTING DATE
+           * ==================================================
+           */
+          const currentDate = object.assignedDate || object.date;
+
+          if (!currentDate) {
+            return object;
+          }
+
+          const parsedDate = parseDate(currentDate);
+
+          if (!parsedDate || !parsedDate.isValid()) {
+            return object;
+          }
+
+          nextDate = parsedDate.add(step, "day");
+        }
+
+        const formattedDate = nextDate.format("YYYY-MM-DD");
+
+        return {
+          ...object,
+
+          assignedDate: formattedDate,
+
+          date: formattedDate,
+        };
+      });
+
+      dispatch(
+        SetObjectsRequest({
+          projectId,
+
+          planId: plan.id,
+
+          subPlanId: subPlan.id,
+
+          objects: updatedObjects,
+        }),
+      );
+    },
+    [canEdit, sequenceObjects, dispatch, projectId, plan.id, message],
+  );
 
   const getObjectDate = (obj) => {
     return obj.date || obj.assignedDate || "";
@@ -1685,16 +1194,11 @@ const SubPlanCollapse = ({
       (group) => group && String(group.subPlanId) === String(subPlan.id),
     );
 
-    const objectCount =
-      Array.isArray(
-        currentGroup?.objects,
-      )
-        ? currentGroup.objects.filter(
-            (object) =>
-              object?.objectAvailable !==
-              false,
-          ).length
-        : 0;
+    const objectCount = Array.isArray(currentGroup?.objects)
+      ? currentGroup.objects.filter(
+          (object) => object?.objectAvailable !== false,
+        ).length
+      : 0;
 
     return {
       key: String(subPlan.id),
@@ -1713,12 +1217,6 @@ const SubPlanCollapse = ({
             if (!item?.id) {
               return;
             }
-
-            /*
-             * SortableHeader disables this action for
-             * Viewer / Free, but keep a second permission
-             * guard here as well.
-             */
             if (!canEdit) {
               return;
             }
@@ -1731,16 +1229,10 @@ const SubPlanCollapse = ({
             );
           }}
           onAssignObject={() => {
-            openAssignDateModal(
-              subPlan,
-              "manual",
-            );
+            openAssignDateModal(subPlan, "manual");
           }}
           onAutoAssign={() => {
-            openAssignDateModal(
-              subPlan,
-              "auto",
-            );
+            openAssignDateModal(subPlan, "auto");
           }}
           onSimulation={() => {
             handleSimulation(subPlan);
@@ -1751,6 +1243,7 @@ const SubPlanCollapse = ({
           onHighlightObject={() => {
             handleHighlightObject(subPlan);
           }}
+          onAssignDate={canEdit ? handleAssignSubPlanDate : undefined}
         />
       ),
 
@@ -1784,22 +1277,15 @@ const SubPlanCollapse = ({
       {canEdit && (
         <Modal
           title={
-            pendingAssignMode ===
-            "auto"
+            pendingAssignMode === "auto"
               ? "Assign Picked Assemblies"
               : "Assign Multiple Assemblies"
           }
-          open={
-            assignDateModalOpen
-          }
+          open={assignDateModalOpen}
           okText="Continue"
           cancelText="Cancel"
-          onOk={
-            confirmAssignDate
-          }
-          onCancel={
-            closeAssignDateModal
-          }
+          onOk={confirmAssignDate}
+          onCancel={closeAssignDateModal}
           destroyOnHidden
           maskClosable={false}
         >
@@ -1810,9 +1296,7 @@ const SubPlanCollapse = ({
               gap: 8,
             }}
           >
-            <span>
-              Assigned Date
-            </span>
+            <span>Assigned Date</span>
 
             <DatePicker
               value={assignDate}
@@ -1822,9 +1306,7 @@ const SubPlanCollapse = ({
                 width: "100%",
               }}
               onChange={(date) => {
-                setAssignDate(
-                  date,
-                );
+                setAssignDate(date);
               }}
             />
           </div>
