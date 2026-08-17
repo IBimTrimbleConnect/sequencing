@@ -15,6 +15,8 @@ import {
   Input,
   Tooltip,
   App,
+  Select,
+  Modal
 } from "antd";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
@@ -82,6 +84,100 @@ const getObjectKey = (object) =>
   String(object?.dbId ?? getExternalId(object) ?? "");
 
 const getObjectDate = (object) => object?.assignedDate ?? object?.date ?? "";
+
+const DATE_FORMATS = [
+  "YYYY-MM-DD",
+  "DD-MM-YYYY",
+  "DD/MM/YYYY",
+  "YYYY/MM/DD",
+];
+
+const parseDate = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (dayjs.isDayjs(value)) {
+    return value.isValid()
+      ? value
+      : null;
+  }
+
+  for (const format of DATE_FORMATS) {
+    const parsed = dayjs(
+      value,
+      format,
+      true,
+    );
+
+    if (parsed.isValid()) {
+      return parsed;
+    }
+  }
+
+  const fallback = dayjs(value);
+
+  return fallback.isValid()
+    ? fallback
+    : null;
+};
+
+/*
+ * Saturday -> next Monday
+ * Sunday   -> next Monday
+ */
+const shiftWeekendForward = (value) => {
+  const parsed = parseDate(value);
+
+  if (!parsed) {
+    return null;
+  }
+
+  let result = parsed.startOf("day");
+
+  if (result.day() === 6) {
+    result = result.add(2, "day");
+  } else if (result.day() === 0) {
+    result = result.add(1, "day");
+  }
+
+  return result;
+};
+
+/*
+ * Add/subtract working days, skipping Saturday/Sunday.
+ *
+ * Friday + 1 -> Monday
+ * Monday - 1 -> Friday
+ */
+const addWorkingDays = (value, amount) => {
+  let result = shiftWeekendForward(value);
+
+  if (!result) {
+    return null;
+  }
+
+  const days = Number(amount) || 0;
+
+  if (days === 0) {
+    return result;
+  }
+
+  const direction = days > 0 ? 1 : -1;
+  let remaining = Math.abs(days);
+
+  while (remaining > 0) {
+    result = result.add(direction, "day");
+
+    const day = result.day();
+
+    if (day !== 0 && day !== 6) {
+      remaining -= 1;
+    }
+  }
+
+  return result;
+};
 
 const isSameObject = (first, second) => {
   if (!first || !second) {
@@ -175,6 +271,8 @@ const SortableSubItem = React.memo(
     onChangeCamera,
     onDeleteCamera,
     onZoomIn,
+
+    onOpenMoveModal,
 
     projectFormatting,
     isOwner = false,
@@ -432,7 +530,29 @@ const SortableSubItem = React.memo(
             onDeleteCamera(item);
           },
         },
+      );
 
+      /*
+       * Move the clicked object, or all currently selected objects when
+       * the clicked object belongs to the selection, to another SubPlan.
+       *
+       * Only SubPlans in the same Plan are offered.
+       */
+      items.push(
+        {
+          type: "divider",
+        },
+        {
+          key: "moveToSubPlan",
+          label: "Move to Sub Plan",
+          onClick: ({ domEvent }) => {
+            domEvent.stopPropagation();
+            onOpenMoveModal?.(item);
+          },
+        },
+      );
+
+      items.push(
         {
           type: "divider",
         },
@@ -462,6 +582,7 @@ const SortableSubItem = React.memo(
       onDeleteCamera,
       onDeleteMulti,
       onZoomIn,
+      onOpenMoveModal,
     ]);
 
     const objectDate = getObjectDate(item);
@@ -621,6 +742,14 @@ const SequenceObjectCollapse = ({
     (state) => state.sequence.sequenceObjects || [],
   );
 
+  const subPlans = useSelector(
+    (state) => state.sequence.subPlans || [],
+  );
+
+  const plans = useSelector(
+    (state) => state.sequence.plans || [],
+  );
+
   const projectId = useSelector((state) => state.sequence.projectId || "");
 
   const loading = useSelector((state) => state.sequence.pending);
@@ -628,6 +757,10 @@ const SequenceObjectCollapse = ({
   const [selectedIds, setSelectedIds] = useState([]);
 
   const [lastSelected, setLastSelected] = useState(null);
+
+  const [moveModalOpen, setMoveModalOpen] = useState(false);
+  const [moveTriggerItem, setMoveTriggerItem] = useState(null);
+  const [moveTargetSubPlanId, setMoveTargetSubPlanId] = useState(null);
 
   const [focusedIndex, setFocusedIndex] = useState(0);
 
@@ -694,6 +827,100 @@ const SequenceObjectCollapse = ({
   }, [reduxObjects]);
 
   const currentObjects = localObjects;
+
+  /*
+   * Allow moving Sequence Objects to ANY other SubPlan,
+   * including SubPlans that belong to another Plan.
+   *
+   * Sort by Plan first, then SubPlan name.
+   */
+  const moveTargetSubPlans = useMemo(
+    () =>
+      subPlans
+        .filter(
+          (item) =>
+            String(item?.id) !==
+            String(subPlan?.id),
+        )
+        .sort((first, second) => {
+          const firstPlan = String(
+            first?.planName ??
+              first?.plan?.name ??
+              first?.planId ??
+              "",
+          );
+
+          const secondPlan = String(
+            second?.planName ??
+              second?.plan?.name ??
+              second?.planId ??
+              "",
+          );
+
+          const planCompare =
+            firstPlan.localeCompare(
+              secondPlan,
+              undefined,
+              {
+                numeric: true,
+                sensitivity: "base",
+              },
+            );
+
+          if (planCompare !== 0) {
+            return planCompare;
+          }
+
+          return String(
+            first?.name || "",
+          ).localeCompare(
+            String(second?.name || ""),
+            undefined,
+            {
+              numeric: true,
+              sensitivity: "base",
+            },
+          );
+        }),
+    [
+      subPlans,
+      subPlan?.id,
+    ],
+  );
+
+  const moveSubPlanOptions = useMemo(() => {
+    const groups = new Map();
+
+    moveTargetSubPlans.forEach((targetSubPlan) => {
+      const targetPlan = plans.find(
+        (plan) =>
+          String(plan?.id) === String(targetSubPlan?.planId),
+      );
+
+      const planName =
+        targetPlan?.name ||
+        targetSubPlan?.planName ||
+        "Unnamed Plan";
+
+      const planKey = String(
+        targetSubPlan?.planId || planName,
+      );
+
+      if (!groups.has(planKey)) {
+        groups.set(planKey, {
+          label: planName,
+          options: [],
+        });
+      }
+
+      groups.get(planKey).options.push({
+        label: targetSubPlan?.name || "Unnamed Sub Plan",
+        value: String(targetSubPlan.id),
+      });
+    });
+
+    return Array.from(groups.values());
+  }, [moveTargetSubPlans, plans]);
 
   const loadedModelIdSet = useMemo(
     () =>
@@ -1225,7 +1452,13 @@ const SequenceObjectCollapse = ({
       }
 
       const step = Number(dateStep) || 0;
-      if (!date && step <= 0) {
+
+      /*
+       * Date empty + Step 0 => nothing to do.
+       *
+       * Negative Step is allowed for Modify Date.
+       */
+      if (!date && step === 0) {
         return;
       }
 
@@ -1249,7 +1482,16 @@ const SequenceObjectCollapse = ({
         let nextDate = null;
 
         if (date) {
-          nextDate = date.add(dateCount, "day");
+          /*
+           * Assign using working days only.
+           *
+           * If the selected date falls on Saturday/Sunday,
+           * shift the first assigned date to the next Monday.
+           */
+          nextDate = addWorkingDays(
+            date,
+            dateCount,
+          );
 
           dateCount += step;
         } else {
@@ -1259,13 +1501,21 @@ const SequenceObjectCollapse = ({
             return object;
           }
 
-          const next = dayjs(currentAssignedDate);
+          const currentDate = parseDate(
+            currentAssignedDate,
+          );
 
-          if (!next.isValid()) {
+          if (!currentDate) {
             return object;
           }
 
-          nextDate = next.add(step, "day");
+          /*
+           * Modify Assigned Date using working days only.
+           */
+          nextDate = addWorkingDays(
+            currentDate,
+            step,
+          );
         }
 
         return {
@@ -1279,6 +1529,127 @@ const SequenceObjectCollapse = ({
     },
     [currentObjects, isOwner, selectedIds, updateObjects],
   );
+
+  const handleOpenMoveModal = useCallback(
+    (triggerItem) => {
+      if (!isOwner || !triggerItem) {
+        return;
+      }
+
+      setMoveTriggerItem(triggerItem);
+      setMoveTargetSubPlanId(null);
+      setMoveModalOpen(true);
+    },
+    [isOwner],
+  );
+
+  const handleCloseMoveModal = useCallback(() => {
+    setMoveModalOpen(false);
+    setMoveTriggerItem(null);
+    setMoveTargetSubPlanId(null);
+  }, []);
+
+  const handleConfirmMoveToSubPlan = useCallback(() => {
+    if (!isOwner || !moveTriggerItem || !moveTargetSubPlanId) {
+      return;
+    }
+
+    const targetSubPlan = subPlans.find(
+      (item) =>
+        String(item?.id) === String(moveTargetSubPlanId),
+    );
+
+    if (!targetSubPlan?.id) {
+      return;
+    }
+
+    const triggerKey = getObjectKey(moveTriggerItem);
+    const selectedKeySet = new Set(
+      selectedIds.map((item) => getObjectKey(item)),
+    );
+
+    const keysToMove = selectedKeySet.has(triggerKey)
+      ? selectedKeySet
+      : new Set([triggerKey]);
+
+    const movingObjects = currentObjects.filter(
+      (object) => keysToMove.has(getObjectKey(object)),
+    );
+
+    if (!movingObjects.length) {
+      handleCloseMoveModal();
+      return;
+    }
+
+    const remainingObjects = currentObjects.filter(
+      (object) => !keysToMove.has(getObjectKey(object)),
+    );
+
+    const targetGroup = sequenceObjects.find(
+      (group) =>
+        String(group?.subPlanId) === String(targetSubPlan.id),
+    );
+
+    const targetObjects = Array.isArray(targetGroup?.objects)
+      ? targetGroup.objects
+      : [];
+
+    const targetKeys = new Set(
+      targetObjects.map((object) => getObjectKey(object)),
+    );
+
+    const movedObjects = movingObjects
+      .filter((object) => !targetKeys.has(getObjectKey(object)))
+      .map((object) => ({
+        ...object,
+        planId: targetSubPlan.planId,
+        subPlanId: targetSubPlan.id,
+      }));
+
+    setLocalObjects(remainingObjects);
+
+    dispatch(
+      SetObjectsRequest({
+        projectId,
+        planId: subPlan.planId,
+        subPlanId: subPlan.id,
+        objects: remainingObjects,
+      }),
+    );
+
+    dispatch(
+      SetObjectsRequest({
+        projectId,
+        planId: targetSubPlan.planId,
+        subPlanId: targetSubPlan.id,
+        objects: [...targetObjects, ...movedObjects],
+      }),
+    );
+
+    setSelectedIds([]);
+    setLastSelected(null);
+    setFocusedIndex(
+      remainingObjects.length
+        ? Math.min(focusedIndex, remainingObjects.length - 1)
+        : -1,
+    );
+
+    handleCloseMoveModal();
+  }, [
+    currentObjects,
+    dispatch,
+    focusedIndex,
+    handleCloseMoveModal,
+    isOwner,
+    moveTargetSubPlanId,
+    moveTriggerItem,
+    projectId,
+    selectedIds,
+    sequenceObjects,
+    subPlan.id,
+    subPlan.planId,
+    subPlans,
+  ]);
 
   const handleDelete = useCallback(
     (item) => {
@@ -1522,7 +1893,8 @@ const SequenceObjectCollapse = ({
   }
 
   return (
-    <DndContext
+    <>
+      <DndContext
       sensors={isOwner ? sensors : []}
       collisionDetection={closestCenter}
       onDragEnd={isOwner ? onDragEndSubItem : undefined}
@@ -1568,6 +1940,7 @@ const SequenceObjectCollapse = ({
                 onChangeCamera={handleChangeCamera}
                 onDeleteCamera={handleDeleteCamera}
                 onZoomIn={handleZoomToSelected}
+                onOpenMoveModal={handleOpenMoveModal}
                 selectObjectsInViewer={selectObjectsInViewer}
                 setActiveItem={setActiveItem}
                 listRef={listRef}
@@ -1577,7 +1950,46 @@ const SequenceObjectCollapse = ({
           />
         </div>
       </SortableContext>
-    </DndContext>
+      </DndContext>
+
+      <Modal
+        title="Move Sequence Objects"
+        open={moveModalOpen}
+        onCancel={handleCloseMoveModal}
+        onOk={handleConfirmMoveToSubPlan}
+        okText="Move"
+        cancelText="Cancel"
+        okButtonProps={{
+          disabled: !moveTargetSubPlanId,
+        }}
+        destroyOnHidden
+      >
+        <div style={{ marginBottom: 12 }}>
+          {moveTriggerItem &&
+          selectedIds.some(
+            (item) =>
+              getObjectKey(item) === getObjectKey(moveTriggerItem),
+          )
+            ? `${selectedIds.length} selected object(s) will be moved.`
+            : "1 object will be moved."}
+        </div>
+
+        <Select
+          value={moveTargetSubPlanId}
+          onChange={setMoveTargetSubPlanId}
+          options={moveSubPlanOptions}
+          placeholder="Select destination Sub Plan"
+          showSearch
+          allowClear
+          style={{ width: "100%" }}
+          filterOption={(input, option) =>
+            String(option?.label || "")
+              .toLowerCase()
+              .includes(String(input || "").toLowerCase())
+          }
+        />
+      </Modal>
+    </>
   );
 };
 

@@ -101,6 +101,77 @@ const getRuntimeId = (object) =>
 const getObjectKey = (object) =>
   String(object?.dbId ?? getExternalId(object) ?? "");
 
+/*
+ * Shift Saturday/Sunday forward to the next Monday.
+ */
+const shiftWeekendForward = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  let date = dayjs(value).startOf("day");
+
+  if (!date.isValid()) {
+    return null;
+  }
+
+  const day = date.day();
+
+  if (day === 6) {
+    // Saturday -> Monday
+    date = date.add(2, "day");
+  } else if (day === 0) {
+    // Sunday -> Monday
+    date = date.add(1, "day");
+  }
+
+  return date;
+};
+
+/*
+ * Add working days while excluding Saturday and Sunday.
+ *
+ * Examples:
+ * Friday + 1  -> Monday
+ * Friday + 2  -> Tuesday
+ * Monday - 1  -> Friday
+ */
+const addWorkingDays = (value, amount) => {
+  const normalized = shiftWeekendForward(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const days = Number(amount) || 0;
+
+  if (days === 0) {
+    return normalized;
+  }
+
+  const direction = days > 0 ? 1 : -1;
+
+  let remaining = Math.abs(days);
+  let result = normalized;
+
+  while (remaining > 0) {
+    result = result.add(direction, "day");
+
+    const day = result.day();
+
+    if (day !== 0 && day !== 6) {
+      remaining -= 1;
+    }
+  }
+
+  /*
+   * Defensive normalization.
+   * The loop above should already end on a weekday,
+   * but this guarantees no Saturday/Sunday result.
+   */
+  return shiftWeekendForward(result);
+};
+
 const SubPlanCollapse = ({
   plan,
   activeSimulationItem,
@@ -126,6 +197,8 @@ const SubPlanCollapse = ({
   const [isEditFormOpen, setIsEditFormOpen] = React.useState(false);
   const [selectedSubPlan, setSelectedSubPlan] = React.useState(null);
   const [activeKeys, setActiveKeys] = React.useState([]);
+
+  const [selectedSubPlanIds, setSelectedSubPlanIds] = React.useState([]);
 
   const [assignDateModalOpen, setAssignDateModalOpen] = React.useState(false);
 
@@ -157,6 +230,81 @@ const SubPlanCollapse = ({
         return timeA - timeB;
       });
   }, [subPlans, plan.id]);
+
+  const selectedSubPlanIdSet = useMemo(
+    () => new Set(selectedSubPlanIds.map(String)),
+    [selectedSubPlanIds],
+  );
+
+  const handleSelectSubPlan = useCallback(
+    (
+      subPlan,
+      mode = "toggle",
+    ) => {
+      if (!canEdit || !subPlan?.id) {
+        return;
+      }
+
+      /*
+       * Normal click:
+       * clear the whole multi-selection.
+       */
+      if (mode === "reset") {
+        setSelectedSubPlanIds(
+          (previous) =>
+            previous.length
+              ? []
+              : previous,
+        );
+
+        return;
+      }
+
+      /*
+       * Ctrl/Cmd + Click:
+       * toggle this SubPlan.
+       */
+      const subPlanId = String(subPlan.id);
+
+      setSelectedSubPlanIds((previous) => {
+        const currentIds = previous.map(String);
+
+        if (currentIds.includes(subPlanId)) {
+          return currentIds.filter(
+            (id) =>
+              id !== subPlanId,
+          );
+        }
+
+        return [
+          ...currentIds,
+          subPlanId,
+        ];
+      });
+    },
+    [canEdit],
+  );
+
+  useEffect(() => {
+    const availableIds = new Set(
+      currentSubPlans.map((subPlan) => String(subPlan.id)),
+    );
+
+    setSelectedSubPlanIds((previous) => {
+      const next = previous.filter((id) =>
+        availableIds.has(String(id)),
+      );
+
+      const unchanged =
+        next.length === previous.length &&
+        next.every(
+          (id, index) =>
+            String(id) === String(previous[index]),
+        );
+
+      return unchanged ? previous : next;
+    });
+  }, [currentSubPlans]);
 
   useEffect(() => {
     if (!activeSimulationItem?.subPlanId) return;
@@ -1077,87 +1225,151 @@ const SubPlanCollapse = ({
     }
   };
   const handleAssignSubPlanDate = useCallback(
-    (subPlan, date, dateStep) => {
-      if (!canEdit || !subPlan?.id) {
+    (clickedSubPlan, date, dateStep) => {
+      if (!canEdit || !clickedSubPlan?.id) {
         return;
       }
 
       const step = Number(dateStep) || 0;
 
-      /*
-       * Không có Date và Step = 0
-       * => không thay đổi.
-       */
       if (!date && step === 0) {
         return;
       }
 
-      const group = sequenceObjects.find(
-        (item) => String(item?.subPlanId) === String(subPlan.id),
-      );
+      const clickedId = String(clickedSubPlan.id);
 
-      const currentObjects = Array.isArray(group?.objects) ? group.objects : [];
+      const useMultiSelection =
+        selectedSubPlanIdSet.has(clickedId) &&
+        selectedSubPlanIdSet.size > 0;
 
-      if (!currentObjects.length) {
-        message.info("There are no objects in this Sub Plan.");
+      const targetSubPlans = useMultiSelection
+        ? currentSubPlans.filter((subPlan) =>
+            selectedSubPlanIdSet.has(String(subPlan.id)),
+          )
+        : [clickedSubPlan];
 
+      if (!targetSubPlans.length) {
         return;
       }
 
       let dateCount = 0;
+      let updatedCount = 0;
 
-      const updatedObjects = currentObjects.map((object) => {
-        let nextDate = null;
+      targetSubPlans.forEach((targetSubPlan) => {
+        const group = sequenceObjects.find(
+          (item) =>
+            String(item?.subPlanId) ===
+            String(targetSubPlan.id),
+        );
 
-        if (date) {
-          nextDate = date.startOf("day").add(dateCount, "day");
+        const currentObjects = Array.isArray(group?.objects)
+          ? group.objects
+          : [];
 
-          dateCount += step;
-        } else {
-          /*
-           * ==================================================
-           * MODIFY EXISTING DATE
-           * ==================================================
-           */
-          const currentDate = object.assignedDate || object.date;
-
-          if (!currentDate) {
-            return object;
-          }
-
-          const parsedDate = parseDate(currentDate);
-
-          if (!parsedDate || !parsedDate.isValid()) {
-            return object;
-          }
-
-          nextDate = parsedDate.add(step, "day");
+        if (!currentObjects.length) {
+          return;
         }
 
-        const formattedDate = nextDate.format("YYYY-MM-DD");
+        const updatedObjects = currentObjects.map((object) => {
+          let nextDate = null;
 
-        return {
-          ...object,
+          if (date) {
+            /*
+             * Selected Date is first normalized:
+             * Saturday/Sunday -> next Monday.
+             *
+             * Step then advances by WORKING DAYS only.
+             */
+            nextDate = addWorkingDays(
+              date,
+              dateCount,
+            );
 
-          assignedDate: formattedDate,
+            dateCount += step;
+          } else {
+            const currentDate =
+              object.assignedDate ||
+              object.date;
 
-          date: formattedDate,
-        };
+            if (!currentDate) {
+              return object;
+            }
+
+            const parsedDate = parseDate(currentDate);
+
+            if (!parsedDate || !parsedDate.isValid()) {
+              return object;
+            }
+
+            /*
+             * Modify Assigned Date by working days.
+             * Weekend results are skipped automatically.
+             */
+            nextDate = addWorkingDays(
+              parsedDate,
+              step,
+            );
+          }
+
+          if (!nextDate || !nextDate.isValid()) {
+            return object;
+          }
+
+          const formattedDate =
+            nextDate.format("YYYY-MM-DD");
+
+          updatedCount += 1;
+
+          return {
+            ...object,
+            assignedDate: formattedDate,
+            date: formattedDate,
+          };
+        });
+
+        dispatch(
+          SetObjectsRequest({
+            projectId,
+            planId: plan.id,
+            subPlanId: targetSubPlan.id,
+            objects: updatedObjects,
+          }),
+        );
       });
 
-      dispatch(
-        SetObjectsRequest({
-          projectId,
+      if (!updatedCount) {
+        message.info("There are no objects to update.");
+        return;
+      }
 
-          planId: plan.id,
+      const successText =
+        targetSubPlans.length > 1
+          ? `${updatedCount} object(s) in ${targetSubPlans.length} selected Sub Plans updated.`
+          : `${updatedCount} object(s) updated.`;
 
-          subPlanId: subPlan.id,
-
-          objects: updatedObjects,
-        }),
-      );
+      /*
+       * Some Ant Design versions / app contexts do not expose
+       * message.success on the scoped message API.
+       *
+       * Use success when available, otherwise fall back to info
+       * instead of throwing a runtime error after the update succeeds.
+       */
+      if (typeof message?.success === "function") {
+        message.success(successText);
+      } else if (typeof message?.info === "function") {
+        message.info(successText);
+      }
     },
-    [canEdit, sequenceObjects, dispatch, projectId, plan.id, message],
+    [
+      canEdit,
+      currentSubPlans,
+      selectedSubPlanIdSet,
+      sequenceObjects,
+      dispatch,
+      projectId,
+      plan.id,
+      message,
+    ],
   );
 
   const getObjectDate = (obj) => {
@@ -1210,6 +1422,14 @@ const SubPlanCollapse = ({
           isOwner={canEdit}
           isViewer={isViewer}
           isFree={isFree}
+          selected={selectedSubPlanIdSet.has(
+            String(subPlan.id),
+          )}
+          onSelect={
+            canEdit
+              ? handleSelectSubPlan
+              : undefined
+          }
           onEdit={() => {
             handleEdit(subPlan);
           }}

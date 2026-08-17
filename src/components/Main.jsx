@@ -95,6 +95,61 @@ const parseDate = (value) => {
     : null;
 };
 
+/*
+ * Shift weekend dates forward:
+ * Saturday -> Monday
+ * Sunday   -> Monday
+ */
+const shiftWeekendForward = (value) => {
+  const parsed = parseDate(value);
+
+  if (!parsed) {
+    return null;
+  }
+
+  let result = parsed.startOf("day");
+
+  if (result.day() === 6) {
+    result = result.add(2, "day");
+  } else if (result.day() === 0) {
+    result = result.add(1, "day");
+  }
+
+  return result;
+};
+
+/*
+ * Add/subtract working days, excluding Saturday and Sunday.
+ */
+const addWorkingDays = (value, amount) => {
+  let result = shiftWeekendForward(value);
+
+  if (!result) {
+    return null;
+  }
+
+  const days = Number(amount) || 0;
+
+  if (days === 0) {
+    return result;
+  }
+
+  const direction = days > 0 ? 1 : -1;
+  let remaining = Math.abs(days);
+
+  while (remaining > 0) {
+    result = result.add(direction, "day");
+
+    const day = result.day();
+
+    if (day !== 0 && day !== 6) {
+      remaining -= 1;
+    }
+  }
+
+  return result;
+};
+
 /* ========================================================================== */
 /* MAIN                                                                       */
 /* ========================================================================== */
@@ -952,15 +1007,20 @@ const Main = ({
                  * object tiếp theo +2 days.
                  */
                 if (date) {
+                  /*
+                   * Assign by WORKING DAYS.
+                   *
+                   * If the selected date is Saturday/Sunday,
+                   * the first object is shifted to the next Monday.
+                   *
+                   * The global dateCount is still shared across
+                   * every SubPlan in this Plan.
+                   */
                   nextDate =
-                    date
-                      .startOf(
-                        "day",
-                      )
-                      .add(
-                        dateCount,
-                        "day",
-                      );
+                    addWorkingDays(
+                      date,
+                      dateCount,
+                    );
 
                   dateCount +=
                     step;
@@ -1007,10 +1067,14 @@ const Main = ({
                     return object;
                   }
 
+                  /*
+                   * Modify existing Assigned Date using working days.
+                   * Weekend results are skipped automatically.
+                   */
                   nextDate =
-                    parsedDate.add(
+                    addWorkingDays(
+                      parsedDate,
                       step,
-                      "day",
                     );
                 }
 
