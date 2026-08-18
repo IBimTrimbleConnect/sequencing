@@ -1,4 +1,14 @@
-import { Alert, Layout, Result, Spin, Button } from "antd";
+import {
+  Alert,
+  Layout,
+  Result,
+  Spin,
+  Button,
+  message,
+  Modal,
+  Form,
+  Input,
+} from "antd";
 
 import TopMenu from "./components/TopMenu";
 import {
@@ -20,9 +30,15 @@ import { useDispatch, useSelector } from "react-redux";
 
 import Main from "./components/Main";
 import Simulation from "./components/Simulation";
-import { checkTrimbleUser } from "./services/userService";
+import {
+  checkTrimbleUser,
+  registerTrimbleTrial,
+} from "./services/userService";
 
-import { ShoppingCartOutlined } from "@ant-design/icons";
+import {
+  ShoppingCartOutlined,
+  ThunderboltOutlined,
+} from "@ant-design/icons";
 
 const { Content, Footer } = Layout;
 
@@ -137,6 +153,14 @@ export default function App() {
 
   const [loading, setLoading] = useState(true);
 
+  const [registeringTrial, setRegisteringTrial] = useState(false);
+
+  const [trialModalOpen, setTrialModalOpen] = useState(false);
+
+  const [trialProfile, setTrialProfile] = useState(null);
+
+  const [trialForm] = Form.useForm();
+
   const [loadingMessage, setLoadingMessage] = useState(
     "Checking access rights...",
   );
@@ -153,6 +177,17 @@ export default function App() {
   const isViewer = userRole === "viewer";
 
   const isFree = trimbleUser?.isFree === true || userRole === "free";
+
+  /*
+   * A Free user can register a Trial only when this Trimble account
+   * has never consumed a Trial before.
+   *
+   * Expired Trial users are converted to Free at runtime, but
+   * trialCount remains 1, so the button will not appear again.
+   */
+  const canRegisterTrial =
+    isFree &&
+    Number(trimbleUser?.trialCount || 0) === 0;
 
   const isTrial =
     String(trimbleUser?.licenseType || "")
@@ -394,6 +429,258 @@ export default function App() {
     return currentLoadedModels.length;
   }, [dispatch, refreshingModels]);
 
+  const handleOpenTrialModal = useCallback(async () => {
+    if (!canRegisterTrial || registeringTrial) {
+      return;
+    }
+
+    try {
+      const tcapi =
+        tcapiRef.current ||
+        (await WorkspaceAPI.connect(window.parent));
+
+      tcapiRef.current = tcapi;
+
+      const profile =
+        await tcapi.user.getUser();
+
+      const trimbleEmail =
+        String(profile?.email || "")
+          .trim()
+          .toLowerCase();
+
+      if (!trimbleEmail) {
+        throw new Error(
+          "Unable to retrieve your Trimble Connect email.",
+        );
+      }
+
+      const userName = [
+        profile?.firstName,
+        profile?.lastName,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      if (!userName) {
+        throw new Error(
+          "Unable to retrieve your name from Trimble Connect.",
+        );
+      }
+
+      setTrialProfile({
+        trimbleEmail,
+        userName,
+      });
+
+      trialForm.setFieldsValue({
+        companyName: "",
+      });
+
+      setTrialModalOpen(true);
+    } catch (error) {
+      console.error(
+        "Open Trial registration failed:",
+        error,
+      );
+
+      message.error(
+        error?.message ||
+          "Unable to retrieve your Trimble Connect account.",
+      );
+    }
+  }, [
+    canRegisterTrial,
+    registeringTrial,
+    trialForm,
+  ]);
+
+  const handleCloseTrialModal = useCallback(() => {
+    if (registeringTrial) {
+      return;
+    }
+
+    setTrialModalOpen(false);
+
+    trialForm.resetFields();
+
+    setTrialProfile(null);
+  }, [
+    registeringTrial,
+    trialForm,
+  ]);
+
+  const handleRegisterTrial = useCallback(async () => {
+    if (!trialProfile || registeringTrial) {
+      return;
+    }
+
+    try {
+      const values =
+        await trialForm.validateFields();
+
+      const companyName =
+        String(values.companyName || "")
+          .trim();
+
+      if (!companyName) {
+        return;
+      }
+
+      setRegisteringTrial(true);
+
+      const {
+        trimbleEmail,
+        userName,
+      } = trialProfile;
+
+      await registerTrimbleTrial({
+        trimbleEmail,
+        userName,
+        companyName,
+        trialDays: 14,
+      });
+
+      /*
+       * Re-check persisted data so the app uses
+       * the exact role/license returned from trimble_users.
+       */
+      const accessResult =
+        await checkTrimbleUser(trimbleEmail);
+
+      if (
+        !accessResult.allowed ||
+        !accessResult.user
+      ) {
+        throw new Error(
+          accessResult.reason ||
+            "Unable to activate the Trial License.",
+        );
+      }
+
+      const normalizedRole =
+        normalizeRole(
+          accessResult.user.role,
+        );
+
+      const normalizedUser = {
+        ...accessResult.user,
+
+        trimbleEmail,
+
+        role:
+          normalizedRole,
+
+        isOwner:
+          normalizedRole === "owner",
+
+        isViewer:
+          normalizedRole === "viewer",
+
+        isFree:
+          accessResult.user?.isFree === true ||
+          normalizedRole === "free",
+      };
+
+      setTrimbleUser(normalizedUser);
+
+      window.localStorage.setItem(
+        "trimbleEmail",
+        trimbleEmail,
+      );
+
+      window.localStorage.setItem(
+        "trimbleRole",
+        normalizedUser.role,
+      );
+
+      setTrialModalOpen(false);
+
+      trialForm.resetFields();
+
+      setTrialProfile(null);
+
+      /*
+       * Reload sequencing data/permissions under Trial.
+       */
+      if (projectId) {
+        dispatch(
+          GetPlanRequest({
+            projectId,
+            projectName,
+
+            currentUser:
+              normalizedUser,
+
+            userRole:
+              normalizedUser.role,
+
+            isOwner:
+              normalizedUser.isOwner,
+
+            trimbleEmail,
+
+            loadedModelIds,
+          }),
+        );
+      }
+
+      message.success(
+        "Your Trial License has been activated.",
+      );
+    } catch (error) {
+      if (error?.errorFields) {
+        return;
+      }
+
+      console.error(
+        "Register Trial failed:",
+        error,
+      );
+
+      const errorText =
+        String(error?.message || "");
+
+      if (
+        errorText.includes(
+          "TRIAL_ALREADY_USED",
+        )
+      ) {
+        message.error(
+          "This Trimble Connect account has already used a Trial License.",
+        );
+
+        setTrialModalOpen(false);
+      } else if (
+        errorText.includes(
+          "PAID_LICENSE_ALREADY_ACTIVE",
+        )
+      ) {
+        message.info(
+          "This account already has an active paid license.",
+        );
+
+        setTrialModalOpen(false);
+      } else {
+        message.error(
+          errorText ||
+            "Unable to register the Trial License.",
+        );
+      }
+    } finally {
+      setRegisteringTrial(false);
+    }
+  }, [
+    dispatch,
+    loadedModelIds,
+    projectId,
+    projectName,
+    registeringTrial,
+    trialForm,
+    trialProfile,
+  ]);
+
   const handleSimulationRequest = useCallback(
     (value) => {
       if (isFree || !value) {
@@ -557,22 +844,58 @@ export default function App() {
           type="warning"
           showIcon
           banner
-          closable
           message={
-            <span>
-              You are using the <strong>Free License</strong>. Some features are
-              limited.{" "}
-              <a
-                href="https://shop.ibimconsulting.com.au/tools/sequnece-planner"
-                target="_blank"
-                rel="noopener noreferrer"
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                width: "100%",
+                flexWrap: "wrap",
+              }}
+            >
+              <span>
+                You are using the <strong>Free License</strong>. Some features are
+                limited.
+              </span>
+
+              <div
                 style={{
-                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
                 }}
               >
-                Upgrade License
-              </a>
-            </span>
+                <Button
+                  size="small"
+                  icon={<ShoppingCartOutlined />}
+                  onClick={() => {
+                    window.open(
+                      "https://shop.ibimconsulting.com.au/tools/sequnece-planner",
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
+                  }}
+                >
+                  Upgrade
+                </Button>
+
+                {canRegisterTrial && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<ThunderboltOutlined />}
+                    loading={registeringTrial}
+                    disabled={registeringTrial}
+                    onClick={handleOpenTrialModal}
+                  >
+                    Register Trial
+                  </Button>
+                )}
+              </div>
+            </div>
           }
         />
       )}
@@ -622,6 +945,88 @@ export default function App() {
           onSimulationPlanApplied={handleSimulationRequestApplied}
         />
       </Footer>
+
+      <Modal
+        title="Register Trial"
+        open={trialModalOpen}
+        onCancel={handleCloseTrialModal}
+        footer={null}
+        destroyOnHidden
+        closable={!registeringTrial}
+        maskClosable={!registeringTrial}
+        keyboard={!registeringTrial}
+      >
+        <Form
+          form={trialForm}
+          layout="vertical"
+          autoComplete="off"
+          onFinish={handleRegisterTrial}
+        >
+          <Form.Item label="Trimble Email">
+            <Input
+              value={trialProfile?.trimbleEmail || ""}
+              disabled
+            />
+          </Form.Item>
+
+          <Form.Item label="Name">
+            <Input
+              value={trialProfile?.userName || ""}
+              disabled
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Company Name"
+            name="companyName"
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message:
+                  "Please enter your company name.",
+              },
+              {
+                max: 255,
+                message:
+                  "Company Name cannot exceed 255 characters.",
+              },
+            ]}
+          >
+            <Input
+              placeholder="Enter your company name"
+              maxLength={255}
+              allowClear
+              autoFocus
+              disabled={registeringTrial}
+            />
+          </Form.Item>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+            }}
+          >
+            <Button
+              onClick={handleCloseTrialModal}
+              disabled={registeringTrial}
+            >
+              Cancel
+            </Button>
+
+            <Button
+              type="primary"
+              htmlType="submit"
+              icon={<ThunderboltOutlined />}
+              loading={registeringTrial}
+            >
+              Register Trial
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </Layout>
   );
 }
