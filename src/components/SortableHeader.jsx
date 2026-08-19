@@ -985,6 +985,11 @@ const SortableHeader = ({
 
         minWidth:
           0,
+
+        /*
+         * Selection boundary is rendered by the outer
+         * Collapse panel in SubPlanCollapse.
+         */
       }),
       [
         transform,
@@ -1025,6 +1030,45 @@ const SortableHeader = ({
       style={
         containerStyle
       }
+      onClick={(event) => {
+        if (!onSelect) {
+          return;
+        }
+
+        const target =
+          event.target instanceof Element
+            ? event.target
+            : null;
+
+        const interactiveElement =
+          target?.closest(
+            "button, input, .ant-dropdown-trigger, .ant-picker, .ant-input, [role='button']",
+          );
+
+        if (interactiveElement) {
+          return;
+        }
+
+        if (
+          event.ctrlKey ||
+          event.metaKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          onSelect(
+            plan,
+            "toggle",
+          );
+
+          return;
+        }
+
+        onSelect(
+          plan,
+          "reset",
+        );
+      }}
     >
       <div
         style={{
@@ -1091,57 +1135,10 @@ const SortableHeader = ({
             flex:
               1,
 
-            boxShadow:
-              selected
-                ? "inset 0 0 0 2px #1677ff"
-                : "none",
-
-            borderRadius:
-              4,
-
-            padding:
-              "2px 4px",
-
             cursor:
               onSelect
                 ? "pointer"
                 : undefined,
-          }}
-          onClick={(event) => {
-            if (!onSelect) {
-              return;
-            }
-
-            /*
-             * Ctrl/Cmd + Click:
-             * toggle this SubPlan in the multi-selection.
-             */
-            if (
-              event.ctrlKey ||
-              event.metaKey
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-
-              onSelect(
-                plan,
-                "toggle",
-              );
-
-              return;
-            }
-
-            /*
-             * Normal click:
-             * clear all selected SubPlans.
-             *
-             * Do NOT stop propagation so Ant Design Collapse
-             * still expands/collapses normally.
-             */
-            onSelect(
-              plan,
-              "reset",
-            );
           }}
         >
           <span

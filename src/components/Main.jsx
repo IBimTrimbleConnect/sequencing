@@ -1537,6 +1537,12 @@ const Main = ({
                 activePlanKeys
               }
 
+              /*
+               * Only the arrow icon can expand/collapse the Plan.
+               * Clicking the rest of the header does not toggle it.
+               */
+              collapsible="icon"
+
               size="small"
 
               items={

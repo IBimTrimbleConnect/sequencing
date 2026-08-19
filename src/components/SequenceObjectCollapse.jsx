@@ -15,8 +15,8 @@ import {
   Input,
   Tooltip,
   App,
-  Select,
-  Modal
+  Modal,
+  Tree,
 } from "antd";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
@@ -63,15 +63,6 @@ import customParseFormat from "dayjs/plugin/customParseFormat";
 
 dayjs.extend(customParseFormat);
 
-/*
- * Supabase stores only the stable externalId.
- *
- * Runtime values are hydrated in saga:
- * - modelId
- * - runtimeId
- *
- * Viewer operations must always use modelId + runtimeId.
- */
 const getExternalId = (object) =>
   object?.externalId ?? object?.external_id ?? object?.objectId ?? null;
 
@@ -888,39 +879,66 @@ const SequenceObjectCollapse = ({
     ],
   );
 
-  const moveSubPlanOptions = useMemo(() => {
-    const groups = new Map();
+  const moveSubPlanTreeData = useMemo(() => {
+    return plans
+      .map((plan) => {
+        const children = moveTargetSubPlans
+          .filter(
+            (targetSubPlan) =>
+              String(targetSubPlan?.planId) ===
+              String(plan?.id),
+          )
+          .sort((first, second) =>
+            String(first?.name || "").localeCompare(
+              String(second?.name || ""),
+              undefined,
+              {
+                numeric: true,
+                sensitivity: "base",
+              },
+            ),
+          )
+          .map((targetSubPlan) => ({
+            title:
+              targetSubPlan?.name ||
+              "Unnamed Sub Plan",
 
-    moveTargetSubPlans.forEach((targetSubPlan) => {
-      const targetPlan = plans.find(
-        (plan) =>
-          String(plan?.id) === String(targetSubPlan?.planId),
+            key:
+              `subplan-${targetSubPlan.id}`,
+
+            subPlanId:
+              String(targetSubPlan.id),
+
+            isSubPlan:
+              true,
+
+            selectable:
+              true,
+          }));
+
+        return {
+          title:
+            plan?.name ||
+            "Unnamed Plan",
+
+          key:
+            `plan-${plan.id}`,
+
+          selectable:
+            false,
+
+          children,
+        };
+      })
+      .filter(
+        (planNode) =>
+          Array.isArray(planNode.children) &&
+          planNode.children.length > 0,
       );
-
-      const planName =
-        targetPlan?.name ||
-        targetSubPlan?.planName ||
-        "Unnamed Plan";
-
-      const planKey = String(
-        targetSubPlan?.planId || planName,
-      );
-
-      if (!groups.has(planKey)) {
-        groups.set(planKey, {
-          label: planName,
-          options: [],
-        });
-      }
-
-      groups.get(planKey).options.push({
-        label: targetSubPlan?.name || "Unnamed Sub Plan",
-        value: String(targetSubPlan.id),
-      });
-    });
-
-    return Array.from(groups.values());
-  }, [moveTargetSubPlans, plans]);
+  }, [
+    plans,
+    moveTargetSubPlans,
+  ]);
 
   const loadedModelIdSet = useMemo(
     () =>
@@ -1974,20 +1992,84 @@ const SequenceObjectCollapse = ({
             : "1 object will be moved."}
         </div>
 
-        <Select
-          value={moveTargetSubPlanId}
-          onChange={setMoveTargetSubPlanId}
-          options={moveSubPlanOptions}
-          placeholder="Select destination Sub Plan"
-          showSearch
-          allowClear
-          style={{ width: "100%" }}
-          filterOption={(input, option) =>
-            String(option?.label || "")
-              .toLowerCase()
-              .includes(String(input || "").toLowerCase())
-          }
-        />
+        <div
+          style={{
+            border:
+              "1px solid #d9d9d9",
+
+            borderRadius:
+              6,
+
+            maxHeight:
+              320,
+
+            overflowY:
+              "auto",
+
+            padding:
+              "6px 4px",
+
+            background:
+              "#fff",
+          }}
+        >
+          <Tree
+            treeData={
+              moveSubPlanTreeData
+            }
+
+            /*
+             * Plans are collapsed when the Modal opens.
+             * User expands only the Plan they want.
+             */
+            defaultExpandAll={
+              false
+            }
+
+            /*
+             * Clicking a Plan title does not select it.
+             * Only SubPlans are selectable.
+             */
+            selectedKeys={
+              moveTargetSubPlanId
+                ? [
+                    `subplan-${moveTargetSubPlanId}`,
+                  ]
+                : []
+            }
+
+            onSelect={(
+              selectedKeys,
+              info,
+            ) => {
+              const node =
+                info?.node;
+
+              if (
+                !node?.isSubPlan
+              ) {
+                return;
+              }
+
+              setMoveTargetSubPlanId(
+                String(
+                  node.subPlanId,
+                ),
+              );
+            }}
+
+            blockNode
+
+            showLine={
+              false
+            }
+
+            style={{
+              background:
+                "transparent",
+            }}
+          />
+        </div>
       </Modal>
     </>
   );

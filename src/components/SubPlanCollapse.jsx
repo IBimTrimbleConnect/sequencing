@@ -1480,7 +1480,29 @@ const SubPlanCollapse = ({
       style: {
         background: getRgbColor(subPlan.color),
 
-        borderRadius: 0,
+        /*
+         * Multi-selection boundary belongs to the OUTER
+         * Collapse panel so it includes:
+         *
+         * arrow icon + drag handle + name/count + menu.
+         *
+         * When expanded, the boundary also clearly identifies
+         * the selected SubPlan level as a whole.
+         */
+        boxShadow:
+          selectedSubPlanIdSet.has(
+            String(subPlan.id),
+          )
+            ? "inset 0 0 0 2px #1677ff"
+            : "none",
+
+        borderRadius:
+          selectedSubPlanIdSet.has(
+            String(subPlan.id),
+          )
+            ? 4
+            : 0,
+
         marginBottom: 4,
       },
     };
@@ -1558,6 +1580,7 @@ const SubPlanCollapse = ({
             strategy={verticalListSortingStrategy}
           >
             <Collapse
+          collapsible="icon"
               activeKey={activeKeys}
               onChange={(keys) => {
                 const nextKeys = Array.isArray(keys)

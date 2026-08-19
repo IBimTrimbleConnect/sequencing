@@ -42,9 +42,6 @@ import {
 
 const { Content, Footer } = Layout;
 
-const MODEL_CHECK_INTERVAL_MS = 500;
-const MODEL_LOAD_TIMEOUT_MS = 60000;
-
 function getTrimbleApiUrl(locationValue) {
   const location = String(locationValue || "").toUpperCase();
 
@@ -77,49 +74,6 @@ function normalizeRole(role) {
     .toLowerCase();
 }
 
-function sleep(milliseconds) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, milliseconds);
-  });
-}
-
-/**
- * Wait until at least one model has been loaded
- * into the current Trimble Connect viewer.
- */
-async function waitForLoadedModels(
-  tcapi,
-  {
-    timeout = MODEL_LOAD_TIMEOUT_MS,
-
-    interval = MODEL_CHECK_INTERVAL_MS,
-
-    isCancelled = () => false,
-  } = {},
-) {
-  const startedAt = Date.now();
-
-  while (Date.now() - startedAt < timeout) {
-    if (isCancelled()) {
-      return [];
-    }
-
-    try {
-      const loadedModels = await tcapi.viewer.getModels("loaded");
-
-      if (Array.isArray(loadedModels) && loadedModels.length > 0) {
-        return loadedModels;
-      }
-    } catch (error) {
-      console.warn("Unable to check loaded models:", error);
-    }
-
-    await sleep(interval);
-  }
-
-  return [];
-}
-
 export default function App() {
   const dispatch = useDispatch();
 
@@ -142,6 +96,17 @@ export default function App() {
   const [trimbleUser, setTrimbleUser] = useState(null);
 
   const [loadedModels, setLoadedModels] = useState([]);
+
+  /*
+   * Tracks whether GetPlanRequest has already been dispatched
+   * successfully for this App session.
+   *
+   * This allows "Check Again" to:
+   *
+   * - call GetPlanRequest the first time a model becomes available
+   * - call RefreshLoadedModelsRequest on later model refreshes
+   */
+  const [sequencingInitialized, setSequencingInitialized] = useState(false);
 
   /*
    * One-shot command sent from the Plan menu to the existing
@@ -323,53 +288,91 @@ export default function App() {
         setProjectName(currentProjectName);
 
         /*
-         * Do not load sequencing data until a model
-         * is available in the viewer.
+         * Check loaded 3D models ONCE.
+         *
+         * Do not wait for 60 seconds here.
+         * If there is no loaded model, initialization finishes immediately
+         * and the render below shows the "No 3D Model Loaded" warning.
          */
-        setLoadingMessage("Waiting for the model to load...");
+        setLoadingMessage("Checking loaded 3D models...");
 
-        const currentLoadedModels = await waitForLoadedModels(tcapi, {
-          isCancelled: () => cancelled,
-        });
+        let currentLoadedModels = [];
+
+        try {
+          const models =
+            await tcapi.viewer.getModels(
+              "loaded",
+            );
+
+          currentLoadedModels =
+            Array.isArray(models)
+              ? models
+              : [];
+        } catch (modelError) {
+          console.warn(
+            "Unable to check loaded models:",
+            modelError,
+          );
+
+          currentLoadedModels = [];
+        }
 
         if (cancelled) {
           return;
         }
 
         if (!currentLoadedModels.length) {
-          throw new Error(
-            "No model has been loaded. Please load a model in Trimble Connect and reopen the extension.",
-          );
+          setLoadedModels([]);
+          setSequencingInitialized(false);
+          return;
         }
 
         setLoadedModels(currentLoadedModels);
 
         setLoadingMessage("Loading sequencing data...");
 
+        const currentLoadedModelIds =
+          currentLoadedModels
+            .map(
+              (model) =>
+                model?.id ??
+                model?.modelId,
+            )
+            .filter(
+              (modelId) =>
+                modelId != null &&
+                modelId !== "",
+            )
+            .map(String);
+
         /*
-         * Hydration in getPlansSaga now runs only after
-         * at least one model has been loaded.
+         * Initial sequencing hydration.
          */
         dispatch(
           GetPlanRequest({
-            projectId: currentProjectId,
+            projectId:
+              currentProjectId,
 
-            projectName: currentProjectName,
+            projectName:
+              currentProjectName,
 
-            currentUser: normalizedUser,
+            currentUser:
+              normalizedUser,
 
-            userRole: normalizedUser.role,
+            userRole:
+              normalizedUser.role,
 
-            isOwner: normalizedUser.isOwner,
+            isOwner:
+              normalizedUser.isOwner,
 
             trimbleEmail,
 
-            loadedModelIds: currentLoadedModels
-              .map((model) => model?.id ?? model?.modelId)
-              .filter((modelId) => modelId != null && modelId !== "")
-              .map(String),
+            loadedModelIds:
+              currentLoadedModelIds,
           }),
         );
+
+        setSequencingInitialized(true);
       } catch (error) {
         console.error("Initialize application failed:", error);
 
@@ -396,38 +399,123 @@ export default function App() {
     }
 
     const tcapi =
-      tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
+      tcapiRef.current ||
+      (await WorkspaceAPI.connect(window.parent));
 
-    tcapiRef.current = tcapi;
+    tcapiRef.current =
+      tcapi;
 
-    const currentLoadedModels = await tcapi.viewer.getModels("loaded");
+    const currentLoadedModels =
+      await tcapi.viewer.getModels(
+        "loaded",
+      );
 
     if (
-      !Array.isArray(currentLoadedModels) ||
+      !Array.isArray(
+        currentLoadedModels,
+      ) ||
       currentLoadedModels.length === 0
     ) {
-      throw new Error("No model is currently loaded in Trimble Connect.");
+      /*
+       * Keep the App on the warning screen.
+       *
+       * Do not convert this condition into accessError.
+       */
+      setLoadedModels([]);
+
+      return 0;
     }
 
-    const currentLoadedModelIds = currentLoadedModels
-      .map((model) => model?.id ?? model?.modelId)
-      .filter((modelId) => modelId != null && modelId !== "")
-      .map(String);
+    const currentLoadedModelIds =
+      currentLoadedModels
+        .map(
+          (model) =>
+            model?.id ??
+            model?.modelId,
+        )
+        .filter(
+          (modelId) =>
+            modelId != null &&
+            modelId !== "",
+        )
+        .map(String);
 
-    setLoadedModels(currentLoadedModels);
+    setLoadedModels(
+      currentLoadedModels,
+    );
 
     /*
-     * Only hydrate current Redux objects again.
-     * Plans, SubPlans and Supabase rows are not reloaded.
+     * The first model may have been loaded AFTER the
+     * extension was already opened.
+     *
+     * In that case GetPlanRequest has never run, so
+     * perform the full initial hydration now.
+     */
+    if (
+      !sequencingInitialized
+    ) {
+      const trimbleEmail =
+        String(
+          trimbleUser?.trimbleEmail ||
+            trimbleUser?.email ||
+            window.localStorage.getItem(
+              "trimbleEmail",
+            ) ||
+            "",
+        )
+          .trim()
+          .toLowerCase();
+
+      dispatch(
+        GetPlanRequest({
+          projectId,
+
+          projectName,
+
+          currentUser:
+            trimbleUser,
+
+          userRole,
+
+          isOwner,
+
+          trimbleEmail,
+
+          loadedModelIds:
+            currentLoadedModelIds,
+        }),
+      );
+
+      setSequencingInitialized(
+        true,
+      );
+
+      return currentLoadedModels.length;
+    }
+
+    /*
+     * Normal refresh after sequencing data is already loaded.
+     *
+     * Only hydrate object runtime/model data again.
      */
     dispatch(
       RefreshLoadedModelsRequest({
-        loadedModelIds: currentLoadedModelIds,
+        loadedModelIds:
+          currentLoadedModelIds,
       }),
     );
 
     return currentLoadedModels.length;
-  }, [dispatch, refreshingModels]);
+  }, [
+    dispatch,
+    isOwner,
+    projectId,
+    projectName,
+    refreshingModels,
+    sequencingInitialized,
+    trimbleUser,
+    userRole,
+  ]);
 
   const handleOpenTrialModal = useCallback(async () => {
     if (!canRegisterTrial || registeringTrial) {
@@ -604,7 +692,10 @@ export default function App() {
       /*
        * Reload sequencing data/permissions under Trial.
        */
-      if (projectId) {
+      if (
+        projectId &&
+        loadedModelIds.length > 0
+      ) {
         dispatch(
           GetPlanRequest({
             projectId,
@@ -623,6 +714,10 @@ export default function App() {
 
             loadedModelIds,
           }),
+        );
+
+        setSequencingInitialized(
+          true,
         );
       }
 
@@ -781,10 +876,79 @@ export default function App() {
     );
   }
   /*
-   * Additional render protection.
+   * No 3D model is currently loaded.
+   *
+   * This is not a license/access error.
+   * Keep the extension open and guide the user to
+   * load a model, then re-check without reopening.
    */
   if (!modelLoaded) {
-    return null;
+    return (
+      <Layout
+        style={{
+          height: "100vh",
+          background: "#fff",
+        }}
+      >
+        <Result
+          status="warning"
+          title="No Models Loaded"
+          subTitle={
+            <span>
+              Please load at least one model in Trimble Connect
+              before using IBim Sequencing.
+              <br />
+              After the model has finished loading, click{" "}
+              <strong>Check Again</strong>.
+            </span>
+          }
+          extra={
+            <Button
+              type="primary"
+              loading={
+                refreshingModels
+              }
+              onClick={
+                async () => {
+                  try {
+                    const count =
+                      await handleRefreshModels();
+
+                    if (
+                      count > 0
+                    ) {
+                      message.success(
+                        `${count} loaded model${
+                          count === 1
+                            ? ""
+                            : "s"
+                        } detected.`,
+                      );
+                    } else {
+                      message.warning(
+                        "No model is currently loaded. Please load a model in Trimble Connect and try again.",
+                      );
+                    }
+                  } catch (error) {
+                    console.error(
+                      "Check loaded models failed:",
+                      error,
+                    );
+
+                    message.error(
+                      error?.message ||
+                        "Unable to check loaded models.",
+                    );
+                  }
+                }
+              }
+            >
+              Check Again
+            </Button>
+          }
+        />
+      </Layout>
+    );
   }
 
   return (
