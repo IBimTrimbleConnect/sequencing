@@ -8,7 +8,6 @@ import React, {
 import { useDispatch, useSelector } from "react-redux";
 import {
   Empty,
-  List,
   Dropdown,
   Button,
   DatePicker,
@@ -235,6 +234,248 @@ const createSortDatesBetween = ({ previousItem, nextItem, count }) => {
   );
 };
 
+const DEFAULT_COLUMN_WIDTHS = {
+  drag: 28,
+  index: 40,
+  assembly: 70,
+  grid: 60,
+  weight: 70,
+  date: 90,
+  actions: 40,
+};
+
+const MIN_COLUMN_WIDTHS = {
+  drag: 28,
+  index: 40,
+  assembly: 70,
+  grid: 60,
+  weight: 70,
+  date: 90,
+  actions: 40,
+};
+
+const ResizableHeaderCell = ({
+  columnKey,
+  width,
+  minWidth,
+  align = "left",
+  children,
+  onResize,
+}) => {
+  const handleMouseDown = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const startX =
+        event.clientX;
+
+      const startWidth =
+        width;
+
+      const handleMouseMove = (
+        moveEvent,
+      ) => {
+        const delta =
+          moveEvent.clientX -
+          startX;
+
+        const nextWidth =
+          Math.max(
+            minWidth,
+            startWidth +
+              delta,
+          );
+
+        onResize(
+          columnKey,
+          nextWidth,
+        );
+      };
+
+      const handleMouseUp =
+        () => {
+          window.removeEventListener(
+            "mousemove",
+            handleMouseMove,
+          );
+
+          window.removeEventListener(
+            "mouseup",
+            handleMouseUp,
+          );
+
+          document.body.style.cursor =
+            "";
+
+          document.body.style.userSelect =
+            "";
+        };
+
+      document.body.style.cursor =
+        "col-resize";
+
+      document.body.style.userSelect =
+        "none";
+
+      window.addEventListener(
+        "mousemove",
+        handleMouseMove,
+      );
+
+      window.addEventListener(
+        "mouseup",
+        handleMouseUp,
+      );
+    },
+    [
+      columnKey,
+      minWidth,
+      onResize,
+      width,
+    ],
+  );
+
+  return (
+    <th
+      style={{
+        position:
+          "relative",
+
+        width,
+
+        minWidth,
+
+        padding:
+          "5px 8px 5px 6px",
+
+        textAlign:
+          align,
+
+        whiteSpace:
+          "nowrap",
+
+        overflow:
+          "hidden",
+
+        textOverflow:
+          "ellipsis",
+
+        borderBottom:
+          "1px solid #d9d9d9",
+
+        /*
+         * Visible vertical separator between columns.
+         */
+        borderRight:
+          "1px solid #d9d9d9",
+
+        userSelect:
+          "none",
+      }}
+    >
+      {children}
+
+      <span
+        onMouseDown={
+          handleMouseDown
+        }
+        onDoubleClick={(
+          event,
+        ) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          onResize(
+            columnKey,
+            DEFAULT_COLUMN_WIDTHS[
+              columnKey
+            ],
+          );
+        }}
+        onClick={(
+          event,
+        ) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        style={{
+          position:
+            "absolute",
+
+          top:
+            0,
+
+          right:
+            -3,
+
+          width:
+            7,
+
+          height:
+            "100%",
+
+          cursor:
+            "col-resize",
+
+          zIndex:
+            3,
+
+          /*
+           * Keep the resize boundary visible while also
+           * providing a wider mouse hit area.
+           */
+          borderRight:
+            "1px solid transparent",
+        }}
+      />
+    </th>
+  );
+};
+
+const cellStyle = {
+  center: {
+    padding: "4px",
+    textAlign: "center",
+    verticalAlign: "middle",
+    borderBottom: "1px solid #f0f0f0",
+    borderRight: "1px solid #e8e8e8",
+  },
+  index: {
+    padding: "4px 6px",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+    borderBottom: "1px solid #f0f0f0",
+    borderRight: "1px solid #e8e8e8",
+  },
+  text: {
+    padding: "4px 6px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+    borderBottom: "1px solid #f0f0f0",
+    borderRight: "1px solid #e8e8e8",
+  },
+  number: {
+    padding: "4px 6px",
+    textAlign: "right",
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+    borderBottom: "1px solid #f0f0f0",
+    borderRight: "1px solid #e8e8e8",
+  },
+  date: {
+    padding: "4px 6px",
+    textAlign: "center",
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+    borderBottom: "1px solid #f0f0f0",
+    borderRight: "1px solid #e8e8e8",
+  },
+};
+
 const SortableSubItem = React.memo(
   ({
     item,
@@ -288,16 +529,12 @@ const SortableSubItem = React.memo(
 
     const style = {
       transform: CSS.Transform.toString(transform),
-
       transition,
       cursor: "pointer",
-
-      background: isSelected ? "#e6f4ff" : undefined,
-
-      paddingLeft: 10,
-      paddingRight: 2,
-
-      border: isSelected ? "1px solid #91caff" : undefined,
+      background: isSelected ? "#e6f4ff" : "#fff",
+      boxShadow: isSelected
+        ? "inset 0 0 0 1px #91caff"
+        : "none",
     };
 
     const displayWeight = useMemo(() => {
@@ -589,7 +826,7 @@ const SortableSubItem = React.memo(
           items: contextMenuItems,
         }}
       >
-        <List.Item
+        <tr
           ref={setNodeRef}
           data-object-key={sortableId}
           style={style}
@@ -597,124 +834,107 @@ const SortableSubItem = React.memo(
           onClick={handleClick}
           tabIndex={-1}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              width: "100%",
-              gap: 8,
-            }}
-          >
+          <td style={cellStyle.center}>
             {isOwner ? (
               <span
                 {...listeners}
                 style={{
-                  display: "flex",
+                  display: "inline-flex",
                   alignItems: "center",
+                  justifyContent: "center",
                   cursor: "grab",
-                  flexShrink: 0,
                   touchAction: "none",
                 }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                }}
+                onClick={(event) => event.stopPropagation()}
               >
                 {icon}
               </span>
             ) : (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  flexShrink: 0,
-                }}
-              >
-                {icon}
-              </span>
+              <span>{icon}</span>
             )}
+          </td>
 
-            <strong
-              style={{
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              <span
-                style={{
-                  display: "inline-block",
-                  minWidth: 24,
-                  marginRight: 8,
-                }}
-              >
-                {`${displayIndex}:`}
-              </span>
+          <td style={cellStyle.index}>
+            {displayIndex}
+          </td>
 
-              {item.asmPos || getExternalId(item) || getRuntimeId(item)}
-
-              {item.positionCode ? ` [${item.positionCode}]` : ""}
-
-              {displayWeight != null
-                ? ` (${displayWeight} ${displayWeightUnit})`
-                : ""}
-
-              {/*
-               *
-               * {displayLength != null
-               *   ? ` [${displayLength} ${
-               *       displayLengthUnit ===
-               *       "ft-in"
-               *         ? ""
-               *         : displayLengthUnit
-               *     }]`
-               *   : ""}
-               */}
+          <td
+            style={cellStyle.text}
+            title={String(
+              item.asmPos ||
+                getExternalId(item) ||
+                getRuntimeId(item) ||
+                "",
+            )}
+          >
+            <strong>
+              {item.asmPos ||
+                getExternalId(item) ||
+                getRuntimeId(item)}
             </strong>
+          </td>
 
+          <td
+            style={cellStyle.text}
+            title={item.positionCode || ""}
+          >
+            {item.positionCode || ""}
+          </td>
+
+          <td style={cellStyle.number}>
+            {displayWeight != null
+              ? `${displayWeight} ${displayWeightUnit}`
+              : ""}
+          </td>
+
+          <td style={cellStyle.date}>
+            {displayDate}
+          </td>
+
+          <td
+            style={{
+              ...cellStyle.center,
+              borderRight: "none",
+            }}
+          >
             <div
               style={{
-                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 4,
               }}
-            />
+            >
+              {item.camera && (
+                <Tooltip title="Go to saved camera">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<CameraOutlined />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleGoToCamera(item);
+                    }}
+                    style={{
+                      color: "#1677ff",
+                    }}
+                  />
+                </Tooltip>
+              )}
 
-            {displayDate && (
-              <span
-                style={{
-                  opacity: 0.7,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {displayDate}
-              </span>
-            )}
-
-            {item.camera && (
-              <Tooltip title="Go to saved camera">
-                <CameraOutlined
-                  onClick={(event) => {
-                    event.stopPropagation();
-
-                    handleGoToCamera(item);
-                  }}
-                  style={{
-                    color: "#1677ff",
-                    fontSize: 16,
-                    cursor: "pointer",
-                  }}
-                />
-              </Tooltip>
-            )}
-
-            {isOwner && (
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={handleDeleteClick}
-              />
-            )}
-          </div>
-        </List.Item>
+              {isOwner && (
+                <Tooltip title="Delete">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<CloseOutlined />}
+                    onClick={handleDeleteClick}
+                  />
+                </Tooltip>
+              )}
+            </div>
+          </td>
+        </tr>
       </Dropdown>
     );
   },
@@ -759,6 +979,33 @@ const SequenceObjectCollapse = ({
 
   const [projectFormatting, setProjectFormatting] =
     useState(DEFAULT_FORMATTING);
+
+  const [
+    columnWidths,
+    setColumnWidths,
+  ] = useState({
+    ...DEFAULT_COLUMN_WIDTHS,
+  });
+
+  const handleColumnResize =
+    useCallback(
+      (
+        columnKey,
+        nextWidth,
+      ) => {
+        setColumnWidths(
+          (previous) => ({
+            ...previous,
+
+            [columnKey]:
+              Math.round(
+                nextWidth,
+              ),
+          }),
+        );
+      },
+      [],
+    );
 
   const tcapiRef = useRef(null);
   const listRef = useRef(null);
@@ -1929,43 +2176,264 @@ const SequenceObjectCollapse = ({
             outline: "none",
           }}
         >
-          <List
-            loading={loading}
-            dataSource={visibleObjects}
+          <div
             style={{
               marginLeft: 10,
-              minWidth: 100,
               maxHeight: 600,
-              overflowY: "auto",
+              overflow: "auto",
+              border: "1px solid #f0f0f0",
+              borderRadius: 4,
+              background: "#fff",
             }}
-            renderItem={(item) => (
-              <SortableSubItem
-                key={getObjectKey(item)}
-                item={item}
-                isOwner={isOwner}
-                displayIndex={displayIndexMap?.get(getObjectKey(item)) || 1}
-                selectedIds={selectedIds}
-                setSelectedIds={setSelectedIds}
-                lastSelected={lastSelected}
-                setLastSelected={setLastSelected}
-                setFocusedIndex={setFocusedIndex}
-                currentObjects={visibleObjects}
-                icon={<FileOutlined />}
-                onAssignDate={handleAssignDate}
-                onDelete={handleDelete}
-                onDeleteMulti={handleDeleteMulti}
-                onAddCamera={handleAddCamera}
-                onChangeCamera={handleChangeCamera}
-                onDeleteCamera={handleDeleteCamera}
-                onZoomIn={handleZoomToSelected}
-                onOpenMoveModal={handleOpenMoveModal}
-                selectObjectsInViewer={selectObjectsInViewer}
-                setActiveItem={setActiveItem}
-                listRef={listRef}
-                projectFormatting={projectFormatting}
-              />
+          >
+            <table
+              style={{
+                width:
+                  Object.values(
+                    columnWidths,
+                  ).reduce(
+                    (
+                      total,
+                      value,
+                    ) =>
+                      total +
+                      Number(value || 0),
+                    0,
+                  ),
+
+                minWidth:
+                  "100%",
+
+                borderCollapse:
+                  "collapse",
+
+                tableLayout:
+                  "fixed",
+
+                fontSize:
+                  12,
+              }}
+            >
+              <colgroup>
+                <col
+                  style={{
+                    width:
+                      columnWidths.drag,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.index,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.assembly,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.grid,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.weight,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.date,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.actions,
+                  }}
+                />
+              </colgroup>
+
+              <thead>
+                <tr
+                  style={{
+                    position:
+                      "sticky",
+
+                    top:
+                      0,
+
+                    zIndex:
+                      2,
+
+                    background:
+                      "#fafafa",
+                  }}
+                >
+                  <ResizableHeaderCell
+                    columnKey="drag"
+                    width={
+                      columnWidths.drag
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.drag
+                    }
+                    align="center"
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    &nbsp;
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="index"
+                    width={
+                      columnWidths.index
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.index
+                    }
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    No.
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="assembly"
+                    width={
+                      columnWidths.assembly
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.assembly
+                    }
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    Assembly
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="grid"
+                    width={
+                      columnWidths.grid
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.grid
+                    }
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    Grid
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="weight"
+                    width={
+                      columnWidths.weight
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.weight
+                    }
+                    align="right"
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    Weight
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="date"
+                    width={
+                      columnWidths.date
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.date
+                    }
+                    align="center"
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                    Date
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="actions"
+                    width={
+                      columnWidths.actions
+                    }
+                    minWidth={
+                      MIN_COLUMN_WIDTHS.actions
+                    }
+                    align="center"
+                    onResize={
+                      handleColumnResize
+                    }
+                  >
+                  </ResizableHeaderCell>
+                </tr>
+              </thead>
+
+              <tbody>
+                {visibleObjects.map((item) => (
+                  <SortableSubItem
+                    key={getObjectKey(item)}
+                    item={item}
+                    isOwner={isOwner}
+                    displayIndex={displayIndexMap?.get(getObjectKey(item)) || 1}
+                    selectedIds={selectedIds}
+                    setSelectedIds={setSelectedIds}
+                    lastSelected={lastSelected}
+                    setLastSelected={setLastSelected}
+                    setFocusedIndex={setFocusedIndex}
+                    currentObjects={visibleObjects}
+                    icon={<FileOutlined />}
+                    onAssignDate={handleAssignDate}
+                    onDelete={handleDelete}
+                    onDeleteMulti={handleDeleteMulti}
+                    onAddCamera={handleAddCamera}
+                    onChangeCamera={handleChangeCamera}
+                    onDeleteCamera={handleDeleteCamera}
+                    onZoomIn={handleZoomToSelected}
+                    onOpenMoveModal={handleOpenMoveModal}
+                    selectObjectsInViewer={selectObjectsInViewer}
+                    setActiveItem={setActiveItem}
+                    listRef={listRef}
+                    projectFormatting={projectFormatting}
+                  />
+                ))}
+              </tbody>
+            </table>
+
+            {loading && (
+              <div
+                style={{
+                  padding: 8,
+                  textAlign: "center",
+                  color: "#8c8c8c",
+                }}
+              >
+                Loading...
+              </div>
             )}
-          />
+          </div>
         </div>
       </SortableContext>
       </DndContext>
