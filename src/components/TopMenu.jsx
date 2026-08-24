@@ -1,11 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Flex, Form, message, Space, Tooltip } from "antd";
+import {
+  Button,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  message,
+  Modal,
+  Select,
+  Space,
+  Tooltip,
+} from "antd";
 import {
   DownloadOutlined,
   FileSearchOutlined,
   FolderAddOutlined,
   ReloadOutlined,
   VideoCameraOutlined,
+  TableOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useDispatch, useSelector } from "react-redux";
@@ -37,6 +49,9 @@ import {
 } from "../utils/projectFormatting";
 import { buildGroups } from "./buildExcelGroups";
 import { fillGroups, fillHeader } from "./excelTemplate";
+import {
+  useSequenceColumnConfig,
+} from "../context/SequenceColumnConfigContext";
 
 const DEFAULT_FILE_NAME = "Sequencing Report";
 
@@ -99,6 +114,45 @@ const TopMenu = ({
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
   const [exporting, setExporting] = useState(false);
+
+
+  const [
+    columnConfigOpen,
+    setColumnConfigOpen,
+  ] = useState(false);
+
+  const {
+    columnSets,
+    selectedPresetName,
+    loadingColumns,
+    columnsError,
+    setSelectedPresetName,
+    refreshColumns,
+  } =
+    useSequenceColumnConfig();
+
+  const columnSetOptions =
+    React.useMemo(
+      () =>
+        (
+          Array.isArray(
+            columnSets,
+          )
+            ? columnSets
+            : []
+        ).map(
+          (columnSet) => ({
+            label:
+              columnSet.name,
+
+            value:
+              columnSet.name,
+          }),
+        ),
+      [
+        columnSets,
+      ],
+    );
 
   /*
    * Simulation video export is kept here, separate from the Simulation
@@ -804,6 +858,165 @@ const TopMenu = ({
         onConfirm={handleConfirmExport}
       />
 
+      <Modal
+        title="Sequence Object DataTable Preset"
+        open={
+          columnConfigOpen
+        }
+        onCancel={() =>
+          setColumnConfigOpen(
+            false,
+          )
+        }
+        footer={[
+          <Button
+            key="refresh"
+            loading={
+              loadingColumns
+            }
+            onClick={
+              refreshColumns
+            }
+          >
+            Refresh Presets
+          </Button>,
+
+          <Button
+            key="done"
+            type="primary"
+            onClick={() =>
+              setColumnConfigOpen(
+                false,
+              )
+            }
+          >
+            Done
+          </Button>,
+        ]}
+        width={
+          420
+        }
+        destroyOnHidden
+      >
+        <div
+          style={{
+            marginBottom:
+              12,
+
+            color:
+              "#666",
+
+            fontSize:
+              12,
+
+            lineHeight:
+              1.5,
+          }}
+        >
+          Select one saved Trimble Connect DataTable preset.
+          The selected preset is applied to all Sequence Object tables.
+        </div>
+
+        {columnsError && (
+          <div
+            style={{
+              marginBottom:
+                12,
+
+              padding:
+                "8px 10px",
+
+              border:
+                "1px solid #ffccc7",
+
+              borderRadius:
+                6,
+
+              background:
+                "#fff2f0",
+
+              color:
+                "#cf1322",
+
+              fontSize:
+                12,
+            }}
+          >
+            {
+              columnsError
+            }
+          </div>
+        )}
+
+        <div
+          style={{
+            marginBottom:
+              12,
+          }}
+        >
+          <div
+            style={{
+              marginBottom:
+                6,
+
+              fontWeight:
+                600,
+            }}
+          >
+            DataTable Preset
+          </div>
+
+          <Select
+            value={
+              selectedPresetName ||
+              undefined
+            }
+            options={
+              columnSetOptions
+            }
+            placeholder="Select saved DataTable preset"
+            showSearch
+            allowClear
+            optionFilterProp="label"
+            loading={
+              loadingColumns
+            }
+            style={{
+              width:
+                "100%",
+            }}
+            onChange={(
+              value,
+            ) =>
+              setSelectedPresetName(
+                value ||
+                  "",
+              )
+            }
+          />
+        </div>
+
+        <div
+          style={{
+            marginTop:
+              10,
+
+            color:
+              "#8c8c8c",
+
+            fontSize:
+              11,
+
+            lineHeight:
+              1.5,
+          }}
+        >
+          Create or update presets in Trimble Connect DataTable using
+          <strong> Save as config</strong>, then click
+          <strong> Refresh Presets</strong>.
+        </div>
+      </Modal>
+
       <Flex
         vertical
         gap={8}
@@ -911,6 +1124,26 @@ const TopMenu = ({
                   ) : null
                 }
                 onClick={handleExportSimulationMp4}
+              />
+            </Tooltip>
+
+            <Tooltip title="Select Sequence Object DataTable preset">
+              <Button
+                size="large"
+                type="text"
+                icon={
+                  <TableOutlined
+                    style={{
+                      fontSize:
+                        22,
+                    }}
+                  />
+                }
+                onClick={() =>
+                  setColumnConfigOpen(
+                    true,
+                  )
+                }
               />
             </Tooltip>
 

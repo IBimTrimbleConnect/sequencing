@@ -58,6 +58,10 @@ import {
   normalizeProjectFormatting,
 } from "../utils/projectFormatting";
 import dayjs from "dayjs";
+import {
+  getSequenceColumnValue,
+  useSequenceColumnConfig,
+} from "../context/SequenceColumnConfigContext";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 
 dayjs.extend(customParseFormat);
@@ -74,6 +78,894 @@ const getObjectKey = (object) =>
   String(object?.dbId ?? getExternalId(object) ?? "");
 
 const getObjectDate = (object) => object?.assignedDate ?? object?.date ?? "";
+
+/*
+ * Convert Trimble viewer.getObjectProperties() output to a flat
+ * DataTable value dictionary keyed by Column.field.
+ *
+ * Example:
+ *
+ * {
+ *   class: "IFCELEMENTASSEMBLY",
+ *   name: "Column",
+ *   properties: [
+ *     {
+ *       name: "PropertySet",
+ *       properties: [
+ *         {
+ *           name: "WEIGHT",
+ *           value: 121.5
+ *         }
+ *       ]
+ *     }
+ *   ]
+ * }
+ *
+ * =>
+ *
+ * {
+ *   name: "Column",
+ *   entity_class: "IFCELEMENTASSEMBLY",
+ *   "PropertySet+WEIGHT": 121.5
+ * }
+ */
+/*
+ * Header display only.
+ *
+ * Keep column.field unchanged for value lookup, but if the field
+ * contains "+", display only the property name after the last "+".
+ *
+ * Examples:
+ *   PropertySet+AREA        -> AREA
+ *   PropertySet+WEIGHT      -> WEIGHT
+ *   Assembly+ASSEMBLY_POS   -> ASSEMBLY_POS
+ *   entity_class            -> existing label / entity_class
+ */
+const getColumnHeaderLabel = (
+  column,
+) => {
+  const field =
+    String(
+      column?.field ||
+        "",
+    ).trim();
+
+  if (
+    field.includes(
+      "+",
+    )
+  ) {
+    const parts =
+      field.split(
+        "+",
+      );
+
+    const propertyName =
+      String(
+        parts[
+          parts.length - 1
+        ] || "",
+      ).trim();
+
+    if (
+      propertyName
+    ) {
+      return propertyName;
+    }
+  }
+
+  return (
+    column?.label ||
+    field
+  );
+};
+
+const buildDataTableValueMap = (
+  objectProperties,
+) => {
+  const values = {};
+
+  if (!objectProperties) {
+    return values;
+  }
+
+  /*
+   * Built-in DataTable fields.
+   */
+  values.name =
+    objectProperties?.name ??
+    "";
+
+  values.entity_class =
+    objectProperties?.class ??
+    "";
+
+  /*
+   * Property Set fields.
+   *
+   * The DataTable Column.field format observed in Trimble:
+   *
+   * PropertySet+WEIGHT
+   *
+   * maps directly to:
+   *
+   * propertySet.name = "PropertySet"
+   * property.name    = "WEIGHT"
+   */
+  for (
+    const propertySet of
+      objectProperties?.properties ||
+      []
+  ) {
+    const psetName =
+      propertySet?.name;
+
+    if (!psetName) {
+      continue;
+    }
+
+    for (
+      const property of
+        propertySet?.properties ||
+        []
+    ) {
+      const propertyName =
+        property?.name;
+
+      if (!propertyName) {
+        continue;
+      }
+
+      const field =
+        `${psetName}+${propertyName}`;
+
+      values[field] =
+        property?.value ?? "";
+    }
+  }
+
+  return values;
+};
+
+const getExternalPsetPropertyKey = (
+  field,
+) => {
+  const value =
+    String(
+      field || "",
+    ).trim();
+
+  if (!value) {
+    return "";
+  }
+
+  /*
+   * Direct PSet field:
+   *
+   * prop_xxx
+   */
+  if (
+    value
+      .toLowerCase()
+      .startsWith(
+        "prop_",
+      )
+  ) {
+    return value;
+  }
+
+  /*
+   * Trimble DataTable preset may return:
+   *
+   * Assembly+prop_xxx
+   * Rebar+prop_xxx
+   * Cast Unit+prop_xxx
+   * Anything+prop_xxx
+   *
+   * PSet REST API itself only returns the prop_xxx key
+   * inside items[].props.
+   */
+  const parts =
+    value.split(
+      "+",
+    );
+
+  const propPart =
+    parts.find(
+      (part) =>
+        String(
+          part || "",
+        )
+          .trim()
+          .toLowerCase()
+          .startsWith(
+            "prop_",
+          ),
+    );
+
+  return String(
+    propPart || "",
+  ).trim();
+};
+
+const isExternalPsetField = (
+  field,
+) =>
+  Boolean(
+    getExternalPsetPropertyKey(
+      field,
+    ),
+  );
+
+/*
+ * PSet API response:
+ *
+ * {
+ *   items: [
+ *     {
+ *       link: "frn:entity:{guid}",
+ *       props: {
+ *         "prop_xxx": 5000
+ *       }
+ *     }
+ *   ]
+ * }
+ *
+ * Merge props from every returned PSet instance.
+ */
+const buildExternalPsetValueMap = (
+  response,
+  requestedFields = [],
+) => {
+  const values = {};
+
+  const items =
+    Array.isArray(
+      response?.items,
+    )
+      ? response.items
+      : [];
+
+  /*
+   * Example requested field:
+   *
+   * Assembly+prop_44c83...
+   *
+   * PSet API returns:
+   *
+   * props: {
+   *   "prop_44c83...": 5000
+   * }
+   *
+   * Build a reverse lookup:
+   *
+   * prop_44c83...
+   *     -> ["Assembly+prop_44c83..."]
+   */
+  const requestedFieldMap =
+    new Map();
+
+  (
+    Array.isArray(
+      requestedFields,
+    )
+      ? requestedFields
+      : []
+  ).forEach(
+    (requestedField) => {
+      const fullField =
+        String(
+          requestedField || "",
+        ).trim();
+
+      const propKey =
+        getExternalPsetPropertyKey(
+          fullField,
+        );
+
+      if (
+        !fullField ||
+        !propKey
+      ) {
+        return;
+      }
+
+      if (
+        !requestedFieldMap.has(
+          propKey,
+        )
+      ) {
+        requestedFieldMap.set(
+          propKey,
+          [],
+        );
+      }
+
+      requestedFieldMap
+        .get(
+          propKey,
+        )
+        .push(
+          fullField,
+        );
+    },
+  );
+
+  for (
+    const pset of items
+  ) {
+    const props =
+      pset?.props;
+
+    if (
+      !props ||
+      typeof props !==
+        "object" ||
+      Array.isArray(props)
+    ) {
+      continue;
+    }
+
+    Object.entries(
+      props,
+    ).forEach(
+      ([
+        propKey,
+        propValue,
+      ]) => {
+        /*
+         * Always expose the raw PSet property key.
+         */
+        values[
+          propKey
+        ] =
+          propValue;
+
+        /*
+         * Also expose the exact Trimble DataTable Column.field,
+         * because table rendering is based on column.field.
+         */
+        const matchingFields =
+          requestedFieldMap.get(
+            propKey,
+          ) ||
+          [];
+
+        matchingFields.forEach(
+          (fullField) => {
+            values[
+              fullField
+            ] =
+              propValue;
+          },
+        );
+      },
+    );
+  }
+
+  return values;
+};
+
+/*
+ * Small concurrency pool to avoid sending one PSet REST request for
+ * every visible object at exactly the same time.
+ */
+const mapWithConcurrency = async (
+  items,
+  concurrency,
+  worker,
+) => {
+  const queue = [
+    ...items,
+  ];
+
+  const workerCount =
+    Math.max(
+      1,
+      Math.min(
+        Number(
+          concurrency,
+        ) || 1,
+        queue.length ||
+          1,
+      ),
+    );
+
+  const runners =
+    Array.from(
+      {
+        length:
+          workerCount,
+      },
+      async () => {
+        while (
+          queue.length
+        ) {
+          const item =
+            queue.shift();
+
+          await worker(
+            item,
+          );
+        }
+      },
+    );
+
+  await Promise.all(
+    runners,
+  );
+};
+
+const loadExternalPsetValues = async ({
+  tcapi,
+  objects,
+  psetApiUrl,
+  externalPsetFields,
+}) => {
+  const result =
+    new Map();
+
+  if (!tcapi) {
+    console.warn(
+      "PSet skipped: tcapi is not available.",
+    );
+
+    return result;
+  }
+
+  if (!psetApiUrl) {
+    console.warn(
+      "PSet skipped: psetApiUrl is empty.",
+    );
+
+    return result;
+  }
+
+  if (
+    !Array.isArray(
+      objects,
+    ) ||
+    objects.length === 0
+  ) {
+    console.warn(
+      "PSet skipped: no visible objects.",
+    );
+
+    return result;
+  }
+
+  if (
+    !Array.isArray(
+      externalPsetFields,
+    ) ||
+    externalPsetFields.length ===
+      0
+  ) {
+    console.warn(
+      "PSet skipped: selected preset has no prop_xxx fields.",
+    );
+
+    return result;
+  }
+
+  /*
+   * Access token.
+   *
+   * Prefer the token already cached by the App.
+   * Fall back to Workspace API permission.
+   */
+  let token =
+    String(
+      window.localStorage.getItem(
+        "trimbleToken",
+      ) ||
+        "",
+    ).trim();
+
+  if (!token) {
+    const tokenResponse =
+      await tcapi.extension
+        .requestPermission(
+          "accesstoken",
+        );
+
+    token =
+      String(
+        typeof tokenResponse ===
+          "string"
+          ? tokenResponse
+          : tokenResponse
+              ?.accessToken ||
+            tokenResponse
+              ?.token ||
+            tokenResponse
+              ?.value ||
+            "",
+      ).trim();
+
+    if (token) {
+      window.localStorage.setItem(
+        "trimbleToken",
+        token,
+      );
+    }
+  }
+
+  if (!token) {
+    throw new Error(
+      "Unable to obtain the Trimble Connect access token for Property Set values.",
+    );
+  }
+
+  /*
+   * Sequence Object external GUID is already stored as externalId.
+   * getExternalId() also supports external_id/objectId.
+   */
+  const uniqueObjects =
+    Array.from(
+      new Map(
+        objects
+          .map(
+            (object) => {
+              const guid =
+                String(
+                  getExternalId(
+                    object,
+                  ) ||
+                    "",
+                ).trim();
+
+              return [
+                guid,
+                object,
+              ];
+            },
+          )
+          .filter(
+            ([guid]) =>
+              Boolean(
+                guid,
+              ),
+          ),
+      ).values(),
+    );
+
+  if (
+    uniqueObjects.length ===
+    0
+  ) {
+    console.warn(
+      "PSet skipped: no external GUID was found in the visible objects.",
+    );
+
+    return result;
+  }
+
+  await mapWithConcurrency(
+    uniqueObjects,
+    6,
+    async (
+      object,
+    ) => {
+      const guid =
+        String(
+          getExternalId(
+            object,
+          ) ||
+            "",
+        ).trim();
+
+      if (!guid) {
+        return;
+      }
+
+      const entityFrn =
+        encodeURIComponent(
+          `frn:entity:${guid}`,
+        );
+
+      const url =
+        `${psetApiUrl}/psets/${entityFrn}`;
+
+      let response;
+
+      try {
+        response =
+          await fetch(
+            url,
+            {
+              method:
+                "GET",
+
+              headers: {
+                Authorization:
+                  `Bearer ${token}`,
+
+                Accept:
+                  "application/json",
+              },
+            },
+          );
+      } catch (
+        error
+      ) {
+        console.warn(
+          `Unable to load Property Set values for ${guid}:`,
+          error,
+        );
+
+        return;
+      }
+
+      if (
+        response.status ===
+        404
+      ) {
+        result.set(
+          guid,
+          {},
+        );
+
+        return;
+      }
+
+      if (
+        response.status ===
+        401
+      ) {
+        console.warn(
+          `PSet API returned 401 for ${guid}.`,
+        );
+
+        return;
+      }
+
+      if (
+        response.status ===
+        403
+      ) {
+        console.warn(
+          `PSet API returned 403 for ${guid}.`,
+        );
+
+        return;
+      }
+
+      if (!response.ok) {
+        console.warn(
+          `PSet API failed for ${guid}: ${response.status}`,
+        );
+
+        return;
+      }
+
+      const data =
+        await response.json();
+
+      const values =
+        buildExternalPsetValueMap(
+          data,
+          externalPsetFields,
+        );
+
+      result.set(
+        guid,
+        values,
+      );
+    },
+  );
+
+  return result;
+};
+
+/*
+ * Fetch properties in model batches.
+ *
+ * One call is made per model:
+ *
+ * viewer.getObjectProperties(
+ *   modelId,
+ *   runtimeIds
+ * )
+ *
+ * Return:
+ *
+ * Map {
+ *   "modelId:runtimeId" => {
+ *      [Column.field]: value
+ *   }
+ * }
+ */
+const loadDataTableValues = async (
+  tcapi,
+  objects,
+  {
+    psetApiUrl = "",
+    externalPsetFields = [],
+  } = {},
+) => {
+  const result =
+    new Map();
+
+  if (
+    !tcapi ||
+    !Array.isArray(objects) ||
+    !objects.length
+  ) {
+    return result;
+  }
+
+  const modelGroups =
+    new Map();
+
+  for (
+    const object of objects
+  ) {
+    const modelId =
+      getObjectModelId(
+        object,
+      );
+
+    const runtimeId =
+      getRuntimeId(
+        object,
+      );
+
+    if (
+      modelId == null ||
+      runtimeId == null
+    ) {
+      continue;
+    }
+
+    const modelKey =
+      String(modelId);
+
+    if (
+      !modelGroups.has(
+        modelKey,
+      )
+    ) {
+      modelGroups.set(
+        modelKey,
+        {
+          modelId,
+          runtimeIds:
+            [],
+        },
+      );
+    }
+
+    modelGroups
+      .get(modelKey)
+      .runtimeIds.push(
+        runtimeId,
+      );
+  }
+
+  for (
+    const group of
+      modelGroups.values()
+  ) {
+    if (
+      !group.runtimeIds.length
+    ) {
+      continue;
+    }
+
+    const objectProperties =
+      await tcapi.viewer
+        .getObjectProperties(
+          group.modelId,
+          group.runtimeIds,
+        );
+
+    for (
+      const objectProperty of
+        Array.isArray(
+          objectProperties,
+        )
+          ? objectProperties
+          : []
+    ) {
+      /*
+       * Trimble ObjectProperties.id corresponds to
+       * the runtime object ID supplied to the call.
+       */
+      const runtimeId =
+        objectProperty?.id;
+
+      if (
+        runtimeId == null
+      ) {
+        continue;
+      }
+
+      const key =
+        `${group.modelId}:${runtimeId}`;
+
+      result.set(
+        key,
+        buildDataTableValueMap(
+          objectProperty,
+        ),
+      );
+    }
+  }
+
+  /*
+   * Resolve fields whose DataTable Column.field starts with prop_
+   * from Trimble Property Set REST API.
+   */
+  if (
+    externalPsetFields.length &&
+    psetApiUrl
+  ) {
+
+    const externalValuesByGuid =
+      await loadExternalPsetValues({
+        tcapi,
+        objects,
+        psetApiUrl,
+        externalPsetFields,
+      });
+
+    for (
+      const object of objects
+    ) {
+      const modelId =
+        getObjectModelId(
+          object,
+        );
+
+      const runtimeId =
+        getRuntimeId(
+          object,
+        );
+
+      const guid =
+        String(
+          getExternalId(
+            object,
+          ) ||
+            "",
+        );
+
+      if (
+        modelId == null ||
+        runtimeId == null ||
+        !guid
+      ) {
+        continue;
+      }
+
+      const objectKey =
+        `${modelId}:${runtimeId}`;
+
+      const modelValues =
+        result.get(
+          objectKey,
+        ) ||
+        {};
+
+      const externalValues =
+        externalValuesByGuid.get(
+          guid,
+        ) ||
+        {};
+
+      result.set(
+        objectKey,
+        {
+          ...modelValues,
+          ...externalValues,
+        },
+      );
+    }
+  }
+
+  return result;
+};
 
 const DATE_FORMATS = [
   "YYYY-MM-DD",
@@ -234,24 +1126,94 @@ const createSortDatesBetween = ({ previousItem, nextItem, count }) => {
   );
 };
 
+/*
+ * Column definitions come from the App-level Trimble DataTable config.
+ */
+const AUTO_FIT_MIN_WIDTH = 60;
+const AUTO_FIT_MAX_WIDTH = 360;
+const AUTO_FIT_HORIZONTAL_PADDING = 24;
+
+/*
+ * Measure text using the browser canvas so a column can initially
+ * fit its header and visible cell content.
+ */
+const measureTextWidth = (
+  value,
+  font = "12px Arial",
+) => {
+  const text =
+    String(
+      value ?? "",
+    );
+
+  if (
+    typeof document ===
+      "undefined"
+  ) {
+    return (
+      text.length *
+      7
+    );
+  }
+
+  const canvas =
+    measureTextWidth.canvas ||
+    (
+      measureTextWidth.canvas =
+        document.createElement(
+          "canvas",
+        )
+    );
+
+  const context =
+    canvas.getContext(
+      "2d",
+    );
+
+  if (!context) {
+    return (
+      text.length *
+      7
+    );
+  }
+
+  context.font =
+    font;
+
+  return context.measureText(
+    text,
+  ).width;
+};
+
+const clampColumnWidth = (
+  width,
+  minWidth =
+    AUTO_FIT_MIN_WIDTH,
+  maxWidth =
+    AUTO_FIT_MAX_WIDTH,
+) =>
+  Math.min(
+    maxWidth,
+    Math.max(
+      minWidth,
+      Math.ceil(
+        width,
+      ),
+    ),
+  );
+
 const DEFAULT_COLUMN_WIDTHS = {
-  drag: 28,
-  index: 40,
-  assembly: 70,
-  grid: 60,
-  weight: 70,
-  date: 90,
-  actions: 40,
+  drag: 34,
+  index: 54,
+  date: 110,
+  actions: 72,
 };
 
 const MIN_COLUMN_WIDTHS = {
   drag: 28,
-  index: 40,
-  assembly: 70,
-  grid: 60,
-  weight: 70,
+  index: 44,
   date: 90,
-  actions: 40,
+  actions: 56,
 };
 
 const ResizableHeaderCell = ({
@@ -261,6 +1223,7 @@ const ResizableHeaderCell = ({
   align = "left",
   children,
   onResize,
+  onAutoFit,
 }) => {
   const handleMouseDown = useCallback(
     (event) => {
@@ -374,7 +1337,31 @@ const ResizableHeaderCell = ({
           "none",
       }}
     >
-      {children}
+      <span
+        title={
+          typeof children === "string"
+            ? children
+            : undefined
+        }
+        style={{
+          display:
+            "block",
+
+          width:
+            "100%",
+
+          overflow:
+            "hidden",
+
+          textOverflow:
+            "ellipsis",
+
+          whiteSpace:
+            "nowrap",
+        }}
+      >
+        {children}
+      </span>
 
       <span
         onMouseDown={
@@ -386,12 +1373,30 @@ const ResizableHeaderCell = ({
           event.preventDefault();
           event.stopPropagation();
 
-          onResize(
-            columnKey,
+          if (
+            typeof onAutoFit ===
+            "function"
+          ) {
+            onAutoFit(
+              columnKey,
+            );
+
+            return;
+          }
+
+          const defaultWidth =
             DEFAULT_COLUMN_WIDTHS[
               columnKey
-            ],
-          );
+            ];
+
+          if (
+            defaultWidth
+          ) {
+            onResize(
+              columnKey,
+              defaultWidth,
+            );
+          }
         }}
         onClick={(
           event,
@@ -506,6 +1511,7 @@ const SortableSubItem = React.memo(
 
     onOpenMoveModal,
 
+    visibleProperties = [],
     projectFormatting,
     isOwner = false,
   }) => {
@@ -536,21 +1542,6 @@ const SortableSubItem = React.memo(
         ? "inset 0 0 0 1px #91caff"
         : "none",
     };
-
-    const displayWeight = useMemo(() => {
-      const rawWeight = item?.rawWeight ?? item?.weight;
-
-      if (rawWeight == null || !Number.isFinite(Number(rawWeight))) {
-        return null;
-      }
-
-      return convertMassFromKg(rawWeight, projectFormatting);
-    }, [item?.rawWeight, item?.weight, projectFormatting]);
-
-    const displayWeightUnit = useMemo(
-      () => getDisplayMassUnit(projectFormatting),
-      [projectFormatting],
-    );
 
     const handleClick = async (event) => {
       event.stopPropagation();
@@ -858,34 +1849,58 @@ const SortableSubItem = React.memo(
             {displayIndex}
           </td>
 
-          <td
-            style={cellStyle.text}
-            title={String(
-              item.asmPos ||
-                getExternalId(item) ||
-                getRuntimeId(item) ||
-                "",
-            )}
-          >
-            <strong>
-              {item.asmPos ||
-                getExternalId(item) ||
-                getRuntimeId(item)}
-            </strong>
-          </td>
+          {visibleProperties.map(
+            (property) => {
+              const rawValue =
+                getSequenceColumnValue(
+                  item,
+                  property,
+                  {
+                    projectFormatting,
+                  },
+                );
 
-          <td
-            style={cellStyle.text}
-            title={item.positionCode || ""}
-          >
-            {item.positionCode || ""}
-          </td>
+              const displayValue =
+                rawValue == null
+                  ? ""
+                  : String(
+                      rawValue,
+                    );
 
-          <td style={cellStyle.number}>
-            {displayWeight != null
-              ? `${displayWeight} ${displayWeightUnit}`
-              : ""}
-          </td>
+              return (
+                <td
+                  key={
+                    property.field
+                  }
+                  title={
+                    displayValue
+                  }
+                  style={{
+                    ...cellStyle.text,
+
+                    textAlign:
+                      property.align ||
+                      "left",
+                  }}
+                >
+                  {property.field ===
+                  "assemblyPos" ? (
+                    <strong>
+                      {displayValue ||
+                        getExternalId(
+                          item,
+                        ) ||
+                        getRuntimeId(
+                          item,
+                        )}
+                    </strong>
+                  ) : (
+                    displayValue
+                  )}
+                </td>
+              );
+            },
+          )}
 
           <td style={cellStyle.date}>
             {displayDate}
@@ -977,6 +1992,34 @@ const SequenceObjectCollapse = ({
 
   const [localObjects, setLocalObjects] = useState([]);
 
+
+  /*
+   * Values resolved from Trimble viewer.getObjectProperties()
+   * using exact DataTable Column.field keys.
+   *
+   * Map key:
+   *   modelId:runtimeId
+   *
+   * Map value:
+   *   {
+   *     "PropertySet+WEIGHT": 121.5,
+   *     "PropertySet+ASSEMBLY_POS": "C5-1",
+   *     "entity_class": "IFCELEMENTASSEMBLY",
+   *     ...
+   *   }
+   */
+  const [
+    dataTableValueMap,
+    setDataTableValueMap,
+  ] = useState(
+    new Map(),
+  );
+
+  const [
+    loadingDataTableValues,
+    setLoadingDataTableValues,
+  ] = useState(false);
+
   const [projectFormatting, setProjectFormatting] =
     useState(DEFAULT_FORMATTING);
 
@@ -987,12 +2030,118 @@ const SequenceObjectCollapse = ({
     ...DEFAULT_COLUMN_WIDTHS,
   });
 
+
+  /*
+   * Columns manually resized by the user are not overwritten by
+   * automatic fitting when row data changes.
+   */
+  const manuallyResizedColumnsRef =
+    useRef(
+      new Set(),
+    );
+
+  const {
+    selectedFields:
+      visiblePropertyKeys,
+
+    selectedColumns:
+      visibleProperties,
+
+    selectedColumnSet,
+
+    psetApiUrl,
+  } =
+    useSequenceColumnConfig();
+
+  const externalPsetFields =
+    useMemo(
+      () => {
+        const allFields =
+          visibleProperties
+            .map(
+              (column) =>
+                String(
+                  column?.field ||
+                    "",
+                ).trim(),
+            )
+            .filter(Boolean);
+
+        const psetFields =
+          allFields.filter(
+            (field) =>
+              isExternalPsetField(
+                field,
+              ),
+          );
+
+        return psetFields;
+      },
+      [
+        visibleProperties,
+      ],
+    );
+
+  /*
+   * One Trimble DataTable preset is used for the entire App.
+   *
+   * Every Plan/SubPlan/Sequence Object table therefore renders
+   * the same ordered ColumnSet.columns list.
+   */
+  /*
+   * Ensure every DataTable field has a resize width.
+   */
+  useEffect(
+    () => {
+      setColumnWidths(
+        (previous) => {
+          const next = {
+            ...previous,
+          };
+
+          visibleProperties.forEach(
+            (column) => {
+              if (
+                !next[
+                  column.field
+                ]
+              ) {
+                /*
+                 * Initial width is intentionally compact.
+                 * The content auto-fit effect below will size the
+                 * column from actual visible cell values only.
+                 *
+                 * Header text may be ellipsized and therefore does
+                 * not force the column wider.
+                 */
+                next[
+                  column.field
+                ] =
+                  column.minWidth ||
+                  AUTO_FIT_MIN_WIDTH;
+              }
+            },
+          );
+
+          return next;
+        },
+      );
+    },
+    [
+      visibleProperties,
+    ],
+  );
+
   const handleColumnResize =
     useCallback(
       (
         columnKey,
         nextWidth,
       ) => {
+        manuallyResizedColumnsRef.current.add(
+          columnKey,
+        );
+
         setColumnWidths(
           (previous) => ({
             ...previous,
@@ -1222,6 +2371,449 @@ const SequenceObjectCollapse = ({
       return loadedModelIdSet.has(String(modelId));
     });
   }, [currentObjects, loadedModelIdSet]);
+
+  useEffect(
+    () => {
+      let cancelled =
+        false;
+
+      const hydrateDataTableValues =
+        async () => {
+          if (
+            !visibleObjects.length
+          ) {
+            setDataTableValueMap(
+              new Map(),
+            );
+
+            setLoadingDataTableValues(
+              false,
+            );
+
+            return;
+          }
+
+          setLoadingDataTableValues(
+            true,
+          );
+
+          try {
+            const tcapi =
+              tcapiRef.current ||
+              (await WorkspaceAPI.connect(
+                window.parent,
+              ));
+
+            tcapiRef.current =
+              tcapi;
+
+            /*
+             * =====================================================
+             * STAGE 1
+             * =====================================================
+             *
+             * Load normal model properties first.
+             *
+             * Do NOT wait for external Property Set REST API here.
+             * This lets the table immediately display values such as:
+             *
+             * PropertySet+WEIGHT
+             * PropertySet+AREA
+             * PropertySet+VOLUME
+             * PropertySet+ASSEMBLY_POS
+             * ...
+             */
+            const modelValueMap =
+              await loadDataTableValues(
+                tcapi,
+                visibleObjects,
+                {
+                  psetApiUrl:
+                    "",
+
+                  externalPsetFields:
+                    [],
+                },
+              );
+
+            if (
+              cancelled
+            ) {
+              return;
+            }
+
+            /*
+             * Render all normal model values immediately.
+             */
+            setDataTableValueMap(
+              new Map(
+                modelValueMap,
+              ),
+            );
+
+            setLoadingDataTableValues(
+              false,
+            );
+
+            /*
+             * =====================================================
+             * STAGE 2
+             * =====================================================
+             *
+             * External PSet fields (prop_xxx) are loaded afterwards.
+             *
+             * The table remains visible while this request runs.
+             * When PSet values arrive, only those fields are merged
+             * into the existing model-property map.
+             */
+            if (
+              !externalPsetFields.length ||
+              !psetApiUrl
+            ) {
+              return;
+            }
+
+            const externalValuesByGuid =
+              await loadExternalPsetValues({
+                tcapi,
+                objects:
+                  visibleObjects,
+                psetApiUrl,
+                externalPsetFields,
+              });
+
+            if (
+              cancelled
+            ) {
+              return;
+            }
+
+            setDataTableValueMap(
+              (
+                previousMap,
+              ) => {
+                const nextMap =
+                  new Map(
+                    previousMap,
+                  );
+
+                for (
+                  const object of
+                    visibleObjects
+                ) {
+                  const modelId =
+                    getObjectModelId(
+                      object,
+                    );
+
+                  const runtimeId =
+                    getRuntimeId(
+                      object,
+                    );
+
+                  const guid =
+                    String(
+                      getExternalId(
+                        object,
+                      ) ||
+                        "",
+                    ).trim();
+
+                  if (
+                    modelId == null ||
+                    runtimeId == null ||
+                    !guid
+                  ) {
+                    continue;
+                  }
+
+                  const objectKey =
+                    `${modelId}:${runtimeId}`;
+
+                  const currentValues =
+                    nextMap.get(
+                      objectKey,
+                    ) ||
+                    {};
+
+                  const externalValues =
+                    externalValuesByGuid.get(
+                      guid,
+                    ) ||
+                    {};
+
+                  nextMap.set(
+                    objectKey,
+                    {
+                      ...currentValues,
+                      ...externalValues,
+                    },
+                  );
+                }
+
+                return nextMap;
+              },
+            );
+          } catch (
+            error
+          ) {
+            console.error(
+              "Load DataTable property values failed:",
+              error,
+            );
+
+            if (
+              !cancelled
+            ) {
+              /*
+               * Do not clear already rendered model values if only
+               * the later PSet request fails.
+               */
+              setLoadingDataTableValues(
+                false,
+              );
+            }
+          }
+        };
+
+      hydrateDataTableValues();
+
+      return () => {
+        cancelled =
+          true;
+      };
+    },
+    [
+      visibleObjects,
+      psetApiUrl,
+      externalPsetFields,
+    ],
+  );
+
+  /*
+   * Attach the resolved DataTable values to the visible objects.
+   *
+   * The render path then becomes:
+   *
+   * ColumnSet.columns
+   *      ↓
+   * column.field
+   *      ↓
+   * item.dataTableValues[column.field]
+   */
+  const hydratedVisibleObjects =
+    useMemo(
+      () =>
+        visibleObjects.map(
+          (object) => {
+            const modelId =
+              getObjectModelId(
+                object,
+              );
+
+            const runtimeId =
+              getRuntimeId(
+                object,
+              );
+
+            const key =
+              `${modelId}:${runtimeId}`;
+
+            return {
+              ...object,
+
+              dataTableValues:
+                dataTableValueMap.get(
+                  key,
+                ) ||
+                {},
+            };
+          },
+        ),
+      [
+        visibleObjects,
+        dataTableValueMap,
+      ],
+    );
+
+  /*
+   * Calculate the best width for one dynamic DataTable column.
+   *
+   * Width is based on:
+   * - currently visible row values only
+   * - current project unit formatting
+   *
+   * Header text does NOT determine width and may be ellipsized.
+   */
+  const getAutoFitColumnWidth =
+    useCallback(
+      (column) => {
+        if (
+          !column?.field
+        ) {
+          return AUTO_FIT_MIN_WIDTH;
+        }
+
+        /*
+         * IMPORTANT:
+         * Column width is based on CELL VALUES only.
+         *
+         * The header may be longer than the cell content and is
+         * allowed to show ellipsis instead of widening the column.
+         */
+        let measuredWidth =
+          0;
+
+        hydratedVisibleObjects.forEach(
+          (item) => {
+            const value =
+              getSequenceColumnValue(
+                item,
+                column,
+                {
+                  projectFormatting,
+                },
+              );
+
+            measuredWidth =
+              Math.max(
+                measuredWidth,
+                measureTextWidth(
+                  value,
+                  "12px Arial",
+                ),
+              );
+          },
+        );
+
+        /*
+         * If all visible values are empty, keep a compact minimum.
+         */
+        return clampColumnWidth(
+          measuredWidth > 0
+            ? measuredWidth +
+                AUTO_FIT_HORIZONTAL_PADDING
+            : column.minWidth ||
+                AUTO_FIT_MIN_WIDTH,
+          column.minWidth ||
+            AUTO_FIT_MIN_WIDTH,
+          AUTO_FIT_MAX_WIDTH,
+        );
+      },
+      [
+        hydratedVisibleObjects,
+        projectFormatting,
+      ],
+    );
+
+  /*
+   * Initial/automatic fit:
+   *
+   * Dynamic property columns fit the actual visible content.
+   * A manually resized column remains at the user's width.
+   */
+  useEffect(
+    () => {
+      if (
+        !visibleProperties.length
+      ) {
+        return;
+      }
+
+      setColumnWidths(
+        (previous) => {
+          const next = {
+            ...previous,
+          };
+
+          visibleProperties.forEach(
+            (column) => {
+              if (
+                manuallyResizedColumnsRef.current.has(
+                  column.field,
+                )
+              ) {
+                return;
+              }
+
+              next[
+                column.field
+              ] =
+                getAutoFitColumnWidth(
+                  column,
+                );
+            },
+          );
+
+          return next;
+        },
+      );
+    },
+    [
+      visibleProperties,
+      getAutoFitColumnWidth,
+    ],
+  );
+
+  /*
+   * Double-click a separator to fit that column to content again.
+   */
+  const handleAutoFitColumn =
+    useCallback(
+      (columnKey) => {
+        const column =
+          visibleProperties.find(
+            (item) =>
+              item.field ===
+              columnKey,
+          );
+
+        if (!column) {
+          const defaultWidth =
+            DEFAULT_COLUMN_WIDTHS[
+              columnKey
+            ];
+
+          if (
+            defaultWidth
+          ) {
+            manuallyResizedColumnsRef.current.delete(
+              columnKey,
+            );
+
+            setColumnWidths(
+              (previous) => ({
+                ...previous,
+
+                [columnKey]:
+                  defaultWidth,
+              }),
+            );
+          }
+
+          return;
+        }
+
+        manuallyResizedColumnsRef.current.delete(
+          columnKey,
+        );
+
+        setColumnWidths(
+          (previous) => ({
+            ...previous,
+
+            [columnKey]:
+              getAutoFitColumnWidth(
+                column,
+              ),
+          }),
+        );
+      },
+      [
+        visibleProperties,
+        getAutoFitColumnWidth,
+      ],
+    );
 
   const items = useMemo(() => {
     const result = [];
@@ -2165,7 +3757,7 @@ const SequenceObjectCollapse = ({
       onDragEnd={isOwner ? onDragEndSubItem : undefined}
     >
       <SortableContext
-        items={visibleObjects.map((item) => getObjectKey(item))}
+        items={hydratedVisibleObjects.map((item) => getObjectKey(item))}
         strategy={verticalListSortingStrategy}
       >
         <div
@@ -2176,6 +3768,40 @@ const SequenceObjectCollapse = ({
             outline: "none",
           }}
         >
+          {!visibleProperties.length && (
+            <div
+              style={{
+                marginLeft:
+                  10,
+
+                marginBottom:
+                  6,
+
+                padding:
+                  "6px 8px",
+
+                border:
+                  "1px solid #ffe58f",
+
+                borderRadius:
+                  4,
+
+                background:
+                  "#fffbe6",
+
+                color:
+                  "#8c6d1f",
+
+                fontSize:
+                  12,
+              }}
+            >
+              {selectedColumnSet
+                ? "The selected DataTable preset does not contain any columns."
+                : "No DataTable preset is selected. Select a preset from the App toolbar."}
+            </div>
+          )}
+
           <div
             style={{
               marginLeft: 10,
@@ -2189,15 +3815,29 @@ const SequenceObjectCollapse = ({
             <table
               style={{
                 width:
-                  Object.values(
-                    columnWidths,
-                  ).reduce(
+                  [
+                    "drag",
+                    "index",
+                    ...visiblePropertyKeys,
+                    "date",
+                    "actions",
+                  ].reduce(
                     (
                       total,
-                      value,
+                      key,
                     ) =>
                       total +
-                      Number(value || 0),
+                      Number(
+                        columnWidths[
+                          key
+                        ] ||
+                        visibleProperties.find(
+                          (column) =>
+                            column.field ===
+                            key,
+                        )?.minWidth ||
+                        AUTO_FIT_MIN_WIDTH,
+                      ),
                     0,
                   ),
 
@@ -2229,26 +3869,22 @@ const SequenceObjectCollapse = ({
                   }}
                 />
 
-                <col
-                  style={{
-                    width:
-                      columnWidths.assembly,
-                  }}
-                />
-
-                <col
-                  style={{
-                    width:
-                      columnWidths.grid,
-                  }}
-                />
-
-                <col
-                  style={{
-                    width:
-                      columnWidths.weight,
-                  }}
-                />
+                {visibleProperties.map(
+                  (property) => (
+                    <col
+                      key={
+                        property.field
+                      }
+                      style={{
+                        width:
+                          columnWidths[
+                            property.field
+                          ] ||
+                          AUTO_FIT_MIN_WIDTH,
+                      }}
+                    />
+                  ),
+                )}
 
                 <col
                   style={{
@@ -2293,6 +3929,9 @@ const SequenceObjectCollapse = ({
                     onResize={
                       handleColumnResize
                     }
+                    onAutoFit={
+                      handleAutoFitColumn
+                    }
                   >
                     &nbsp;
                   </ResizableHeaderCell>
@@ -2308,55 +3947,48 @@ const SequenceObjectCollapse = ({
                     onResize={
                       handleColumnResize
                     }
+                    onAutoFit={
+                      handleAutoFitColumn
+                    }
                   >
                     No.
                   </ResizableHeaderCell>
 
-                  <ResizableHeaderCell
-                    columnKey="assembly"
-                    width={
-                      columnWidths.assembly
-                    }
-                    minWidth={
-                      MIN_COLUMN_WIDTHS.assembly
-                    }
-                    onResize={
-                      handleColumnResize
-                    }
-                  >
-                    Assembly
-                  </ResizableHeaderCell>
-
-                  <ResizableHeaderCell
-                    columnKey="grid"
-                    width={
-                      columnWidths.grid
-                    }
-                    minWidth={
-                      MIN_COLUMN_WIDTHS.grid
-                    }
-                    onResize={
-                      handleColumnResize
-                    }
-                  >
-                    Grid
-                  </ResizableHeaderCell>
-
-                  <ResizableHeaderCell
-                    columnKey="weight"
-                    width={
-                      columnWidths.weight
-                    }
-                    minWidth={
-                      MIN_COLUMN_WIDTHS.weight
-                    }
-                    align="right"
-                    onResize={
-                      handleColumnResize
-                    }
-                  >
-                    Weight
-                  </ResizableHeaderCell>
+                  {visibleProperties.map(
+                    (property) => (
+                      <ResizableHeaderCell
+                        key={
+                          property.field
+                        }
+                        columnKey={
+                          property.field
+                        }
+                        width={
+                          columnWidths[
+                            property.field
+                          ]
+                        }
+                        minWidth={
+                          property.minWidth ||
+                          70
+                        }
+                        align={
+                          property.align ||
+                          "left"
+                        }
+                        onResize={
+                          handleColumnResize
+                        }
+                        onAutoFit={
+                          handleAutoFitColumn
+                        }
+                      >
+                        {getColumnHeaderLabel(
+                          property,
+                        )}
+                      </ResizableHeaderCell>
+                    ),
+                  )}
 
                   <ResizableHeaderCell
                     columnKey="date"
@@ -2369,6 +4001,9 @@ const SequenceObjectCollapse = ({
                     align="center"
                     onResize={
                       handleColumnResize
+                    }
+                    onAutoFit={
+                      handleAutoFitColumn
                     }
                   >
                     Date
@@ -2386,13 +4021,16 @@ const SequenceObjectCollapse = ({
                     onResize={
                       handleColumnResize
                     }
+                    onAutoFit={
+                      handleAutoFitColumn
+                    }
                   >
                   </ResizableHeaderCell>
                 </tr>
               </thead>
 
               <tbody>
-                {visibleObjects.map((item) => (
+                {hydratedVisibleObjects.map((item) => (
                   <SortableSubItem
                     key={getObjectKey(item)}
                     item={item}
@@ -2403,7 +4041,7 @@ const SequenceObjectCollapse = ({
                     lastSelected={lastSelected}
                     setLastSelected={setLastSelected}
                     setFocusedIndex={setFocusedIndex}
-                    currentObjects={visibleObjects}
+                    currentObjects={hydratedVisibleObjects}
                     icon={<FileOutlined />}
                     onAssignDate={handleAssignDate}
                     onDelete={handleDelete}
@@ -2416,13 +4054,14 @@ const SequenceObjectCollapse = ({
                     selectObjectsInViewer={selectObjectsInViewer}
                     setActiveItem={setActiveItem}
                     listRef={listRef}
+                    visibleProperties={visibleProperties}
                     projectFormatting={projectFormatting}
                   />
                 ))}
               </tbody>
             </table>
 
-            {loading && (
+            {(loading || loadingDataTableValues) && (
               <div
                 style={{
                   padding: 8,
@@ -2430,7 +4069,9 @@ const SequenceObjectCollapse = ({
                   color: "#8c8c8c",
                 }}
               >
-                Loading...
+                {loadingDataTableValues
+                  ? "Loading DataTable values..."
+                  : "Loading..."}
               </div>
             )}
           </div>

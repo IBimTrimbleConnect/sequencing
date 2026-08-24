@@ -39,6 +39,9 @@ import {
   ShoppingCartOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
+import {
+  SequenceColumnConfigProvider,
+} from "./context/SequenceColumnConfigContext";
 
 const { Content, Footer } = Layout;
 
@@ -92,6 +95,18 @@ export default function App() {
   const [projectId, setProjectId] = useState("");
 
   const [projectName, setProjectName] = useState("");
+
+  /*
+   * Trimble project location/region.
+   *
+   * This is passed to the App-level DataTable/PSet configuration
+   * so prop_xxx fields can be resolved against the correct
+   * regional Property Set API.
+   */
+  const [
+    projectLocation,
+    setProjectLocation,
+  ] = useState("");
 
   const [trimbleUser, setTrimbleUser] = useState(null);
 
@@ -286,6 +301,13 @@ export default function App() {
         setProjectId(currentProjectId);
 
         setProjectName(currentProjectName);
+
+        setProjectLocation(
+          String(
+            project?.location ||
+              "",
+          ),
+        );
 
         /*
          * Check loaded 3D models ONCE.
@@ -892,11 +914,11 @@ export default function App() {
       >
         <Result
           status="warning"
-          title="No Models Loaded"
+          title="No 3D Model Loaded"
           subTitle={
             <span>
-              Please load at least one model in Trimble Connect
-              before using IBim Sequencing.
+              Please load at least one 3D model in Trimble Connect
+              before using Sequence Planner.
               <br />
               After the model has finished loading, click{" "}
               <strong>Check Again</strong>.
@@ -918,7 +940,7 @@ export default function App() {
                       count > 0
                     ) {
                       message.success(
-                        `${count} loaded model${
+                        `${count} loaded 3D model${
                           count === 1
                             ? ""
                             : "s"
@@ -926,7 +948,7 @@ export default function App() {
                       );
                     } else {
                       message.warning(
-                        "No model is currently loaded. Please load a model in Trimble Connect and try again.",
+                        "No 3D model is currently loaded. Please load a model in Trimble Connect and try again.",
                       );
                     }
                   } catch (error) {
@@ -952,12 +974,20 @@ export default function App() {
   }
 
   return (
-    <Layout
-      style={{
-        height: "100vh",
-        overflow: "hidden",
-      }}
+    <SequenceColumnConfigProvider
+      projectId={
+        projectId
+      }
+      projectLocation={
+        projectLocation
+      }
     >
+      <Layout
+        style={{
+          height: "100vh",
+          overflow: "hidden",
+        }}
+      >
       <TopMenu
         projectId={projectId}
         projectName={projectName}
@@ -1191,6 +1221,7 @@ export default function App() {
           </div>
         </Form>
       </Modal>
-    </Layout>
+      </Layout>
+    </SequenceColumnConfigProvider>
   );
 }
