@@ -43,6 +43,19 @@ const ALL_SUBPLANS_VALUE = "__ALL_SUBPLANS__";
 
 const SNAPSHOT_RENDER_DELAY_MS = 150;
 
+/*
+ * Vertical leader offset for the current Simulation text markup.
+ * Viewer/world coordinates are in millimeters.
+ */
+const TEXT_MARKUP_MIN_OFFSET_MM = 500;
+const TEXT_MARKUP_HEIGHT_RATIO = 0.2;
+
+/*
+ * Viewer object bounding-box coordinates are returned in viewer/model
+ * coordinates (meters), while MarkupPick.positionX/Y/Z require millimeters.
+ */
+const METERS_TO_MILLIMETERS = 1000;
+
 const DEFAULT_PROJECT_FORMATTING = {
   massUnit: "kg",
   massDecimals: 2,
@@ -285,6 +298,16 @@ export default function Simulation({
   const gridObjectsRef = useRef(null);
 
   /*
+   * Keep one TextMarkup for the active Simulation object.
+   *
+   * addTextMarkup() updates an existing markup when the same id is sent,
+   * so the simulation does not create a new markup on every step.
+   */
+  const simulationTextMarkupIdRef = useRef(null);
+
+  const simulationTextMarkupTaskIdRef = useRef(0);
+
+  /*
    * Simulation only captures snapshots.
    *
    * The actual frames are stored in simulationVideoService so TopMenu can
@@ -320,6 +343,268 @@ export default function Simulation({
    */
   const [pendingSimulationRequest, setPendingSimulationRequest] =
     useState(null);
+
+  const getTcapi = useCallback(async () => {
+    if (!tcapiRef.current) {
+      tcapiRef.current = await WorkspaceAPI.connect(window.parent);
+    }
+
+    return tcapiRef.current;
+  }, []);
+
+  /*
+   * =====================================================
+   * CURRENT OBJECT TEXT MARKUP
+   * =====================================================
+   *
+   * TextMarkup requires start + end MarkupPick values.
+   *
+   * We anchor `start` at the top-center of the object's bounding box
+   * and place `end` above it. The text is therefore connected to the
+   * current object with a leader line.
+   *
+   * Trimble coordinates are in millimeters.
+   */
+  const removeSimulationTextMarkup = useCallback(async () => {
+    const markupId = simulationTextMarkupIdRef.current;
+
+    /*
+     * Invalidate an older asynchronous update that may still be waiting
+     * on getObjectBoundingBoxes().
+     */
+    simulationTextMarkupTaskIdRef.current += 1;
+
+    if (markupId == null) {
+      return;
+    }
+
+    try {
+      const tcapi = await getTcapi();
+
+      await tcapi.markup.removeMarkups([markupId]);
+    } catch (error) {
+      console.warn("Remove simulation text markup failed:", error);
+    } finally {
+      simulationTextMarkupIdRef.current = null;
+    }
+  }, [getTcapi]);
+
+  const buildSimulationMarkupText = useCallback(
+    (item) => {
+      if (!item) {
+        return "";
+      }
+
+      const lines = [];
+
+      const assemblyPosition =
+        item?.asmPos || item?.name || item?.objectName || "";
+
+      if (assemblyPosition) {
+        lines.push(String(assemblyPosition));
+      }
+
+      const gridPosition =
+        item?.positionCode || item?.gridPos || item?.location || "";
+
+      if (gridPosition) {
+        lines.push(`Grid: ${gridPosition}`);
+      }
+
+      if (item?.weight != null && Number.isFinite(Number(item.weight))) {
+        const convertedWeight = convertMassFromKg(
+          item.weight,
+          projectFormatting,
+        );
+
+        if (convertedWeight != null) {
+          lines.push(
+            `Weight: ${convertedWeight} ${getDisplayMassUnit(
+              projectFormatting,
+            )}`,
+          );
+        }
+      }
+
+      if (item?.simulationDate) {
+        lines.push(`Date: ${item.simulationDate}`);
+      }
+
+      return lines.join("\n");
+    },
+    [projectFormatting],
+  );
+
+  const showSimulationTextMarkup = useCallback(
+    async (item) => {
+      if (item?.modelId == null || item?.runtimeId == null) {
+        return;
+      }
+
+      const taskId = ++simulationTextMarkupTaskIdRef.current;
+
+      try {
+        const tcapi = await getTcapi();
+
+        /*
+         * Use the object's actual bounding box instead of guessing a
+         * markup coordinate. getObjectBoundingBoxes() accepts runtime ids.
+         */
+        const boundingBoxes = await tcapi.viewer.getObjectBoundingBoxes(
+          item.modelId,
+          [item.runtimeId],
+        );
+
+        if (taskId !== simulationTextMarkupTaskIdRef.current) {
+          return;
+        }
+
+        const objectBoundingBox = Array.isArray(boundingBoxes)
+          ? boundingBoxes.find(
+              (entry) => String(entry?.id) === String(item.runtimeId),
+            ) || boundingBoxes[0]
+          : null;
+
+        const box = objectBoundingBox?.boundingBox;
+
+        const min = box?.min;
+
+        const max = box?.max;
+
+        if (!min || !max) {
+          console.warn(
+            "Unable to create Simulation text markup: object bounding box is empty.",
+            item,
+          );
+
+          return;
+        }
+
+        const minX = Number(min.x);
+
+        const minY = Number(min.y);
+
+        const minZ = Number(min.z);
+
+        const maxX = Number(max.x);
+
+        const maxY = Number(max.y);
+
+        const maxZ = Number(max.z);
+
+        if (![minX, minY, minZ, maxX, maxY, maxZ].every(Number.isFinite)) {
+          console.warn(
+            "Unable to create Simulation text markup: invalid bounding box coordinates.",
+            box,
+          );
+
+          return;
+        }
+
+        /*
+         * getObjectBoundingBoxes() follows Viewer/model coordinates.
+         * MarkupPick coordinates are explicitly millimeters.
+         *
+         * Convert the object center to millimeters before passing it
+         * to addTextMarkup(). Without this conversion the markup can
+         * appear far away from the selected object.
+         */
+        const centerX = ((minX + maxX) / 2) * METERS_TO_MILLIMETERS;
+
+        const centerY = ((minY + maxY) / 2) * METERS_TO_MILLIMETERS;
+
+        const centerZ = ((minZ + maxZ) / 2) * METERS_TO_MILLIMETERS;
+
+        const height = Math.max(0, (maxZ - minZ) * METERS_TO_MILLIMETERS);
+
+        const leaderOffset = Math.max(
+          TEXT_MARKUP_MIN_OFFSET_MM,
+          height * TEXT_MARKUP_HEIGHT_RATIO,
+        );
+
+        const externalId =
+          item?.externalId ?? item?.external_id ?? item?.objectId ?? null;
+
+        /*
+         * Anchor point attached to the model object.
+         */
+        const startPick = {
+          type: "point",
+
+          modelId: String(item.modelId),
+
+          objectId: Number(item.runtimeId),
+
+          ...(externalId
+            ? {
+                referenceObjectId: String(externalId),
+              }
+            : {}),
+
+          positionX: centerX,
+
+          positionY: centerY,
+
+          positionZ: centerZ,
+        };
+
+        /*
+         * Text position. This pick is intentionally free in model space,
+         * slightly above the object's upper bounding-box face.
+         */
+        const endPick = {
+          type: "point",
+
+          positionX: centerX,
+
+          positionY: centerY,
+
+          positionZ: centerZ + leaderOffset,
+        };
+
+        const markup = {
+          ...(simulationTextMarkupIdRef.current != null
+            ? {
+                id: simulationTextMarkupIdRef.current,
+              }
+            : {}),
+
+          start: startPick,
+
+          end: endPick,
+
+          text: buildSimulationMarkupText(item),
+
+          color: {
+            r: 255,
+
+            g: 0,
+
+            b: 255,
+
+            a: 255,
+          },
+        };
+
+        const addedMarkups = await tcapi.markup.addTextMarkup([markup]);
+
+        if (taskId !== simulationTextMarkupTaskIdRef.current) {
+          return;
+        }
+
+        const returnedMarkup = Array.isArray(addedMarkups)
+          ? addedMarkups[0]
+          : null;
+
+        if (returnedMarkup?.id != null) {
+          simulationTextMarkupIdRef.current = returnedMarkup.id;
+        }
+      } catch (error) {
+        console.error("Add/update Simulation text markup failed:", error);
+      }
+    },
+    [buildSimulationMarkupText, getTcapi],
+  );
 
   /*
    * Reset the recording session.
@@ -660,12 +945,15 @@ export default function Simulation({
     clearCapturedFrames();
 
     clearTimeout(intervalRef.current);
+
+    removeSimulationTextMarkup();
   }, [
     selectedPlanIds,
     selectedSubPlanIds,
     startDate,
     endDate,
     clearCapturedFrames,
+    removeSimulationTextMarkup,
   ]);
 
   /*
@@ -679,13 +967,15 @@ export default function Simulation({
 
       clearTimeout(intervalRef.current);
 
+      removeSimulationTextMarkup();
+
       return;
     }
 
     if (index >= items.length) {
       setIndex(items.length - 1);
     }
-  }, [items.length, index]);
+  }, [items.length, index, removeSimulationTextMarkup]);
 
   // =====================================================
   // SAVE DATE RANGE TO REDUX
@@ -704,14 +994,6 @@ export default function Simulation({
   // =====================================================
   // TRIMBLE CONNECT API
   // =====================================================
-
-  const getTcapi = useCallback(async () => {
-    if (!tcapiRef.current) {
-      tcapiRef.current = await WorkspaceAPI.connect(window.parent);
-    }
-
-    return tcapiRef.current;
-  }, []);
 
   const captureSimulationSnapshot = useCallback(
     async (item, itemIndex) => {
@@ -1169,7 +1451,6 @@ export default function Simulation({
         //   opacity: nextTransparency,
         // });
         await tcapi.viewer.setOpacity(nextTransparency);
-
       } else {
         await tcapi.viewer.setOpacity(0);
 
@@ -1259,6 +1540,12 @@ export default function Simulation({
           await colorAccumulatedObjects(safeIndex);
 
           /*
+           * Keep one TextMarkup attached to the current object.
+           * The same markup id is updated as the simulation advances.
+           */
+          await showSimulationTextMarkup(item);
+
+          /*
            * Capture only while simulation playback recording is active.
            * Manual slider/Next/Previous navigation does not add frames.
            * Snapshot is taken before selection so selection highlighting is
@@ -1283,6 +1570,7 @@ export default function Simulation({
       isolateObjectsInTrimble,
       gotoCamera,
       colorAccumulatedObjects,
+      showSimulationTextMarkup,
       captureSimulationSnapshot,
       selectObjectInTrimble,
     ],
@@ -1441,10 +1729,7 @@ export default function Simulation({
     /*
      * RESUME
      */
-    if (
-      simulationPausedRef.current &&
-      recordingSimulationRef.current
-    ) {
+    if (simulationPausedRef.current && recordingSimulationRef.current) {
       simulationPausedRef.current = false;
 
       setPlaying(true);
@@ -1458,6 +1743,8 @@ export default function Simulation({
      * Every new simulation starts from item 0 and resets old frames.
      */
     clearCapturedFrames();
+
+    await removeSimulationTextMarkup();
 
     recordingSimulationRef.current = true;
     simulationPausedRef.current = false;
@@ -1473,6 +1760,7 @@ export default function Simulation({
     playing,
     goToIndex,
     clearCapturedFrames,
+    removeSimulationTextMarkup,
   ]);
 
   // =====================================================
@@ -1546,6 +1834,12 @@ export default function Simulation({
         return;
       }
 
+      const markupId = simulationTextMarkupIdRef.current;
+
+      simulationTextMarkupIdRef.current = null;
+
+      simulationTextMarkupTaskIdRef.current += 1;
+
       /*
        * Append reset after all pending viewer mutations.
        * This avoids an older queued task overwriting the cleanup reset.
@@ -1554,6 +1848,10 @@ export default function Simulation({
         .catch(() => {})
         .then(async () => {
           try {
+            if (markupId != null) {
+              await tcapi.markup.removeMarkups([markupId]);
+            }
+
             await tcapi.viewer.setOpacity(0);
 
             await tcapi.viewer.setObjectState(undefined, {
