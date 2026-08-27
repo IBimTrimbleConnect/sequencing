@@ -233,9 +233,13 @@ const TopMenu = ({
 
       const baseName = String(values.planName || "").trim();
 
+      const createMultiple = nodeMode
+        ? values.createMultiple === true
+        : true;
+
       const startIndex = Number(values.startIndex);
 
-      const quantity = Number(values.quantity);
+      const quantity = createMultiple ? Number(values.quantity) : 1;
 
       if (!baseName) {
         message.warning(
@@ -245,7 +249,7 @@ const TopMenu = ({
         return;
       }
 
-      if (!Number.isInteger(startIndex) || startIndex < 0) {
+      if (createMultiple && (!Number.isInteger(startIndex) || startIndex < 0)) {
         message.warning(
           "Start index must be a whole number greater than or equal to 0.",
         );
@@ -253,7 +257,10 @@ const TopMenu = ({
         return;
       }
 
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
+      if (
+        createMultiple &&
+        (!Number.isInteger(quantity) || quantity < 1 || quantity > 100)
+      ) {
         message.warning("Quantity must be between 1 and 100.");
 
         return;
@@ -267,16 +274,20 @@ const TopMenu = ({
         ),
       );
 
-      const newPlans = Array.from(
-        {
-          length: quantity,
-        },
-        (_, index) => ({
-          name: `${baseName} ${startIndex + index}`,
-
-          color: values.color || null,
-        }),
-      );
+      const newPlans = createMultiple
+        ? Array.from(
+            { length: quantity },
+            (_, index) => ({
+              name: `${baseName} ${startIndex + index}`,
+              color: values.color || null,
+            }),
+          )
+        : [
+            {
+              name: baseName,
+              color: values.color || null,
+            },
+          ];
 
       const duplicatePlans = newPlans.filter((plan) =>
         existingPlanNames.has(plan.name.trim().toLowerCase()),
@@ -328,7 +339,9 @@ const TopMenu = ({
       form.setFieldsValue({
         planName: baseName,
 
-        startIndex: startIndex + quantity,
+        createMultiple,
+
+        startIndex: createMultiple ? startIndex + quantity : plans.length + 1,
 
         quantity: 1,
       });
@@ -351,24 +364,26 @@ const TopMenu = ({
 
     form.setFieldsValue({
       planName: "Phase",
+      createMultiple: nodeMode ? false : true,
       startIndex: plans.length + 1,
       quantity: 1,
     });
 
     setIsModalOpen(false);
-  }, [form, plans.length]);
+  }, [form, plans.length, nodeMode]);
 
   const handleOpenCreateModal = useCallback(() => {
     form.resetFields();
 
     form.setFieldsValue({
       planName: "Phase",
+      createMultiple: nodeMode ? false : true,
       startIndex: plans.length + 1,
       quantity: 1,
     });
 
     setIsModalOpen(true);
-  }, [form, plans.length]);
+  }, [form, plans.length, nodeMode]);
 
   const handleHighlight = useCallback(async () => {
     try {
@@ -972,6 +987,7 @@ const TopMenu = ({
           loading={creatingPlans}
           entityLabel={nodeMode ? "Category" : "Plan"}
           entityPluralLabel={nodeMode ? "Categories" : "Plans"}
+          allowSingle={nodeMode}
           onCreate={handleCreate}
           onCancel={handleCancel}
         />

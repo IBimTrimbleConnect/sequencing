@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Switch,
 } from "antd";
 
 const CreatePlanModal = ({
@@ -18,11 +19,16 @@ const CreatePlanModal = ({
   loading = false,
   entityLabel = "Plan",
   entityPluralLabel = `${entityLabel}s`,
+  allowSingle = false,
 }) => {
   const planName = Form.useWatch(
     "planName",
     form,
   );
+
+  const createMultiple = allowSingle
+    ? Boolean(Form.useWatch("createMultiple", form))
+    : true;
 
   const startIndex = Form.useWatch(
     "startIndex",
@@ -40,6 +46,14 @@ const CreatePlanModal = ({
         planName || "",
       ).trim();
 
+    if (!baseName) {
+      return [];
+    }
+
+    if (!createMultiple) {
+      return [baseName];
+    }
+
     const normalizedStartIndex =
       Number(startIndex);
 
@@ -47,7 +61,6 @@ const CreatePlanModal = ({
       Number(quantity);
 
     if (
-      !baseName ||
       !Number.isInteger(
         normalizedStartIndex,
       ) ||
@@ -78,33 +91,42 @@ const CreatePlanModal = ({
     );
   }, [
     planName,
+    createMultiple,
     startIndex,
     quantity,
   ]);
 
-  const canSubmit =
-    Boolean(
+  const hasName = Boolean(
       String(
         planName || "",
       ).trim(),
-    ) &&
-    Number.isInteger(
+    );
+
+  const canSubmit =
+    hasName &&
+    (!createMultiple || (
+      Number.isInteger(
       Number(
         startIndex,
       ),
-    ) &&
-    Number(startIndex) >= 0 &&
-    Number.isInteger(
+      ) &&
+      Number(startIndex) >= 0 &&
+      Number.isInteger(
       Number(
         quantity,
       ),
-    ) &&
-    Number(quantity) >= 1 &&
-    Number(quantity) <= 100;
+      ) &&
+      Number(quantity) >= 1 &&
+      Number(quantity) <= 100
+    ));
 
   return (
     <Modal
-      title={`Create Multiple ${entityPluralLabel}`}
+      title={
+        createMultiple
+          ? `Create Multiple ${entityPluralLabel}`
+          : `Create ${entityLabel}`
+      }
       open={open}
       onCancel={onCancel}
       footer={null}
@@ -129,13 +151,14 @@ const CreatePlanModal = ({
         layout="vertical"
         initialValues={{
           planName: "Plan",
+          createMultiple: false,
           startIndex: 1,
           quantity: 1,
         }}
         onFinish={onCreate}
       >
         <Form.Item
-          label={`${entityLabel} Name`}
+          label={allowSingle ? "Name" : `${entityLabel} Name`}
           name="planName"
           style={{
             marginBottom: 12,
@@ -156,6 +179,18 @@ const CreatePlanModal = ({
           />
         </Form.Item>
 
+        {allowSingle && (
+          <Form.Item
+            label="Create Multiple"
+            name="createMultiple"
+            valuePropName="checked"
+            style={{ marginBottom: 12 }}
+          >
+            <Switch disabled={loading} />
+          </Form.Item>
+        )}
+
+        {createMultiple && (
         <div
           style={{
             display: "grid",
@@ -262,6 +297,7 @@ const CreatePlanModal = ({
             />
           </Form.Item>
         </div>
+        )}
 
         {previewNames.length > 0 && (
           <div
@@ -304,7 +340,7 @@ const CreatePlanModal = ({
                 ),
               )}
 
-              {Number(quantity) >
+              {createMultiple && Number(quantity) >
                 previewNames.length && (
                 <span
                   style={{
@@ -338,7 +374,7 @@ const CreatePlanModal = ({
               !canSubmit
             }
           >
-            {Number(quantity) > 1
+            {createMultiple && Number(quantity) > 1
               ? `Create ${quantity} ${entityPluralLabel}`
               : `Create ${entityLabel}`}
           </Button>
