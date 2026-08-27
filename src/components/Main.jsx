@@ -49,6 +49,8 @@ import SubPlanModal from "./SubPlanModal";
 import SubPlanCollapse from "./SubPlanCollapse";
 import SortableHeader from "./SortableHeader";
 import CopySubPlanModal from "./CopySubPlanModal";
+import NodeSequenceMain from "./NodeSequenceMain";
+import { getNodesByProject } from "../services/nodeService";
 
 /* ========================================================================== */
 /* DATE                                                                       */
@@ -170,7 +172,7 @@ const addSequenceDays = (value, amount, considerWeekend = false) => {
 /* MAIN                                                                       */
 /* ========================================================================== */
 
-const Main = ({
+const LegacyMain = ({
   isOwner = false,
   isViewer = false,
   isFree = false,
@@ -1599,6 +1601,89 @@ const Main = ({
   );
 };
 
-export default React.memo(
-  Main,
-);
+const Main = (props) => {
+  const { onDataChange } = props;
+  const projectId = useSelector((state) => state.sequence.projectId || "");
+  const activeSimulationItem = useSelector(
+    (state) => state.sequence.activeSimulationItem || null,
+  );
+
+  const [nodeMode, setNodeMode] = useState(false);
+  const [nodeModeChecked, setNodeModeChecked] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkNodes = async () => {
+      if (!projectId) {
+        setNodeMode(false);
+        setNodeModeChecked(true);
+        onDataChange?.(null);
+        return;
+      }
+
+      try {
+        const nodes = await getNodesByProject(projectId);
+        if (!cancelled) {
+          /*
+           * The existence of rows must NOT determine whether the
+           * project uses the Node hierarchy. The `nodes` table is the
+           * hierarchy source even when it is currently empty.
+           *
+           * Previously an empty nodes table forced LegacyMain, which
+           * meant TopMenu created new Plans in `plans` instead of
+           * creating root Nodes in `nodes`.
+           */
+          const nodeTableAvailable = Array.isArray(nodes);
+
+          setNodeMode(nodeTableAvailable);
+          setNodeModeChecked(true);
+
+          if (nodeTableAvailable) {
+            /*
+             * Tell App/TopMenu immediately that Create Plan must use
+             * the Node path, even before NodeSequenceMain finishes
+             * loading its complete hierarchy.
+             */
+            onDataChange?.({
+              nodeMode: true,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Failed to detect node hierarchy:", error);
+        if (!cancelled) {
+          // Never break V1 because the new nodes table is unavailable.
+          setNodeMode(false);
+          setNodeModeChecked(true);
+          onDataChange?.(null);
+        }
+      }
+    };
+
+    setNodeModeChecked(false);
+    checkNodes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, onDataChange]);
+
+  if (!nodeModeChecked) {
+    return <Spin size="small" />;
+  }
+
+  if (nodeMode) {
+    return (
+      <NodeSequenceMain
+        projectId={projectId}
+        activeSimulationItem={activeSimulationItem}
+        {...props}
+      />
+    );
+  }
+
+  return <LegacyMain {...props} />;
+};
+
+export default React.memo(Main);

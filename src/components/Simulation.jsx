@@ -256,17 +256,22 @@ const getDisplayMassUnit = (formatting = DEFAULT_PROJECT_FORMATTING) => {
 export default function Simulation({
   loadedModelIds = [],
   simulationRequest = null,
+  simulationData = null,
   onSimulationRequestApplied,
 }) {
   const dispatch = useDispatch();
 
-  const plans = useSelector((state) => state.sequence.plans || []);
+  const reduxPlans = useSelector((state) => state.sequence.plans || []);
 
-  const sequenceObjects = useSelector(
+  const reduxSequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects || [],
   );
 
-  const subPlans = useSelector((state) => state.sequence.subPlans || []);
+  const reduxSubPlans = useSelector((state) => state.sequence.subPlans || []);
+
+  const plans = simulationData?.plans || reduxPlans;
+  const sequenceObjects = simulationData?.sequenceObjects || reduxSequenceObjects;
+  const subPlans = simulationData?.subPlans || reduxSubPlans;
 
   const tcapiRef = useRef(null);
   const intervalRef = useRef(null);
@@ -680,7 +685,7 @@ export default function Simulation({
       planId,
       subPlanId: requestedSubPlanId,
     });
-  }, [simulationRequest, plans, subPlans, onSimulationRequestApplied]);
+  }, [simulationRequest, plans, subPlans, onSimulationRequestApplied, simulationData]);
 
   /*
    * modelId và runtimeId đã được hydrate trong saga.

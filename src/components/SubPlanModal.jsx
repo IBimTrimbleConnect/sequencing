@@ -404,14 +404,26 @@ const SubPlanModal = ({
   open,
   onCancel,
   isEditing = false,
+  // V2 generic-node mode. When supplied, the modal keeps all existing
+  // creation modes but delegates persistence to the caller instead of V1 Saga.
+  nodeMode = false,
+  projectIdOverride = null,
+  pendingOverride = null,
+  onCreateOverride = null,
+  onUpdateOverride = null,
+  entityLabel = "Sub Plan",
 }) => {
   const dispatch = useDispatch();
 
   const [form] = Form.useForm();
 
-  const projectId = useSelector((state) => state.sequence.projectId || "");
+  const reduxProjectId = useSelector((state) => state.sequence.projectId || "");
 
-  const pending = useSelector((state) => state.sequence.pending);
+  const projectId = projectIdOverride || reduxProjectId;
+
+  const reduxPending = useSelector((state) => state.sequence.pending);
+
+  const pending = pendingOverride ?? reduxPending;
 
   const [color, setColor] = useState({
     ...DEFAULT_COLOR,
@@ -446,7 +458,7 @@ const SubPlanModal = ({
 
   const parentPlan = isEditing ? null : plan;
 
-  const modalTitle = title || (isEditing ? "Edit Sub Plan" : "Create Sub Plan");
+  const modalTitle = title || (isEditing ? `Edit ${entityLabel}` : `Create ${entityLabel}`);
 
   const submitButtonName = buttonName || (isEditing ? "Update" : "Create");
 
@@ -990,20 +1002,24 @@ const SubPlanModal = ({
         }
 
         if (!editingSubPlan?.id) {
-          message.error("Unable to retrieve the SubPlan ID.");
+          message.error(`Unable to retrieve the ${entityLabel} ID.`);
 
           return;
         }
 
-        dispatch(
-          UpdateSubPlanRequest({
-            id: editingSubPlan.id,
+        const updatePayload = {
+          id: editingSubPlan.id,
+          name: subPlanName,
+          color: normalizedColor,
+        };
 
-            name: subPlanName,
-
-            color: normalizedColor,
-          }),
-        );
+        if (nodeMode && onUpdateOverride) {
+          await onUpdateOverride(updatePayload);
+        } else {
+          dispatch(
+            UpdateSubPlanRequest(updatePayload),
+          );
+        }
 
         handleCancel();
 
@@ -1020,7 +1036,7 @@ const SubPlanModal = ({
       }
 
       if (!parentPlan?.id) {
-        message.error("Unable to retrieve the parent Plan ID.");
+        message.error(`Unable to retrieve the parent ${entityLabel} ID.`);
 
         return;
       }
@@ -1054,13 +1070,13 @@ const SubPlanModal = ({
       names = [...new Set(names)];
 
       if (!names.length) {
-        message.warning("Please enter or select at least one Sub Plan.");
+        message.warning(`Please enter or select at least one ${entityLabel}.`);
 
         return;
       }
 
       if (names.length > 500) {
-        message.error("A maximum of 500 Sub Plans can be created at once.");
+        message.error(`A maximum of 500 ${entityLabel}s can be created at once.`);
 
         return;
       }
@@ -1068,17 +1084,22 @@ const SubPlanModal = ({
       /*
        * Existing Saga splits by comma.
        */
-      dispatch(
-        CreateSubPlanRequest({
-          projectId,
+      const createPayload = {
+        projectId,
+        planId: parentPlan.id,
+        name: names.join(","),
+        color: normalizedColor,
+        names,
+        parentId: parentPlan.id,
+      };
 
-          planId: parentPlan.id,
-
-          name: names.join(","),
-
-          color: normalizedColor,
-        }),
-      );
+      if (nodeMode && onCreateOverride) {
+        await onCreateOverride(createPayload);
+      } else {
+        dispatch(
+          CreateSubPlanRequest(createPayload),
+        );
+      }
 
       handleCancel();
     } catch (error) {
@@ -1104,6 +1125,10 @@ const SubPlanModal = ({
     loadingCountries,
     loadingPublicHolidays,
     publicHolidayError,
+    nodeMode,
+    onCreateOverride,
+    onUpdateOverride,
+    entityLabel,
   ]);
 
   /* ------------------------------------------------------------------------ */
@@ -1184,7 +1209,7 @@ const SubPlanModal = ({
 
                   whitespace: true,
 
-                  message: "Please enter the SubPlan name.",
+                  message: `Please enter the ${entityLabel} name.`,
                 },
               ]}
             >

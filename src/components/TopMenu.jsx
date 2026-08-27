@@ -42,6 +42,7 @@ import {
 } from "../store/sequence/action";
 
 import CreatePlanModal from "./CreatePlanModal";
+import { createNodesBulk } from "../services/nodeService";
 import ExportExcelModal from "./ExportExcelModal";
 
 import {
@@ -69,6 +70,9 @@ const TopMenu = ({
   onRefreshModels,
   refreshingModels = false,
   refreshModelsError = "",
+  sequenceDataOverride = null,
+  nodeMode = false,
+  onSequenceRefresh,
 }) => {
   const dispatch = useDispatch();
 
@@ -94,13 +98,17 @@ const TopMenu = ({
   const [form] = Form.useForm();
   const [exportForm] = Form.useForm();
 
-  const plans = useSelector((state) => state.sequence.plans || []);
+  const reduxPlans = useSelector((state) => state.sequence.plans || []);
+
+  const plans = sequenceDataOverride?.plans || reduxPlans;
 
   const creatingPlans = useSelector((state) => state.sequence.pending === true);
 
-  const sequenceObjects = useSelector(
+  const reduxSequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects || [],
   );
+
+  const sequenceObjects = sequenceDataOverride?.sequenceObjects || reduxSequenceObjects;
 
   const projectIdFromRedux = useSelector(
     (state) => state.sequence.projectId || "",
@@ -208,7 +216,9 @@ const TopMenu = ({
   const handleCreate = useCallback(async () => {
     try {
       if (!isOwner) {
-        message.error("Only the project owner can create Plans.");
+        message.error(
+          `Only the project owner can create ${nodeMode ? "Root Nodes" : "Plans"}.`,
+        );
 
         return;
       }
@@ -228,7 +238,9 @@ const TopMenu = ({
       const quantity = Number(values.quantity);
 
       if (!baseName) {
-        message.warning("Please enter the Plan name.");
+        message.warning(
+          `Please enter the ${nodeMode ? "Root Node" : "Plan"} name.`,
+        );
 
         return;
       }
@@ -272,7 +284,7 @@ const TopMenu = ({
 
       if (duplicatePlans.length) {
         message.error(
-          `The following Plan names already exist: ${duplicatePlans
+          `The following ${nodeMode ? "Root Node" : "Plan"} names already exist: ${duplicatePlans
             .map((plan) => plan.name)
             .join(", ")}`,
         );
@@ -281,16 +293,35 @@ const TopMenu = ({
       }
 
       /*
-       * Chỉ dispatch một action.
-       * Saga gửi toàn bộ mảng xuống Supabase trong một insert.
+       * Node mode: Plan ở cấp root chính là Node root.
+       * Không ghi vào bảng `plans`; ghi trực tiếp vào `nodes`.
+       *
+       * Legacy mode: giữ nguyên flow V1 và dispatch Redux như trước.
        */
-      dispatch(
-        CreateMultiplePlansRequest({
-          projectId,
+      if (nodeMode) {
+        await createNodesBulk({
+          trimbleProjectId: projectId,
+          nodes: newPlans.map((plan) => ({
+            name: plan.name,
+            color: plan.color,
+            parentId: null,
+            // Let nodeService append new root nodes after existing roots.
+          })),
+        });
 
-          plans: newPlans,
-        }),
-      );
+        onSequenceRefresh?.();
+
+        message.success(
+          `${newPlans.length} ${newPlans.length === 1 ? "Node" : "Nodes"} created successfully.`,
+        );
+      } else {
+        dispatch(
+          CreateMultiplePlansRequest({
+            projectId,
+            plans: newPlans,
+          }),
+        );
+      }
 
       form.resetFields();
 
@@ -305,12 +336,15 @@ const TopMenu = ({
       setIsModalOpen(false);
     } catch (error) {
       if (!error?.errorFields) {
-        console.error("Failed to create Plans:", error);
+        console.error("Failed to create root nodes/plans:", error);
 
-        message.error(error?.message || "Unable to create the Plans.");
+        message.error(
+          error?.message ||
+            `Unable to create the ${nodeMode ? "Root Nodes" : "Plans"}.`,
+        );
       }
     }
-  }, [dispatch, form, isOwner, plans, projectId]);
+  }, [dispatch, form, isOwner, plans, projectId, nodeMode, onSequenceRefresh, message]);
 
   const handleCancel = useCallback(() => {
     form.resetFields();
@@ -892,7 +926,7 @@ const TopMenu = ({
     {
       key: "create-plans",
       icon: <FolderAddOutlined />,
-      label: "Create multiple plans",
+      label: nodeMode ? "Create multiple root nodes" : "Create multiple plans",
       disabled: !isOwner,
       onClick: handleOpenCreateModal,
     },
@@ -936,6 +970,7 @@ const TopMenu = ({
           open={isModalOpen}
           form={form}
           loading={creatingPlans}
+          entityLabel={nodeMode ? "Root Node" : "Plan"}
           onCreate={handleCreate}
           onCancel={handleCancel}
         />
@@ -1187,7 +1222,13 @@ const TopMenu = ({
                 />
               </Tooltip>
 
-              <Tooltip title="Create multiple plans">
+              <Tooltip
+                title={
+                  nodeMode
+                    ? "Create multiple root nodes"
+                    : "Create multiple plans"
+                }
+              >
                 <Button
                   size="large"
                   type="text"

@@ -2136,6 +2136,7 @@ const SortableSubItem = React.memo(
     visibleProperties = [],
     projectFormatting,
     isOwner = false,
+    nodeMode = false,
   }) => {
     const { message } = App.useApp();
 
@@ -2395,7 +2396,7 @@ const SortableSubItem = React.memo(
         },
         {
           key: "moveToSubPlan",
-          label: "Move to Sub Plan",
+          label: nodeMode ? "Move to Node" : "Move to Sub Plan",
           onClick: ({ domEvent }) => {
             domEvent.stopPropagation();
             onOpenMoveModal?.(item);
@@ -2427,6 +2428,7 @@ const SortableSubItem = React.memo(
       dateStep,
       considerWeekend,
       isOwner,
+      nodeMode,
       item,
       onAddCamera,
       onAssignDate,
@@ -2594,10 +2596,18 @@ const SequenceObjectCollapse = ({
   displayIndexMap,
   isOwner = false,
   loadedModelIds = [],
+
+  // Generic node-mode adapter used by the recursive V2 hierarchy.
+  nodeMode = false,
+  sequenceObjectsOverride = null,
+  projectIdOverride = null,
+  moveTargets = [],
+  onPersistObjects = null,
+  onMoveObjects = null,
 }) => {
   const dispatch = useDispatch();
 
-  const sequenceObjects = useSelector(
+  const reduxSequenceObjects = useSelector(
     (state) => state.sequence.sequenceObjects || [],
   );
 
@@ -2609,7 +2619,11 @@ const SequenceObjectCollapse = ({
     (state) => state.sequence.plans || [],
   );
 
-  const projectId = useSelector((state) => state.sequence.projectId || "");
+  const reduxProjectId = useSelector((state) => state.sequence.projectId || "");
+
+  const sequenceObjects = sequenceObjectsOverride || reduxSequenceObjects;
+  const projectId = projectIdOverride || reduxProjectId;
+  const currentGroupId = String(subPlan?.id ?? "");
 
   const loading = useSelector((state) => state.sequence.pending);
 
@@ -2842,16 +2856,71 @@ const SequenceObjectCollapse = ({
   );
 
   const reduxObjects = useMemo(() => {
-    const subPlanObjects = sequenceObjects.find(
-      (group) => group && String(group.subPlanId) === String(subPlan.id),
-    );
+    const currentObjectsGroup = sequenceObjects.find((group) => {
+      if (nodeMode) {
+        return group && String(group.nodeId) === currentGroupId;
+      }
 
-    return subPlanObjects?.objects || [];
-  }, [sequenceObjects, subPlan.id]);
+      return group && String(group.subPlanId) === currentGroupId;
+    });
+
+    return currentObjectsGroup?.objects || [];
+  }, [sequenceObjects, currentGroupId, nodeMode]);
 
   useEffect(() => {
-    setLocalObjects(reduxObjects);
-  }, [reduxObjects]);
+    if (!nodeMode) {
+      setLocalObjects(reduxObjects);
+      return;
+    }
+
+    /*
+     * A Node mutation may send DB-only rows back to this component. Preserve
+     * the already hydrated Trimble runtime fields while accepting the new
+     * persisted values.
+     */
+    setLocalObjects((previousObjects) => {
+      const previousByExternalId = new Map(
+        (previousObjects || []).map((object) => [
+          String(getExternalId(object) ?? ""),
+          object,
+        ]),
+      );
+
+      return (reduxObjects || []).map((incomingObject) => {
+        const previousObject = previousByExternalId.get(
+          String(getExternalId(incomingObject) ?? ""),
+        );
+
+        const incomingHasRuntime =
+          getObjectModelId(incomingObject) != null &&
+          getRuntimeId(incomingObject) != null &&
+          incomingObject?.objectAvailable !== false;
+
+        if (!previousObject || incomingHasRuntime) {
+          return incomingObject;
+        }
+
+        return {
+          ...incomingObject,
+          ...previousObject,
+          dbId: incomingObject.dbId ?? previousObject.dbId,
+          trimbleProjectId:
+            incomingObject.trimbleProjectId ??
+            previousObject.trimbleProjectId,
+          subPlanId: incomingObject.subPlanId,
+          nodeId: incomingObject.nodeId ?? previousObject.nodeId,
+          externalId:
+            incomingObject.externalId ?? getExternalId(previousObject),
+          assignedDate: incomingObject.assignedDate,
+          date: incomingObject.date,
+          sortDatetime: incomingObject.sortDatetime,
+          camera: incomingObject.camera,
+          createdAt: incomingObject.createdAt ?? previousObject.createdAt,
+          updatedAt: incomingObject.updatedAt ?? previousObject.updatedAt,
+        };
+      });
+    });
+  }, [reduxObjects, nodeMode]);
 
   const currentObjects = localObjects;
 
@@ -2896,119 +2965,84 @@ const SequenceObjectCollapse = ({
    * Sort by Plan first, then SubPlan name.
    */
   const moveTargetSubPlans = useMemo(
-    () =>
-      subPlans
-        .filter(
-          (item) =>
-            String(item?.id) !==
-            String(subPlan?.id),
-        )
-        .sort((first, second) => {
-          const firstPlan = String(
-            first?.planName ??
-              first?.plan?.name ??
-              first?.planId ??
-              "",
-          );
-
-          const secondPlan = String(
-            second?.planName ??
-              second?.plan?.name ??
-              second?.planId ??
-              "",
-          );
-
-          const planCompare =
-            firstPlan.localeCompare(
-              secondPlan,
-              undefined,
-              {
-                numeric: true,
-                sensitivity: "base",
-              },
-            );
-
-          if (planCompare !== 0) {
-            return planCompare;
-          }
-
-          return String(
-            first?.name || "",
-          ).localeCompare(
-            String(second?.name || ""),
-            undefined,
-            {
-              numeric: true,
-              sensitivity: "base",
-            },
-          );
-        }),
-    [
-      subPlans,
-      subPlan?.id,
-    ],
-  );
-
-  const moveSubPlanTreeData = useMemo(() => {
-    return plans
-      .map((plan) => {
-        const children = moveTargetSubPlans
-          .filter(
-            (targetSubPlan) =>
-              String(targetSubPlan?.planId) ===
-              String(plan?.id),
-          )
+    () => {
+      if (nodeMode) {
+        return (Array.isArray(moveTargets) ? moveTargets : [])
+          .filter((item) => String(item?.id) !== currentGroupId)
           .sort((first, second) =>
             String(first?.name || "").localeCompare(
               String(second?.name || ""),
               undefined,
-              {
-                numeric: true,
-                sensitivity: "base",
-              },
+              { numeric: true, sensitivity: "base" },
             ),
-          )
+          );
+      }
+
+      return subPlans
+        .filter((item) => String(item?.id) !== String(subPlan?.id))
+        .sort((first, second) => {
+          const firstPlan = String(first?.planName ?? first?.plan?.name ?? first?.planId ?? "");
+          const secondPlan = String(second?.planName ?? second?.plan?.name ?? second?.planId ?? "");
+          const planCompare = firstPlan.localeCompare(secondPlan, undefined, { numeric: true, sensitivity: "base" });
+          if (planCompare !== 0) return planCompare;
+          return String(first?.name || "").localeCompare(String(second?.name || ""), undefined, { numeric: true, sensitivity: "base" });
+        });
+    },
+    [subPlans, subPlan?.id, nodeMode, moveTargets, currentGroupId],
+  );
+
+  const moveSubPlanTreeData = useMemo(() => {
+    if (nodeMode) {
+      const items = moveTargetSubPlans;
+      const byParent = new Map();
+      const roots = [];
+
+      items.forEach((item) => {
+        const parentId = item?.parentId ?? item?.parent_id ?? null;
+        const key = String(parentId ?? "__ROOT__");
+        if (!byParent.has(key)) byParent.set(key, []);
+        byParent.get(key).push(item);
+      });
+
+      const build = (parentId) => {
+        const key = String(parentId ?? "__ROOT__");
+        return (byParent.get(key) || [])
+          .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { numeric: true, sensitivity: "base" }))
+          .map((item) => ({
+            title: item?.name || "Unnamed Node",
+            key: `node-${item.id}`,
+            nodeId: String(item.id),
+            isNode: true,
+            selectable: true,
+            children: build(item.id),
+          }));
+      };
+
+      return build(null);
+    }
+
+    return plans
+      .map((plan) => {
+        const children = moveTargetSubPlans
+          .filter((targetSubPlan) => String(targetSubPlan?.planId) === String(plan?.id))
+          .sort((first, second) => String(first?.name || "").localeCompare(String(second?.name || ""), undefined, { numeric: true, sensitivity: "base" }))
           .map((targetSubPlan) => ({
-            title:
-              targetSubPlan?.name ||
-              "Unnamed Sub Plan",
-
-            key:
-              `subplan-${targetSubPlan.id}`,
-
-            subPlanId:
-              String(targetSubPlan.id),
-
-            isSubPlan:
-              true,
-
-            selectable:
-              true,
+            title: targetSubPlan?.name || "Unnamed Sub Plan",
+            key: `subplan-${targetSubPlan.id}`,
+            subPlanId: String(targetSubPlan.id),
+            isSubPlan: true,
+            selectable: true,
           }));
 
         return {
-          title:
-            plan?.name ||
-            "Unnamed Plan",
-
-          key:
-            `plan-${plan.id}`,
-
-          selectable:
-            false,
-
+          title: plan?.name || "Unnamed Plan",
+          key: `plan-${plan.id}`,
+          selectable: false,
           children,
         };
       })
-      .filter(
-        (planNode) =>
-          Array.isArray(planNode.children) &&
-          planNode.children.length > 0,
-      );
-  }, [
-    plans,
-    moveTargetSubPlans,
-  ]);
+      .filter((planNode) => Array.isArray(planNode.children) && planNode.children.length > 0);
+  }, [plans, moveTargetSubPlans, nodeMode]);
 
   const loadedModelIdSet = useMemo(
     () =>
@@ -3570,9 +3604,11 @@ const SequenceObjectCollapse = ({
           runtimeId,
           modelId,
 
-          planId: object?.planId ?? group?.planId ?? group?.id,
+          planId: object?.planId ?? group?.planId ?? (nodeMode ? null : group?.id),
 
-          subPlanId: object?.subPlanId ?? group?.subPlanId,
+          subPlanId: object?.subPlanId ?? group?.subPlanId ?? (nodeMode ? group?.nodeId : null),
+
+          nodeId: object?.nodeId ?? group?.nodeId ?? null,
         });
       });
     });
@@ -3596,6 +3632,18 @@ const SequenceObjectCollapse = ({
         return;
       }
 
+      if (nodeMode && onPersistObjects) {
+        Promise.resolve(
+          onPersistObjects({
+            nodeId: subPlan.id,
+            objects: nextObjects,
+          }),
+        ).catch((error) => {
+          console.error("Failed to persist node objects:", error);
+        });
+        return;
+      }
+
       dispatch(
         SetObjectsRequest({
           projectId,
@@ -3605,7 +3653,7 @@ const SequenceObjectCollapse = ({
         }),
       );
     },
-    [dispatch, projectId, subPlan.id, subPlan.planId],
+    [dispatch, projectId, subPlan.id, subPlan.planId, nodeMode, onPersistObjects],
   );
 
   /*
@@ -3707,6 +3755,8 @@ const SequenceObjectCollapse = ({
 
           subPlanId: item.subPlanId,
 
+          nodeId: nodeMode ? (item.nodeId || subPlan.id) : undefined,
+
           modelId: getObjectModelId(item),
 
           runtimeId: getRuntimeId(item),
@@ -3719,14 +3769,16 @@ const SequenceObjectCollapse = ({
 
       await selectObjectsInViewer([item]);
     },
-    [items, dispatch, selectObjectsInViewer],
+    [items, dispatch, selectObjectsInViewer, nodeMode, subPlan.id],
   );
 
   const getCurrentIndex = useCallback(() => {
     if (activeSimulationItem) {
       return items.findIndex(
         (item) =>
-          String(item.subPlanId) === String(activeSimulationItem.subPlanId) &&
+          (nodeMode
+            ? String(item.nodeId || item.subPlanId) === String(activeSimulationItem.nodeId || activeSimulationItem.subPlanId)
+            : String(item.subPlanId) === String(activeSimulationItem.subPlanId)) &&
           String(getObjectModelId(item)) ===
             String(activeSimulationItem.modelId) &&
           String(getExternalId(item)) ===
@@ -3742,8 +3794,9 @@ const SequenceObjectCollapse = ({
 
     return items.findIndex(
       (item) =>
-        String(item.subPlanId) ===
-          String(currentItem.subPlanId || subPlan.id) &&
+        (nodeMode
+          ? String(item.nodeId || item.subPlanId) === String(currentItem.nodeId || subPlan.id)
+          : String(item.subPlanId) === String(currentItem.subPlanId || subPlan.id)) &&
         isSameObject(item, currentItem),
     );
   }, [
@@ -3753,6 +3806,7 @@ const SequenceObjectCollapse = ({
     visibleObjects,
     focusedIndex,
     subPlan.id,
+    nodeMode,
   ]);
 
   const next = useCallback(() => {
@@ -3785,7 +3839,9 @@ const SequenceObjectCollapse = ({
         SetActiveSimulationItem({
           planId: item.planId,
 
-          subPlanId: item.subPlanId || subPlan.id,
+          subPlanId: item.subPlanId || (nodeMode ? undefined : subPlan.id),
+
+          nodeId: nodeMode ? (item.nodeId || subPlan.id) : undefined,
 
           modelId: getObjectModelId(item),
 
@@ -3797,7 +3853,7 @@ const SequenceObjectCollapse = ({
         }),
       );
     },
-    [dispatch, subPlan.id],
+    [dispatch, subPlan.id, nodeMode],
   );
 
   useEffect(() => {
@@ -3805,7 +3861,11 @@ const SequenceObjectCollapse = ({
       return;
     }
 
-    if (String(activeSimulationItem.subPlanId) !== String(subPlan.id)) {
+    if (
+      nodeMode
+        ? String(activeSimulationItem.nodeId || activeSimulationItem.subPlanId) !== String(subPlan.id)
+        : String(activeSimulationItem.subPlanId) !== String(subPlan.id)
+    ) {
       return;
     }
 
@@ -3841,7 +3901,7 @@ const SequenceObjectCollapse = ({
     }, 150);
 
     return () => clearTimeout(timeoutId);
-  }, [activeSimulationItem, visibleObjects, subPlan.id]);
+  }, [activeSimulationItem, visibleObjects, subPlan.id, nodeMode]);
 
   const handleKeyDown = useCallback(
     (event) => {
@@ -3984,21 +4044,29 @@ const SequenceObjectCollapse = ({
 
       setLocalObjects(reorderedAll);
 
-      dispatch(
-        UpdateSequenceObjectSortDatesRequest({
-          subPlanId: subPlan.id,
-
-          objects: updatedMovingObjects.map((object) => ({
-            dbId: object.dbId,
-
+      if (nodeMode && onPersistObjects) {
+        Promise.resolve(
+          onPersistObjects({
+            nodeId: subPlan.id,
+            objects: reorderedAll,
+          }),
+        ).catch((error) => {
+          console.error("Failed to persist dragged node objects:", error);
+          setLocalObjects(currentObjects);
+        });
+      } else {
+        dispatch(
+          UpdateSequenceObjectSortDatesRequest({
             subPlanId: subPlan.id,
-
-            externalId: getExternalId(object),
-
-            sortDatetime: object.sortDatetime,
-          })),
-        }),
-      );
+            objects: updatedMovingObjects.map((object) => ({
+              dbId: object.dbId,
+              subPlanId: subPlan.id,
+              externalId: getExternalId(object),
+              sortDatetime: object.sortDatetime,
+            })),
+          }),
+        );
+      }
 
       setSelectedIds(updatedMovingObjects);
 
@@ -4024,6 +4092,8 @@ const SequenceObjectCollapse = ({
       isOwner,
       subPlan.id,
       loadedModelIdSet,
+      nodeMode,
+      onPersistObjects,
     ],
   );
 
@@ -4133,106 +4203,67 @@ const SequenceObjectCollapse = ({
     setMoveTargetSubPlanId(null);
   }, []);
 
-  const handleConfirmMoveToSubPlan = useCallback(() => {
-    if (!isOwner || !moveTriggerItem || !moveTargetSubPlanId) {
-      return;
-    }
+  const handleConfirmMoveToSubPlan = useCallback(async () => {
+    if (!isOwner || !moveTriggerItem || !moveTargetSubPlanId) return;
 
-    const targetSubPlan = subPlans.find(
-      (item) =>
-        String(item?.id) === String(moveTargetSubPlanId),
-    );
-
-    if (!targetSubPlan?.id) {
-      return;
-    }
-
+    const targetId = String(moveTargetSubPlanId);
     const triggerKey = getObjectKey(moveTriggerItem);
-    const selectedKeySet = new Set(
-      selectedIds.map((item) => getObjectKey(item)),
-    );
+    const selectedKeySet = new Set(selectedIds.map((item) => getObjectKey(item)));
+    const keysToMove = selectedKeySet.has(triggerKey) ? selectedKeySet : new Set([triggerKey]);
 
-    const keysToMove = selectedKeySet.has(triggerKey)
-      ? selectedKeySet
-      : new Set([triggerKey]);
-
-    const movingObjects = currentObjects.filter(
-      (object) => keysToMove.has(getObjectKey(object)),
-    );
-
+    const movingObjects = currentObjects.filter((object) => keysToMove.has(getObjectKey(object)));
     if (!movingObjects.length) {
       handleCloseMoveModal();
       return;
     }
 
-    const remainingObjects = currentObjects.filter(
-      (object) => !keysToMove.has(getObjectKey(object)),
-    );
+    if (nodeMode && onMoveObjects) {
+      const targetGroup = sequenceObjects.find((group) => String(group?.nodeId) === targetId);
+      const targetObjects = Array.isArray(targetGroup?.objects) ? targetGroup.objects : [];
+      const targetKeys = new Set(targetObjects.map((object) => getObjectKey(object)));
+      const movedObjects = movingObjects.filter((object) => !targetKeys.has(getObjectKey(object)));
+      const remainingObjects = currentObjects.filter((object) => !keysToMove.has(getObjectKey(object)));
 
-    const targetGroup = sequenceObjects.find(
-      (group) =>
-        String(group?.subPlanId) === String(targetSubPlan.id),
-    );
+      try {
+        await onMoveObjects({
+          sourceNodeId: subPlan.id,
+          targetNodeId: targetId,
+          remainingObjects,
+          movedObjects,
+          targetObjects,
+        });
 
-    const targetObjects = Array.isArray(targetGroup?.objects)
-      ? targetGroup.objects
-      : [];
+        setLocalObjects(remainingObjects);
+        setSelectedIds([]);
+        setLastSelected(null);
+        setFocusedIndex(remainingObjects.length ? Math.min(focusedIndex, remainingObjects.length - 1) : -1);
+        handleCloseMoveModal();
+      } catch (error) {
+        console.error("Failed to move node objects:", error);
+      }
+      return;
+    }
 
-    const targetKeys = new Set(
-      targetObjects.map((object) => getObjectKey(object)),
-    );
+    const targetSubPlan = subPlans.find((item) => String(item?.id) === targetId);
+    if (!targetSubPlan?.id) return;
 
-    const movedObjects = movingObjects
-      .filter((object) => !targetKeys.has(getObjectKey(object)))
-      .map((object) => ({
-        ...object,
-        planId: targetSubPlan.planId,
-        subPlanId: targetSubPlan.id,
-      }));
+    const remainingObjects = currentObjects.filter((object) => !keysToMove.has(getObjectKey(object)));
+    const targetGroup = sequenceObjects.find((group) => String(group?.subPlanId) === String(targetSubPlan.id));
+    const targetObjects = Array.isArray(targetGroup?.objects) ? targetGroup.objects : [];
+    const targetKeys = new Set(targetObjects.map((object) => getObjectKey(object)));
+    const movedObjects = movingObjects.filter((object) => !targetKeys.has(getObjectKey(object))).map((object) => ({ ...object, planId: targetSubPlan.planId, subPlanId: targetSubPlan.id }));
 
     setLocalObjects(remainingObjects);
-
-    dispatch(
-      SetObjectsRequest({
-        projectId,
-        planId: subPlan.planId,
-        subPlanId: subPlan.id,
-        objects: remainingObjects,
-      }),
-    );
-
-    dispatch(
-      SetObjectsRequest({
-        projectId,
-        planId: targetSubPlan.planId,
-        subPlanId: targetSubPlan.id,
-        objects: [...targetObjects, ...movedObjects],
-      }),
-    );
-
+    dispatch(SetObjectsRequest({ projectId, planId: subPlan.planId, subPlanId: subPlan.id, objects: remainingObjects }));
+    dispatch(SetObjectsRequest({ projectId, planId: targetSubPlan.planId, subPlanId: targetSubPlan.id, objects: [...targetObjects, ...movedObjects] }));
     setSelectedIds([]);
     setLastSelected(null);
-    setFocusedIndex(
-      remainingObjects.length
-        ? Math.min(focusedIndex, remainingObjects.length - 1)
-        : -1,
-    );
-
+    setFocusedIndex(remainingObjects.length ? Math.min(focusedIndex, remainingObjects.length - 1) : -1);
     handleCloseMoveModal();
   }, [
-    currentObjects,
-    dispatch,
-    focusedIndex,
-    handleCloseMoveModal,
-    isOwner,
-    moveTargetSubPlanId,
-    moveTriggerItem,
-    projectId,
-    selectedIds,
-    sequenceObjects,
-    subPlan.id,
-    subPlan.planId,
-    subPlans,
+    isOwner, moveTriggerItem, moveTargetSubPlanId, selectedIds, currentObjects,
+    nodeMode, onMoveObjects, sequenceObjects, subPlan.id, subPlan.planId,
+    subPlans, dispatch, projectId, focusedIndex, handleCloseMoveModal,
   ]);
 
   const handleDelete = useCallback(
@@ -4784,6 +4815,7 @@ const SequenceObjectCollapse = ({
                     listRef={listRef}
                     visibleProperties={visibleProperties}
                     projectFormatting={projectFormatting}
+                    nodeMode={nodeMode}
                   />
                 ))}
               </tbody>
@@ -4870,7 +4902,7 @@ const SequenceObjectCollapse = ({
             selectedKeys={
               moveTargetSubPlanId
                 ? [
-                    `subplan-${moveTargetSubPlanId}`,
+                    `${nodeMode ? "node" : "subplan"}-${moveTargetSubPlanId}`,
                   ]
                 : []
             }
@@ -4882,17 +4914,15 @@ const SequenceObjectCollapse = ({
               const node =
                 info?.node;
 
-              if (
-                !node?.isSubPlan
-              ) {
+              if (nodeMode) {
+                if (!node?.isNode) return;
+                setMoveTargetSubPlanId(String(node.nodeId));
                 return;
               }
 
-              setMoveTargetSubPlanId(
-                String(
-                  node.subPlanId,
-                ),
-              );
+              if (!node?.isSubPlan) return;
+
+              setMoveTargetSubPlanId(String(node.subPlanId));
             }}
 
             blockNode

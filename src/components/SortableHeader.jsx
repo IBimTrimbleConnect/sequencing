@@ -119,6 +119,9 @@ const SortableHeader = ({
 
   onSimulation,
 
+  addChildLabel = "Create Sub Plan",
+  copyLabel = "Copy Sub Plan",
+
   /*
    * Date assignment.
    *
@@ -616,7 +619,7 @@ const SortableHeader = ({
             ),
 
             label:
-              "Create Sub Plan",
+              addChildLabel,
 
             callback:
               onAddSubPlan,
@@ -674,7 +677,7 @@ const SortableHeader = ({
             ),
 
             label:
-              "Copy Sub Plan",
+              copyLabel,
 
             callback:
               onCopySubPlan,
@@ -918,6 +921,8 @@ const SortableHeader = ({
       onHighlightObject,
 
       onSimulation,
+      addChildLabel,
+      copyLabel,
 
       onAssignDate,
 

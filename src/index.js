@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { ConfigProvider } from "antd";
+import { App as AntdApp, ConfigProvider } from "antd";
 import { Provider } from "react-redux";
 import "./index.css";
 import store from "./store";
@@ -10,8 +10,10 @@ const root = ReactDOM.createRoot(document.getElementById("root"));
 
 root.render(
   <Provider store={store}>
-    <ConfigProvider>
-      <RootRouter />
-    </ConfigProvider>
+    <AntdApp>
+      <ConfigProvider>
+        <RootRouter />
+      </ConfigProvider>
+    </AntdApp>
   </Provider>,
 );

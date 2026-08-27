@@ -17,6 +17,9 @@ function mapSequenceObject(row) {
     subPlanId:
       row.sub_plan_id,
 
+    nodeId:
+      row.node_id ?? null,
+
     externalId:
       row.external_id,
 
@@ -33,20 +36,9 @@ function mapSequenceObject(row) {
       row.camera ?? null,
 
     /*
-     * Runtime-only fields.
+     * Runtime fields are added only by hydrateSequenceObjects().
+     * Mutation responses must not mark hydrated objects unavailable.
      */
-    modelId: null,
-    runtimeId: null,
-    id: null,
-
-    asmPos: null,
-    asmName: null,
-    mainProfile: null,
-    positionCode: null,
-    length: null,
-    weight: null,
-
-    objectAvailable: false,
 
     createdAt:
       row.created_at,
@@ -60,6 +52,7 @@ const OBJECT_COLUMNS = `
   id,
   trimble_project_id,
   sub_plan_id,
+  node_id,
   external_id,
   assigned_date,
   sort_datetime,
@@ -100,6 +93,9 @@ function normalizeObjectRow({
 
     sub_plan_id:
       subPlanId,
+
+    node_id:
+      object?.nodeId ?? null,
 
     external_id:
       normalizeExternalId(
@@ -579,4 +575,140 @@ export async function updateSequenceObjectFields(
   }
 
   return updatedObjects;
+}
+
+
+export async function getSequenceObjectsByNode(nodeId) {
+  if (!nodeId) throw new Error("Node ID is required.");
+
+  const { data, error } = await supabase
+    .from("sequence_objects")
+    .select(OBJECT_COLUMNS)
+    .eq("node_id", nodeId)
+    .order("sort_datetime", { ascending: true, nullsFirst: false });
+
+  if (error) throw error;
+  return (data || []).map(mapSequenceObject);
+}
+
+export async function replaceSequenceObjectsForNode({
+  trimbleProjectId,
+  nodeId,
+  objects,
+}) {
+  if (!trimbleProjectId) throw new Error("Trimble project ID is required.");
+  if (!nodeId) throw new Error("Node ID is required.");
+  if (!Array.isArray(objects)) throw new Error("Objects must be an array.");
+
+  const existingRows = await getSequenceObjectsByNode(nodeId);
+  const desiredDbIds = new Set(
+    objects
+      .map((object) => object?.dbId)
+      .filter(Boolean)
+      .map(String),
+  );
+
+  const idsToDelete = existingRows
+    .map((object) => object?.dbId)
+    .filter(Boolean)
+    .filter((id) => !desiredDbIds.has(String(id)));
+
+  if (idsToDelete.length) {
+    const { error } = await supabase
+      .from("sequence_objects")
+      .delete()
+      .in("id", idsToDelete);
+    if (error) throw error;
+  }
+
+  const baseDate = new Date();
+  const inserted = [];
+  const updated = [];
+
+  for (let index = 0; index < objects.length; index += 1) {
+    const object = objects[index];
+    const dbId = object?.dbId ?? null;
+    const assignedDate = object?.assignedDate ?? object?.assigned_date ?? object?.date ?? null;
+    const sortDatetime = object?.sortDatetime ?? object?.sort_datetime ?? createUtcSortDate(baseDate, index);
+    const camera = object?.camera ?? null;
+
+    if (dbId) {
+      const { data, error } = await supabase
+        .from("sequence_objects")
+        .update({
+          node_id: nodeId,
+          assigned_date: assignedDate,
+          sort_datetime: sortDatetime,
+          camera,
+        })
+        .eq("id", dbId)
+        .select(OBJECT_COLUMNS)
+        .single();
+      if (error) throw error;
+      updated.push(mapSequenceObject(data));
+      continue;
+    }
+
+    const row = {
+      trimble_project_id: String(trimbleProjectId),
+      sub_plan_id: object?.subPlanId ?? null,
+      node_id: nodeId,
+      external_id: normalizeExternalId(object),
+      assigned_date: assignedDate,
+      sort_datetime: sortDatetime,
+      camera,
+    };
+
+    const { data, error } = await supabase
+      .from("sequence_objects")
+      .insert(row)
+      .select(OBJECT_COLUMNS)
+      .single();
+    if (error) throw error;
+    inserted.push(mapSequenceObject(data));
+  }
+
+  return [...updated, ...inserted].sort((a, b) =>
+    new Date(a?.sortDatetime || 0).getTime() - new Date(b?.sortDatetime || 0).getTime(),
+  );
+}
+
+export async function updateSequenceObjectSortDatesForNode(objects) {
+  if (!Array.isArray(objects)) throw new Error("Sequence objects must be an array.");
+  if (!objects.length) return [];
+
+  const updated = [];
+  for (const object of objects) {
+    if (!object?.dbId && !object?.id) throw new Error("Object database ID is required.");
+    const id = object.dbId ?? object.id;
+    const sortDate = new Date(object.sortDatetime ?? object.sort_datetime);
+    if (Number.isNaN(sortDate.getTime())) throw new Error("Invalid sort datetime.");
+
+    const { data, error } = await supabase
+      .from("sequence_objects")
+      .update({ sort_datetime: sortDate.toISOString() })
+      .eq("id", id)
+      .select(OBJECT_COLUMNS)
+      .single();
+
+    if (error) throw error;
+    updated.push(mapSequenceObject(data));
+  }
+
+  return updated;
+}
+
+export async function moveSequenceObjectsToNode({ objectIds, targetNodeId }) {
+  if (!targetNodeId) throw new Error("Target Node ID is required.");
+  if (!Array.isArray(objectIds) || !objectIds.length) return [];
+
+  const ids = objectIds.filter(Boolean);
+  const { data, error } = await supabase
+    .from("sequence_objects")
+    .update({ node_id: targetNodeId })
+    .in("id", ids)
+    .select(OBJECT_COLUMNS);
+
+  if (error) throw error;
+  return (data || []).map(mapSequenceObject);
 }

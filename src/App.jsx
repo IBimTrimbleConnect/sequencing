@@ -131,6 +131,28 @@ export default function App() {
    */
   const [simulationRequest, setSimulationRequest] = useState(null);
 
+  const [simulationData, setSimulationData] = useState(null);
+
+  const [sequenceDataOverride, setSequenceDataOverride] = useState(null);
+
+  /*
+   * `true` means the current project can use the nodes hierarchy.
+   * This is intentionally independent from whether the nodes table
+   * currently contains rows.
+   */
+  const [nodeModeAvailable, setNodeModeAvailable] = useState(false);
+
+  const handleSequenceDataChange = useCallback((data) => {
+    setSequenceDataOverride(data);
+    setNodeModeAvailable(data?.nodeMode === true);
+  }, []);
+
+  const [sequenceRefreshKey, setSequenceRefreshKey] = useState(0);
+
+  const handleSequenceRefresh = useCallback(() => {
+    setSequenceRefreshKey((value) => value + 1);
+  }, []);
+
   const [loading, setLoading] = useState(true);
 
   const [registeringTrial, setRegisteringTrial] = useState(false);
@@ -798,6 +820,11 @@ export default function App() {
     trialProfile,
   ]);
 
+  useEffect(() => {
+    setSimulationRequest(null);
+    setSimulationData(null);
+  }, [projectId]);
+
   const handleSimulationRequest = useCallback(
     (value) => {
       if (isFree || !value) {
@@ -814,16 +841,18 @@ export default function App() {
 
       setSimulationRequest({
         planId: String(planId),
-
         subPlanId: subPlanId != null ? String(subPlanId) : null,
-
         requestId: Date.now(),
       });
+
+      setSimulationData(value?.simulationData || null);
     },
     [isFree],
   );
 
   const handleSimulationRequestApplied = useCallback(() => {
+    // Keep simulationData alive while the shared Simulation engine is
+    // playing. It is replaced automatically by the next simulation request.
     setSimulationRequest(null);
   }, []);
 
@@ -996,6 +1025,12 @@ export default function App() {
         isViewer={isViewer}
         isFree={isFree}
         readOnly={!isOwner}
+        sequenceDataOverride={sequenceDataOverride}
+        nodeMode={
+          nodeModeAvailable ||
+          Boolean(sequenceDataOverride?.nodeMode)
+        }
+        onSequenceRefresh={handleSequenceRefresh}
         onRefreshModels={handleRefreshModels}
         refreshingModels={refreshingModels}
         refreshModelsError={refreshModelsError}
@@ -1122,6 +1157,8 @@ export default function App() {
           readOnly={!isOwner}
           loadedModelIds={loadedModelIds}
           onSimulation={handleSimulationRequest}
+          onDataChange={handleSequenceDataChange}
+          sequenceRefreshKey={sequenceRefreshKey}
         />
       </Content>
 
@@ -1136,7 +1173,13 @@ export default function App() {
         <Simulation
           loadedModelIds={loadedModelIds}
           simulationRequest={simulationRequest}
-          onSimulationPlanApplied={handleSimulationRequestApplied}
+          simulationData={
+            simulationData ||
+            (sequenceDataOverride?.nodeMode
+              ? sequenceDataOverride
+              : null)
+          }
+          onSimulationRequestApplied={handleSimulationRequestApplied}
         />
       </Footer>
 
