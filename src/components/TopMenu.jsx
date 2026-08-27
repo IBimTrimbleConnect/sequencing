@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
+  Dropdown,
   Empty,
   Flex,
   Form,
@@ -15,6 +16,8 @@ import {
   DownloadOutlined,
   FileSearchOutlined,
   FolderAddOutlined,
+  MoreOutlined,
+  SyncOutlined,
   ReloadOutlined,
   VideoCameraOutlined,
   TableOutlined,
@@ -68,6 +71,25 @@ const TopMenu = ({
   refreshModelsError = "",
 }) => {
   const dispatch = useDispatch();
+
+  const [compactMenu, setCompactMenu] = useState(false);
+
+  useEffect(() => {
+    const updateCompactMenu = () => {
+      /*
+       * The extension can become very narrow inside Trimble Connect.
+       * Collapse toolbar actions into a 3-dot menu before they wrap.
+       */
+      setCompactMenu(window.innerWidth < 300);
+    };
+
+    updateCompactMenu();
+    window.addEventListener("resize", updateCompactMenu);
+
+    return () => {
+      window.removeEventListener("resize", updateCompactMenu);
+    };
+  }, []);
 
   const [form] = Form.useForm();
   const [exportForm] = Form.useForm();
@@ -128,8 +150,19 @@ const TopMenu = ({
     columnsError,
     setSelectedPresetName,
     refreshColumns,
+    reloadPsetValues,
+    selectedFields,
+    psetApiUrl,
   } =
     useSequenceColumnConfig();
+
+  const hasPsetColumns =
+    Array.isArray(selectedFields) &&
+    selectedFields.some((field) =>
+      /(?:^|\+)prop_[a-z0-9_]+$/i.test(
+        String(field || "").trim(),
+      ),
+    );
 
   const columnSetOptions =
     React.useMemo(
@@ -837,6 +870,65 @@ const TopMenu = ({
     }
   }, [onRefreshModels]);
 
+  const compactMenuItems = [
+    {
+      key: "refresh-models",
+      icon: <SyncOutlined />,
+      label: "Load Models",
+      disabled:
+        refreshingModels ||
+        typeof onRefreshModels !== "function",
+      onClick: handleRefreshModels,
+    },
+    {
+      key: "reload-pset",
+      icon: <ReloadOutlined />,
+      label: "Reload PSet",
+      disabled:
+        !hasPsetColumns ||
+        !psetApiUrl,
+      onClick: reloadPsetValues,
+    },
+    {
+      key: "create-plans",
+      icon: <FolderAddOutlined />,
+      label: "Create multiple plans",
+      disabled: !isOwner,
+      onClick: handleOpenCreateModal,
+    },
+    {
+      key: "export-excel",
+      icon: <DownloadOutlined />,
+      label: "Export to Excel",
+      disabled: isFree,
+      onClick: handleOpenExportModal,
+    },
+    {
+      key: "export-mp4",
+      icon: <VideoCameraOutlined />,
+      label: exportingVideo
+        ? `Exporting MP4 ${videoExportProgress}%`
+        : "Export MP4",
+      disabled:
+        isFree ||
+        exportingVideo ||
+        simulationFrameCount === 0,
+      onClick: handleExportSimulationMp4,
+    },
+    {
+      key: "datatable-preset",
+      icon: <TableOutlined />,
+      label: "DataTable preset",
+      onClick: () => setColumnConfigOpen(true),
+    },
+    {
+      key: "highlight",
+      icon: <FileSearchOutlined />,
+      label: "Highlight selected object",
+      onClick: handleHighlight,
+    },
+  ];
+
   return (
     <>
       {isOwner && (
@@ -1034,134 +1126,169 @@ const TopMenu = ({
         </h1>
 
         <Flex justify="flex-end">
-          <Space size={4}>
-            <Tooltip title={refreshModelsError || "Refresh loaded models"}>
+          {compactMenu ? (
+            <Dropdown
+              trigger={["click"]}
+              placement="bottomRight"
+              menu={{
+                items: compactMenuItems,
+              }}
+            >
               <Button
                 size="large"
                 type="text"
-                loading={refreshingModels}
-                disabled={
-                  refreshingModels || typeof onRefreshModels !== "function"
-                }
+                aria-label="More actions"
                 icon={
-                  !refreshingModels ? (
+                  <MoreOutlined
+                    style={{
+                      fontSize: 24,
+                    }}
+                  />
+                }
+              />
+            </Dropdown>
+          ) : (
+            <Space size={4}>
+              <Tooltip title={refreshModelsError || "Load / refresh models"}>
+                <Button
+                  size="large"
+                  type="text"
+                  loading={refreshingModels}
+                  disabled={
+                    refreshingModels ||
+                    typeof onRefreshModels !== "function"
+                  }
+                  icon={
+                    !refreshingModels ? (
+                      <SyncOutlined
+                        style={{
+                          fontSize: 22,
+                        }}
+                      />
+                    ) : null
+                  }
+                  onClick={handleRefreshModels}
+                />
+              </Tooltip>
+
+              <Tooltip title="Reload Property Set values">
+                <Button
+                  size="large"
+                  type="text"
+                  disabled={!hasPsetColumns || !psetApiUrl}
+                  icon={
                     <ReloadOutlined
                       style={{
                         fontSize: 22,
                       }}
                     />
-                  ) : null
-                }
-                onClick={handleRefreshModels}
-              />
-            </Tooltip>
+                  }
+                  onClick={reloadPsetValues}
+                />
+              </Tooltip>
 
-            <Tooltip title="Create multiple plans">
-              <Button
-                size="large"
-                type="text"
-                disabled={!isOwner}
-                icon={
-                  <FolderAddOutlined
-                    style={{
-                      fontSize: 22,
-                    }}
-                  />
-                }
-                onClick={handleOpenCreateModal}
-              />
-            </Tooltip>
-
-            <Tooltip
-              title={
-                isFree
-                  ? "Excel export is not available with the Free License."
-                  : "Export to Excel"
-              }
-            >
-              <Button
-                size="large"
-                type="text"
-                disabled={isFree}
-                icon={
-                  <DownloadOutlined
-                    style={{
-                      fontSize: 22,
-                    }}
-                  />
-                }
-                onClick={handleOpenExportModal}
-              />
-            </Tooltip>
-
-            <Tooltip
-              title={
-                isFree
-                  ? "MP4 export is not available with the Free License."
-                  : exportingVideo
-                    ? `Exporting MP4 ${videoExportProgress}%`
-                    : simulationFrameCount === 0
-                      ? "Run the simulation first to capture video frames."
-                      : `Export MP4 (${simulationFrameCount} frames)`
-              }
-            >
-              <Button
-                size="large"
-                type="text"
-                loading={exportingVideo}
-                disabled={
-                  isFree ||
-                  exportingVideo ||
-                  simulationFrameCount === 0
-                }
-                icon={
-                  !exportingVideo ? (
-                    <VideoCameraOutlined
+              <Tooltip title="Create multiple plans">
+                <Button
+                  size="large"
+                  type="text"
+                  disabled={!isOwner}
+                  icon={
+                    <FolderAddOutlined
                       style={{
                         fontSize: 22,
                       }}
                     />
-                  ) : null
-                }
-                onClick={handleExportSimulationMp4}
-              />
-            </Tooltip>
+                  }
+                  onClick={handleOpenCreateModal}
+                />
+              </Tooltip>
 
-            <Tooltip title="Select Sequence Object DataTable preset">
-              <Button
-                size="large"
-                type="text"
-                icon={
-                  <TableOutlined
-                    style={{
-                      fontSize:
-                        22,
-                    }}
-                  />
+              <Tooltip
+                title={
+                  isFree
+                    ? "Excel export is not available with the Free License."
+                    : "Export to Excel"
                 }
-                onClick={() =>
-                  setColumnConfigOpen(
-                    true,
-                  )
-                }
-              />
-            </Tooltip>
+              >
+                <Button
+                  size="large"
+                  type="text"
+                  disabled={isFree}
+                  icon={
+                    <DownloadOutlined
+                      style={{
+                        fontSize: 22,
+                      }}
+                    />
+                  }
+                  onClick={handleOpenExportModal}
+                />
+              </Tooltip>
 
-            <Tooltip title="Highlight row from selected object">
-              <Button
-                size="large"
-                type="text"
-                icon={
-                  <FileSearchOutlined
-                    style={{
-                      fontSize: 22,
-                    }}
-                  />
+              <Tooltip
+                title={
+                  isFree
+                    ? "MP4 export is not available with the Free License."
+                    : exportingVideo
+                      ? `Exporting MP4 ${videoExportProgress}%`
+                      : simulationFrameCount === 0
+                        ? "Run the simulation first to capture video frames."
+                        : `Export MP4 (${simulationFrameCount} frames)`
                 }
-                onClick={handleHighlight}
-              />
-            </Tooltip>
-          </Space>
+              >
+                <Button
+                  size="large"
+                  type="text"
+                  loading={exportingVideo}
+                  disabled={
+                    isFree ||
+                    exportingVideo ||
+                    simulationFrameCount === 0
+                  }
+                  icon={
+                    !exportingVideo ? (
+                      <VideoCameraOutlined
+                        style={{
+                          fontSize: 22,
+                        }}
+                      />
+                    ) : null
+                  }
+                  onClick={handleExportSimulationMp4}
+                />
+              </Tooltip>
+
+              <Tooltip title="Select Sequence Object DataTable preset">
+                <Button
+                  size="large"
+                  type="text"
+                  icon={
+                    <TableOutlined
+                      style={{
+                        fontSize: 22,
+                      }}
+                    />
+                  }
+                  onClick={() => setColumnConfigOpen(true)}
+                />
+              </Tooltip>
+
+              <Tooltip title="Highlight row from selected object">
+                <Button
+                  size="large"
+                  type="text"
+                  icon={
+                    <FileSearchOutlined
+                      style={{
+                        fontSize: 22,
+                      }}
+                    />
+                  }
+                  onClick={handleHighlight}
+                />
+              </Tooltip>
+            </Space>
+          )}
         </Flex>
       </Flex>
     </>

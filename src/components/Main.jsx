@@ -150,6 +150,22 @@ const addWorkingDays = (value, amount) => {
   return result;
 };
 
+const addSequenceDays = (value, amount, considerWeekend = false) => {
+  const parsed = parseDate(value);
+
+  if (!parsed) {
+    return null;
+  }
+
+  if (considerWeekend) {
+    return parsed
+      .startOf("day")
+      .add(Number(amount) || 0, "day");
+  }
+
+  return addWorkingDays(value, amount);
+};
+
 /* ========================================================================== */
 /* MAIN                                                                       */
 /* ========================================================================== */
@@ -880,6 +896,7 @@ const Main = ({
         selectedPlan,
         date,
         dateStep,
+        considerWeekend = false,
       ) => {
         if (
           !isOwner ||
@@ -1017,9 +1034,10 @@ const Main = ({
                    * every SubPlan in this Plan.
                    */
                   nextDate =
-                    addWorkingDays(
+                    addSequenceDays(
                       date,
                       dateCount,
+                      considerWeekend,
                     );
 
                   dateCount +=
@@ -1072,9 +1090,10 @@ const Main = ({
                    * Weekend results are skipped automatically.
                    */
                   nextDate =
-                    addWorkingDays(
+                    addSequenceDays(
                       parsedDate,
                       step,
+                      considerWeekend,
                     );
                 }
 

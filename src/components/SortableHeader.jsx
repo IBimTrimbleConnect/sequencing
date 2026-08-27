@@ -10,6 +10,7 @@ import {
   Dropdown,
   Input,
   Popconfirm,
+  Checkbox,
 } from "antd";
 
 import {
@@ -127,6 +128,7 @@ const SortableHeader = ({
    *   plan,
    *   date,
    *   dateStep,
+   *   considerWeekend,
    * )
    */
   onAssignDate,
@@ -159,6 +161,11 @@ const SortableHeader = ({
     dateStep,
     setDateStep,
   ] = useState("");
+
+  const [
+    considerWeekend,
+    setConsiderWeekend,
+  ] = useState(false);
 
   /* ------------------------------------------------------------------------ */
   /* SORTABLE                                                                 */
@@ -378,6 +385,15 @@ const SortableHeader = ({
                 }}
               />
 
+              <Checkbox
+                checked={considerWeekend}
+                onChange={(event) => {
+                  setConsiderWeekend(event.target.checked);
+                }}
+              >
+                Weekend
+              </Checkbox>
+
               <Button
                 size="small"
                 type="text"
@@ -423,6 +439,7 @@ const SortableHeader = ({
                     plan,
                     assignDate,
                     dateStep,
+                    considerWeekend,
                   );
                 }}
               />
@@ -907,6 +924,8 @@ const SortableHeader = ({
       assignDate,
 
       dateStep,
+
+      considerWeekend,
 
       deleteConfirmOpen,
 

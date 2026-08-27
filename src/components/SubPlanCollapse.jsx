@@ -172,6 +172,24 @@ const addWorkingDays = (value, amount) => {
   return shiftWeekendForward(result);
 };
 
+const addSequenceDays = (value, amount, considerWeekend = false) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = dayjs(value).startOf("day");
+
+  if (!parsed.isValid()) {
+    return null;
+  }
+
+  if (considerWeekend) {
+    return parsed.add(Number(amount) || 0, "day");
+  }
+
+  return addWorkingDays(value, amount);
+};
+
 const SubPlanCollapse = ({
   plan,
   activeSimulationItem,
@@ -1225,7 +1243,7 @@ const SubPlanCollapse = ({
     }
   };
   const handleAssignSubPlanDate = useCallback(
-    (clickedSubPlan, date, dateStep) => {
+    (clickedSubPlan, date, dateStep, considerWeekend = false) => {
       if (!canEdit || !clickedSubPlan?.id) {
         return;
       }
@@ -1280,9 +1298,10 @@ const SubPlanCollapse = ({
              *
              * Step then advances by WORKING DAYS only.
              */
-            nextDate = addWorkingDays(
+            nextDate = addSequenceDays(
               date,
               dateCount,
+              considerWeekend,
             );
 
             dateCount += step;
@@ -1305,9 +1324,10 @@ const SubPlanCollapse = ({
              * Modify Assigned Date by working days.
              * Weekend results are skipped automatically.
              */
-            nextDate = addWorkingDays(
+            nextDate = addSequenceDays(
               parsedDate,
               step,
+              considerWeekend,
             );
           }
 

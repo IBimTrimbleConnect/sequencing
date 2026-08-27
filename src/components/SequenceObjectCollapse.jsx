@@ -16,6 +16,7 @@ import {
   App,
   Modal,
   Tree,
+  Checkbox,
 } from "antd";
 import * as WorkspaceAPI from "trimble-connect-workspace-api";
 
@@ -121,14 +122,34 @@ const getObjectDate = (object) => object?.assignedDate ?? object?.date ?? "";
  *   Assembly+ASSEMBLY_POS   -> ASSEMBLY_POS
  *   entity_class            -> existing label / entity_class
  */
+const psetPropertyMetadataCache = new Map();
+
 const getColumnHeaderLabel = (
   column,
+  _psetMetadataRevision = 0,
 ) => {
   const field =
     String(
-      column?.field ||
-        "",
+      column?.field || "",
     ).trim();
+
+  const propKey =
+    getExternalPsetPropertyKey(
+      field,
+    );
+
+  if (propKey) {
+    const metadata =
+      psetPropertyMetadataCache.get(
+        propKey,
+      );
+
+    if (
+      metadata?.displayName
+    ) {
+      return metadata.displayName;
+    }
+  }
 
   if (
     field.includes(
@@ -447,149 +468,611 @@ const buildExternalPsetValueMap = (
 };
 
 /*
- * Small concurrency pool to avoid sending one PSet REST request for
- * every visible object at exactly the same time.
+ * =====================================================
+ * PSET - 3 API FLOW
+ * =====================================================
+ *
+ * API 1: Organizer ProjectContext/PSetLibs -> libId(s)
+ * API 2: /libs/{libId}/defs -> property name + libId + defId
+ * API 3: /batch-get -> values for object GUIDs
  */
-const mapWithConcurrency = async (
-  items,
-  concurrency,
-  worker,
-) => {
-  const queue = [
-    ...items,
-  ];
 
-  const workerCount =
-    Math.max(
-      1,
-      Math.min(
-        Number(
-          concurrency,
-        ) || 1,
-        queue.length ||
-          1,
-      ),
-    );
+const psetDefinitionCache =
+  new Map();
 
-  const runners =
-    Array.from(
-      {
-        length:
-          workerCount,
-      },
-      async () => {
-        while (
-          queue.length
-        ) {
-          const item =
-            queue.shift();
+/*
+ * Project-wide PSet cache.
+ *
+ * key:
+ *   projectId|psetApiUrl|sorted-selected-prop-fields
+ *
+ * value:
+ *   Map<externalGuid, { [columnField]: value }>
+ *
+ * Every SequenceObjectCollapse instance shares this cache so changing
+ * the App-level ColumnSet triggers one background load for all objects
+ * in all Plans/SubPlans rather than one request per visible table.
+ */
+const projectPsetValueCache =
+  new Map();
 
-          await worker(
-            item,
-          );
-        }
-      },
-    );
+const projectPsetLoadPromiseCache =
+  new Map();
 
-  await Promise.all(
-    runners,
+const createProjectPsetCacheKey = ({
+  projectId,
+  psetApiUrl,
+  externalPsetFields,
+}) =>
+  [
+    String(
+      projectId || "",
+    ),
+    String(
+      psetApiUrl || "",
+    ),
+    [...new Set(
+      (
+        Array.isArray(
+          externalPsetFields,
+        )
+          ? externalPsetFields
+          : []
+      )
+        .map(
+          (field) =>
+            String(
+              field || "",
+            ).trim(),
+        )
+        .filter(Boolean),
+    )]
+      .sort()
+      .join(","),
+  ].join("|");
+
+const invalidateProjectPsetCache = ({
+  projectId,
+  psetApiUrl,
+  externalPsetFields,
+}) => {
+  const cacheKey =
+    createProjectPsetCacheKey({
+      projectId,
+      psetApiUrl,
+      externalPsetFields,
+    });
+
+  projectPsetValueCache.delete(
+    cacheKey,
+  );
+
+  projectPsetLoadPromiseCache.delete(
+    cacheKey,
   );
 };
 
+const scheduleLazyTask = (
+  callback,
+) => {
+  if (
+    typeof window !==
+      "undefined" &&
+    typeof window.requestIdleCallback ===
+      "function"
+  ) {
+    const id =
+      window.requestIdleCallback(
+        callback,
+        {
+          timeout:
+            1000,
+        },
+      );
+
+    return () =>
+      window.cancelIdleCallback?.(
+        id,
+      );
+  }
+
+  const id =
+    window.setTimeout(
+      callback,
+      0,
+    );
+
+  return () =>
+    window.clearTimeout(
+      id,
+    );
+};
+
+const getOrgApiUrlFromPsetApiUrl = (
+  psetApiUrl,
+) => {
+  const value =
+    String(
+      psetApiUrl || "",
+    ).trim();
+
+  if (!value) {
+    return "";
+  }
+
+  return value.replace(
+    "://pset-api.",
+    "://org-api.",
+  );
+};
+
+const getPsetAccessToken = async (
+  tcapi,
+) => {
+  let token =
+    String(
+      window.localStorage.getItem(
+        "trimbleToken",
+      ) || "",
+    ).trim();
+
+  if (token) {
+    return token;
+  }
+
+  const tokenResponse =
+    await tcapi.extension
+      .requestPermission(
+        "accesstoken",
+      );
+
+  token =
+    String(
+      typeof tokenResponse ===
+        "string"
+        ? tokenResponse
+        : tokenResponse?.accessToken ||
+          tokenResponse?.token ||
+          tokenResponse?.value ||
+          "",
+    ).trim();
+
+  if (token) {
+    window.localStorage.setItem(
+      "trimbleToken",
+      token,
+    );
+  }
+
+  return token;
+};
+
+const fetchPsetJson = async (
+  url,
+  token,
+  options = {},
+) => {
+
+  if (options?.body) {
+    try {
+    } catch {
+    }
+  }
+
+  const response =
+    await fetch(
+      url,
+      {
+        ...options,
+
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
+
+          Accept:
+            "application/json",
+
+          ...(options?.body
+            ? {
+                "Content-Type":
+                  "application/json",
+              }
+            : {}),
+
+          ...(options?.headers ||
+            {}),
+        },
+      },
+    );
+
+  if (!response.ok) {
+    const errorText =
+      await response.text();
+
+    console.error(
+      "[PSET][HTTP] Error body:",
+      errorText,
+    );
+
+    throw new Error(
+      `PSet request failed: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const data =
+    await response.json();
+
+  return data;
+};
+
+const extractPsetLibraryIds = (
+  response,
+) => {
+  /*
+   * Actual Organizer response:
+   *
+   * {
+   *   links: [
+   *     "frn:lib:q68734nd822rgwbo5okc0snj7n808yqu",
+   *     "frn:lib:yb9x298w53qhmsliwrv4bgzafly1oe7v"
+   *   ]
+   * }
+   *
+   * So parse `frn:lib:` directly instead of trying to infer ids
+   * recursively from arbitrary metadata fields.
+   */
+  const links =
+    Array.isArray(
+      response?.links,
+    )
+      ? response.links
+      : [];
+
+  const libIds =
+    links
+      .map(
+        (link) => {
+          const value =
+            String(
+              link || "",
+            ).trim();
+
+          const prefix =
+            "frn:lib:";
+
+          if (
+            !value.startsWith(
+              prefix,
+            )
+          ) {
+            return null;
+          }
+
+          return value.slice(
+            prefix.length,
+          );
+        },
+      )
+      .filter(Boolean);
+
+
+  return [
+    ...new Set(
+      libIds,
+    ),
+  ];
+};
+
+/*
+ * API 1
+ *
+ * GET
+ * {orgApiUrl}/forests/project%3A{projectId}%3Adata/
+ * trees/ProjectContext/nodes/PSetLibs?deleted&fields=metadata
+ */
+const getProjectPsetLibraryIds =
+  async ({
+    projectId,
+    psetApiUrl,
+    token,
+  }) => {
+    if (
+      !projectId ||
+      !psetApiUrl ||
+      !token
+    ) {
+      return [];
+    }
+
+    const orgApiUrl =
+      getOrgApiUrlFromPsetApiUrl(
+        psetApiUrl,
+      );
+
+
+
+    if (!orgApiUrl) {
+      return [];
+    }
+
+    const forestId =
+      encodeURIComponent(
+        `project:${projectId}:data`,
+      );
+
+    const response =
+      await fetchPsetJson(
+        `${orgApiUrl}` +
+          `/forests/${forestId}` +
+          `/trees/ProjectContext` +
+          `/nodes/PSetLibs` +
+          `?deleted&fields=metadata`,
+        token,
+      );
+
+    const libIds =
+      extractPsetLibraryIds(
+        response,
+      );
+
+    return libIds;
+  };
+
+/*
+ * API 2
+ *
+ * GET {psetApiUrl}/libs/{libId}/defs
+ *
+ * definition.id                     -> defId
+ * definition.schema.props[prop_xxx] -> property definition
+ * definition.i18n["en-US"].props[prop_xxx]
+ *                                   -> display name, e.g. IBIM_LENGTH
+ */
+const discoverPsetPropertyMetadata =
+  async ({
+    projectId,
+    psetApiUrl,
+    token,
+    requestedFields,
+  }) => {
+    const requestedPropKeys =
+      new Set(
+        (
+          Array.isArray(
+            requestedFields,
+          )
+            ? requestedFields
+            : []
+        )
+          .map(
+            getExternalPsetPropertyKey,
+          )
+          .filter(Boolean),
+      );
+
+    if (
+      !requestedPropKeys.size
+    ) {
+      return new Map();
+    }
+
+    const cacheKey =
+      `${projectId || ""}|${psetApiUrl || ""}`;
+
+    let definitions =
+      psetDefinitionCache.get(
+        cacheKey,
+      );
+
+    if (!definitions) {
+      definitions = [];
+
+      const libIds =
+        await getProjectPsetLibraryIds({
+          projectId,
+          psetApiUrl,
+          token,
+        });
+
+      for (
+        const libId of libIds
+      ) {
+        try {
+          const response =
+            await fetchPsetJson(
+              `${psetApiUrl}` +
+                `/libs/${encodeURIComponent(
+                  libId,
+                )}/defs`,
+              token,
+            );
+
+          const items =
+            Array.isArray(
+              response?.items,
+            )
+              ? response.items
+              : [];
+
+          items.forEach(
+            (definition) => {
+              definitions.push({
+                ...definition,
+
+                libId:
+                  definition?.libId ||
+                  libId,
+              });
+            },
+          );
+        } catch (error) {
+          console.warn(
+            `Unable to load PSet definitions for library ${libId}:`,
+            error,
+          );
+        }
+      }
+
+      psetDefinitionCache.set(
+        cacheKey,
+        definitions,
+      );
+    }
+
+    const result =
+      new Map();
+
+    definitions.forEach(
+      (definition) => {
+        const libId =
+          String(
+            definition?.libId ||
+              "",
+          ).trim();
+
+        const defId =
+          String(
+            definition?.id ||
+              definition?.defId ||
+              "",
+          ).trim();
+
+        const props =
+          definition?.schema
+            ?.props;
+
+        if (
+          !libId ||
+          !defId ||
+          !props ||
+          typeof props !==
+            "object" ||
+          Array.isArray(props)
+        ) {
+          return;
+        }
+
+        const displayProps =
+          definition?.i18n?.["en-US"]?.props ||
+          {};
+
+        Object.entries(
+          props,
+        ).forEach(
+          ([
+            propKey,
+            propDefinition,
+          ]) => {
+            if (
+              !requestedPropKeys.has(
+                propKey,
+              )
+            ) {
+              return;
+            }
+
+            const metadata = {
+              propKey,
+
+              libId,
+
+              defId,
+
+              definitionName:
+                String(
+                  definition?.name ||
+                    "",
+                ),
+
+              displayName:
+                String(
+                  displayProps?.[
+                    propKey
+                  ] ||
+                    propKey,
+                ),
+
+              type:
+                String(
+                  propDefinition?.type ||
+                    "",
+                ),
+            };
+
+            psetPropertyMetadataCache.set(
+              propKey,
+              metadata,
+            );
+
+            result.set(
+              propKey,
+              metadata,
+            );
+          },
+        );
+      },
+    );
+
+    return result;
+  };
+
+const chunkArray = (
+  items,
+  size,
+) => {
+  const result = [];
+
+  for (
+    let index = 0;
+    index < items.length;
+    index += size
+  ) {
+    result.push(
+      items.slice(
+        index,
+        index + size,
+      ),
+    );
+  }
+
+  return result;
+};
+
+/*
+ * API 3
+ *
+ * POST {psetApiUrl}/batch-get
+ */
 const loadExternalPsetValues = async ({
   tcapi,
   objects,
+  projectId,
   psetApiUrl,
   externalPsetFields,
 }) => {
   const result =
     new Map();
 
-  if (!tcapi) {
-    console.warn(
-      "PSet skipped: tcapi is not available.",
-    );
-
-    return result;
-  }
-
-  if (!psetApiUrl) {
-    console.warn(
-      "PSet skipped: psetApiUrl is empty.",
-    );
-
-    return result;
-  }
-
   if (
+    !tcapi ||
+    !projectId ||
+    !psetApiUrl ||
     !Array.isArray(
       objects,
     ) ||
-    objects.length === 0
-  ) {
-    console.warn(
-      "PSet skipped: no visible objects.",
-    );
-
-    return result;
-  }
-
-  if (
+    !objects.length ||
     !Array.isArray(
       externalPsetFields,
     ) ||
-    externalPsetFields.length ===
-      0
+    !externalPsetFields.length
   ) {
-    console.warn(
-      "PSet skipped: selected preset has no prop_xxx fields.",
-    );
-
     return result;
   }
 
-  /*
-   * Access token.
-   *
-   * Prefer the token already cached by the App.
-   * Fall back to Workspace API permission.
-   */
-  let token =
-    String(
-      window.localStorage.getItem(
-        "trimbleToken",
-      ) ||
-        "",
-    ).trim();
-
-  if (!token) {
-    const tokenResponse =
-      await tcapi.extension
-        .requestPermission(
-          "accesstoken",
-        );
-
-    token =
-      String(
-        typeof tokenResponse ===
-          "string"
-          ? tokenResponse
-          : tokenResponse
-              ?.accessToken ||
-            tokenResponse
-              ?.token ||
-            tokenResponse
-              ?.value ||
-            "",
-      ).trim();
-
-    if (token) {
-      window.localStorage.setItem(
-        "trimbleToken",
-        token,
-      );
-    }
-  }
+  const token =
+    await getPsetAccessToken(
+      tcapi,
+    );
 
   if (!token) {
     throw new Error(
@@ -597,166 +1080,287 @@ const loadExternalPsetValues = async ({
     );
   }
 
+
+  const propertyMetadata =
+    await discoverPsetPropertyMetadata({
+      projectId,
+      psetApiUrl,
+      token,
+      requestedFields:
+        externalPsetFields,
+    });
+
+  if (
+    !propertyMetadata.size
+  ) {
+    return result;
+  }
+
   /*
-   * Sequence Object external GUID is already stored as externalId.
-   * getExternalId() also supports external_id/objectId.
+   * One PSet instance returns all props in one definition.
+   * Therefore unique by libId + defId, not by propKey.
    */
-  const uniqueObjects =
+  const definitions =
+    Array.from(
+      new Map(
+        Array.from(
+          propertyMetadata.values(),
+        ).map(
+          (metadata) => [
+            `${metadata.libId}|${metadata.defId}`,
+            {
+              libId:
+                metadata.libId,
+
+              defId:
+                metadata.defId,
+            },
+          ],
+        ),
+      ).values(),
+    );
+
+  const identities =
     Array.from(
       new Map(
         objects
-          .map(
+          .flatMap(
             (object) => {
               const guid =
                 String(
                   getExternalId(
                     object,
-                  ) ||
-                    "",
+                  ) || "",
                 ).trim();
 
-              return [
-                guid,
-                object,
-              ];
+              if (!guid) {
+                return [];
+              }
+
+              return definitions.map(
+                ({
+                  libId,
+                  defId,
+                }) => ({
+                  guid,
+
+                  link:
+                    `frn:entity:${guid}`,
+
+                  libId,
+
+                  defId,
+                }),
+              );
             },
           )
-          .filter(
-            ([guid]) =>
-              Boolean(
-                guid,
-              ),
+          .map(
+            (identity) => [
+              `${identity.guid}|${identity.libId}|${identity.defId}`,
+              identity,
+            ],
           ),
       ).values(),
     );
 
-  if (
-    uniqueObjects.length ===
-    0
-  ) {
-    console.warn(
-      "PSet skipped: no external GUID was found in the visible objects.",
+
+  const batches =
+    chunkArray(
+      identities,
+      99,
     );
 
-    return result;
-  }
+  for (
+    const batch of batches
+  ) {
 
-  await mapWithConcurrency(
-    uniqueObjects,
-    6,
-    async (
-      object,
-    ) => {
-      const guid =
-        String(
-          getExternalId(
-            object,
-          ) ||
-            "",
-        ).trim();
+    let pending =
+      batch.map(
+        ({
+          link,
+          libId,
+          defId,
+        }) => ({
+          link,
+          libId,
+          defId,
+        }),
+      );
 
-      if (!guid) {
-        return;
-      }
-
-      const entityFrn =
-        encodeURIComponent(
-          `frn:entity:${guid}`,
-        );
-
-      const url =
-        `${psetApiUrl}/psets/${entityFrn}`;
-
+    for (
+      let attempt = 0;
+      attempt < 2 &&
+      pending.length;
+      attempt += 1
+    ) {
       let response;
 
       try {
         response =
-          await fetch(
-            url,
+          await fetchPsetJson(
+            `${psetApiUrl}/batch-get`,
+            token,
             {
               method:
-                "GET",
+                "POST",
 
-              headers: {
-                Authorization:
-                  `Bearer ${token}`,
-
-                Accept:
-                  "application/json",
-              },
+              body:
+                JSON.stringify({
+                  psets:
+                    pending,
+                }),
             },
           );
-      } catch (
-        error
-      ) {
+      } catch (error) {
         console.warn(
-          `Unable to load Property Set values for ${guid}:`,
+          "Unable to batch load PSet values:",
           error,
         );
 
-        return;
+        break;
       }
 
-      if (
-        response.status ===
-        404
-      ) {
-        result.set(
-          guid,
-          {},
-        );
+      const psets =
+        Array.isArray(
+          response?.responses
+            ?.psets,
+        )
+          ? response.responses
+              .psets
+          : Array.isArray(
+                response?.items,
+              )
+            ? response.items
+            : [];
 
-        return;
-      }
+      psets.forEach(
+        (pset) => {
+          const link =
+            String(
+              pset?.link || "",
+            );
 
-      if (
-        response.status ===
-        401
-      ) {
-        console.warn(
-          `PSet API returned 401 for ${guid}.`,
-        );
+          const prefix =
+            "frn:entity:";
 
-        return;
-      }
+          if (
+            !link.startsWith(
+              prefix,
+            )
+          ) {
+            return;
+          }
 
-      if (
-        response.status ===
-        403
-      ) {
-        console.warn(
-          `PSet API returned 403 for ${guid}.`,
-        );
+          const guid =
+            link.slice(
+              prefix.length,
+            );
 
-        return;
-      }
+          const mappedValues =
+            buildExternalPsetValueMap(
+              {
+                items: [
+                  pset,
+                ],
+              },
+              externalPsetFields,
+            );
 
-      if (!response.ok) {
-        console.warn(
-          `PSet API failed for ${guid}: ${response.status}`,
-        );
-
-        return;
-      }
-
-      const data =
-        await response.json();
-
-      const values =
-        buildExternalPsetValueMap(
-          data,
-          externalPsetFields,
-        );
-
-      result.set(
-        guid,
-        values,
+          result.set(
+            guid,
+            {
+              ...(result.get(
+                guid,
+              ) || {}),
+              ...mappedValues,
+            },
+          );
+        },
       );
-    },
-  );
+
+      pending =
+        Array.isArray(
+          response?.unprocessed
+            ?.psets,
+        )
+          ? response.unprocessed
+              .psets
+          : [];
+    }
+  }
 
   return result;
 };
+
+const loadProjectExternalPsetValues =
+  async ({
+    tcapi,
+    objects,
+    projectId,
+    psetApiUrl,
+    externalPsetFields,
+  }) => {
+    const cacheKey =
+      createProjectPsetCacheKey({
+        projectId,
+        psetApiUrl,
+        externalPsetFields,
+      });
+
+    if (
+      projectPsetValueCache.has(
+        cacheKey,
+      )
+    ) {
+      return projectPsetValueCache.get(
+        cacheKey,
+      );
+    }
+
+    if (
+      projectPsetLoadPromiseCache.has(
+        cacheKey,
+      )
+    ) {
+      return projectPsetLoadPromiseCache.get(
+        cacheKey,
+      );
+    }
+
+    const promise =
+      loadExternalPsetValues({
+        tcapi,
+        objects,
+        projectId,
+        psetApiUrl,
+        externalPsetFields,
+      })
+        .then(
+          (values) => {
+            projectPsetValueCache.set(
+              cacheKey,
+              values,
+            );
+
+            return values;
+          },
+        )
+        .finally(
+          () => {
+            projectPsetLoadPromiseCache.delete(
+              cacheKey,
+            );
+          },
+        );
+
+    projectPsetLoadPromiseCache.set(
+      cacheKey,
+      promise,
+    );
+
+    return promise;
+  };
+
 
 /*
  * Fetch properties in model batches.
@@ -780,6 +1384,7 @@ const loadDataTableValues = async (
   tcapi,
   objects,
   {
+    projectId = "",
     psetApiUrl = "",
     externalPsetFields = [],
   } = {},
@@ -906,6 +1511,7 @@ const loadDataTableValues = async (
       await loadExternalPsetValues({
         tcapi,
         objects,
+        projectId,
         psetApiUrl,
         externalPsetFields,
       });
@@ -1059,6 +1665,22 @@ const addWorkingDays = (value, amount) => {
   }
 
   return result;
+};
+
+const addSequenceDays = (value, amount, considerWeekend = false) => {
+  const parsed = parseDate(value);
+
+  if (!parsed) {
+    return null;
+  }
+
+  if (considerWeekend) {
+    return parsed
+      .startOf("day")
+      .add(Number(amount) || 0, "day");
+  }
+
+  return addWorkingDays(value, amount);
 };
 
 const isSameObject = (first, second) => {
@@ -1520,6 +2142,7 @@ const SortableSubItem = React.memo(
     const [assignDate, setAssignDate] = useState(null);
 
     const [dateStep, setDateStep] = useState(0);
+    const [considerWeekend, setConsiderWeekend] = useState(false);
 
     const sortableId = getObjectKey(item);
 
@@ -1695,6 +2318,15 @@ const SortableSubItem = React.memo(
                 onChange={(event) => setDateStep(event.target.value)}
               />
 
+              <Checkbox
+                checked={considerWeekend}
+                onChange={(event) => {
+                  setConsiderWeekend(event.target.checked);
+                }}
+              >
+                Weekend
+              </Checkbox>
+
               <Button
                 size="small"
                 type="text"
@@ -1703,7 +2335,7 @@ const SortableSubItem = React.memo(
                 onClick={(event) => {
                   event.stopPropagation();
 
-                  onAssignDate(assignDate, dateStep);
+                  onAssignDate(assignDate, dateStep, considerWeekend);
                 }}
               />
             </div>
@@ -1793,6 +2425,7 @@ const SortableSubItem = React.memo(
     }, [
       assignDate,
       dateStep,
+      considerWeekend,
       isOwner,
       item,
       onAddCamera,
@@ -2020,6 +2653,7 @@ const SequenceObjectCollapse = ({
     setLoadingDataTableValues,
   ] = useState(false);
 
+
   const [projectFormatting, setProjectFormatting] =
     useState(DEFAULT_FORMATTING);
 
@@ -2029,6 +2663,11 @@ const SequenceObjectCollapse = ({
   ] = useState({
     ...DEFAULT_COLUMN_WIDTHS,
   });
+
+  const [
+    psetMetadataRevision,
+    setPsetMetadataRevision,
+  ] = useState(0);
 
 
   /*
@@ -2050,6 +2689,7 @@ const SequenceObjectCollapse = ({
     selectedColumnSet,
 
     psetApiUrl,
+    psetReloadRevision,
   } =
     useSequenceColumnConfig();
 
@@ -2216,6 +2856,40 @@ const SequenceObjectCollapse = ({
   const currentObjects = localObjects;
 
   /*
+   * All Sequence Objects in every Plan/SubPlan.
+   *
+   * PSet values are loaded project-wide whenever the selected ColumnSet
+   * changes. Runtime/model availability is not required for PSet REST
+   * calls because the external GUID is the identity used by batch-get.
+   */
+  const allProjectObjects =
+    useMemo(
+      () =>
+        sequenceObjects
+          .flatMap(
+            (group) =>
+              Array.isArray(
+                group?.objects,
+              )
+                ? group.objects
+                : [],
+          )
+          .filter(
+            (object) =>
+              Boolean(
+                String(
+                  getExternalId(
+                    object,
+                  ) || "",
+                ).trim(),
+              ),
+          ),
+      [
+        sequenceObjects,
+      ],
+    );
+
+  /*
    * Allow moving Sequence Objects to ANY other SubPlan,
    * including SubPlans that belong to another Plan.
    *
@@ -2380,6 +3054,19 @@ const SequenceObjectCollapse = ({
       const hydrateDataTableValues =
         async () => {
           if (
+            psetReloadRevision > 0 &&
+            projectId &&
+            psetApiUrl &&
+            externalPsetFields.length
+          ) {
+            invalidateProjectPsetCache({
+              projectId,
+              psetApiUrl,
+              externalPsetFields,
+            });
+          }
+
+          if (
             !visibleObjects.length
           ) {
             setDataTableValueMap(
@@ -2460,24 +3147,45 @@ const SequenceObjectCollapse = ({
              * STAGE 2
              * =====================================================
              *
-             * External PSet fields (prop_xxx) are loaded afterwards.
+             * Lazy project-wide external PSet loading.
              *
-             * The table remains visible while this request runs.
-             * When PSet values arrive, only those fields are merged
-             * into the existing model-property map.
+             * Normal viewer/model properties above have already been
+             * rendered, so PSet discovery and batch-get never block the
+             * existing table values.
+             *
+             * Changing the App-level ColumnSet changes
+             * externalPsetFields, which creates a new project cache key
+             * and triggers one background load for ALL project objects.
              */
             if (
               !externalPsetFields.length ||
-              !psetApiUrl
+              !psetApiUrl ||
+              !projectId ||
+              !allProjectObjects.length
+            ) {
+              return;
+            }
+
+            await new Promise(
+              (resolve) => {
+                scheduleLazyTask(
+                  resolve,
+                );
+              },
+            );
+
+            if (
+              cancelled
             ) {
               return;
             }
 
             const externalValuesByGuid =
-              await loadExternalPsetValues({
+              await loadProjectExternalPsetValues({
                 tcapi,
                 objects:
-                  visibleObjects,
+                  allProjectObjects,
+                projectId,
                 psetApiUrl,
                 externalPsetFields,
               });
@@ -2488,6 +3196,19 @@ const SequenceObjectCollapse = ({
               return;
             }
 
+            /*
+             * API 2 may have resolved raw prop_xxx names to i18n names
+             * such as IBIM_LENGTH.
+             */
+            setPsetMetadataRevision(
+              (value) =>
+                value + 1,
+            );
+
+            /*
+             * Merge only values belonging to this visible SubPlan table.
+             * Other Plan/SubPlan tables reuse the same project-wide cache.
+             */
             setDataTableValueMap(
               (
                 previousMap,
@@ -2554,6 +3275,7 @@ const SequenceObjectCollapse = ({
                 return nextMap;
               },
             );
+
           } catch (
             error
           ) {
@@ -2585,8 +3307,11 @@ const SequenceObjectCollapse = ({
     },
     [
       visibleObjects,
+      allProjectObjects,
+      projectId,
       psetApiUrl,
       externalPsetFields,
+      psetReloadRevision,
     ],
   );
 
@@ -3303,7 +4028,7 @@ const SequenceObjectCollapse = ({
   );
 
   const handleAssignDate = useCallback(
-    (date, dateStep) => {
+    (date, dateStep, considerWeekend = false) => {
       if (!isOwner) {
         return;
       }
@@ -3345,9 +4070,10 @@ const SequenceObjectCollapse = ({
            * If the selected date falls on Saturday/Sunday,
            * shift the first assigned date to the next Monday.
            */
-          nextDate = addWorkingDays(
+          nextDate = addSequenceDays(
             date,
             dateCount,
+            considerWeekend,
           );
 
           dateCount += step;
@@ -3369,9 +4095,10 @@ const SequenceObjectCollapse = ({
           /*
            * Modify Assigned Date using working days only.
            */
-          nextDate = addWorkingDays(
+          nextDate = addSequenceDays(
             currentDate,
             step,
+            considerWeekend,
           );
         }
 
@@ -3985,6 +4712,7 @@ const SequenceObjectCollapse = ({
                       >
                         {getColumnHeaderLabel(
                           property,
+                          psetMetadataRevision,
                         )}
                       </ResizableHeaderCell>
                     ),

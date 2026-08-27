@@ -53,12 +53,6 @@ const chooseDefaultPresetName = (
 const DEFAULT_COLUMN_WIDTH = 130;
 const DEFAULT_MIN_WIDTH = 70;
 
-const normalizeText = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_.:/\\-]+/g, "");
-
 const normalizeColumn = (
   column,
 ) => {
@@ -572,6 +566,51 @@ export const getSequenceColumnValue = (
  *
  * UK projects use the Europe Property Set region.
  */
+export const getOrgApiUrl = (
+  locationValue,
+) => {
+  const location =
+    String(
+      locationValue || "",
+    )
+      .trim()
+      .toUpperCase();
+
+  if (
+    location.includes(
+      "AUSTRALIA",
+    )
+  ) {
+    return "https://org-api.ap-southeast-2.connect.trimble.com/v1";
+  }
+
+  if (
+    location.includes(
+      "ASIA",
+    )
+  ) {
+    return "https://org-api.ap-southeast-1.connect.trimble.com/v1";
+  }
+
+  if (
+    location.includes(
+      "EUROPE",
+    ) ||
+    location === "EU" ||
+    location.includes(
+      "EUROPEAN",
+    ) ||
+    location.includes(
+      "UNITED KINGDOM",
+    ) ||
+    location === "UK"
+  ) {
+    return "https://org-api.eu-west-1.connect.trimble.com/v1";
+  }
+
+  return "https://org-api.us-east-1.connect.trimble.com/v1";
+};
+
 export const getPsetApiUrl = (
   locationValue,
 ) => {
@@ -667,6 +706,17 @@ export const SequenceColumnConfigProvider = ({
     useMemo(
       () =>
         getPsetApiUrl(
+          projectLocation,
+        ),
+      [
+        projectLocation,
+      ],
+    );
+
+  const orgApiUrl =
+    useMemo(
+      () =>
+        getOrgApiUrl(
           projectLocation,
         ),
       [
@@ -973,6 +1023,12 @@ export const SequenceColumnConfigProvider = ({
       ],
     );
 
+  const [psetReloadRevision, setPsetReloadRevision] = useState(0);
+
+  const reloadPsetValues = useCallback(() => {
+    setPsetReloadRevision((value) => value + 1);
+  }, []);
+
   const value =
     useMemo(
       () => ({
@@ -980,9 +1036,16 @@ export const SequenceColumnConfigProvider = ({
 
         columnSets,
 
+        projectId,
+
         projectLocation,
 
         psetApiUrl,
+
+        orgApiUrl,
+
+        psetReloadRevision,
+        reloadPsetValues,
 
         selectedPresetName,
 
@@ -1004,8 +1067,12 @@ export const SequenceColumnConfigProvider = ({
       [
         allColumns,
         columnSets,
+        projectId,
         projectLocation,
         psetApiUrl,
+        orgApiUrl,
+        psetReloadRevision,
+        reloadPsetValues,
         selectedPresetName,
         selectedColumnSet,
         selectedColumns,
