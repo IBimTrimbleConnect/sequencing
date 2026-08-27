@@ -17,6 +17,7 @@ const CreatePlanModal = ({
   onCancel,
   loading = false,
   entityLabel = "Plan",
+  entityPluralLabel = `${entityLabel}s`,
 }) => {
   const planName = Form.useWatch(
     "planName",
@@ -103,7 +104,7 @@ const CreatePlanModal = ({
 
   return (
     <Modal
-      title={`Create Multiple ${entityLabel}s`}
+      title={`Create Multiple ${entityPluralLabel}`}
       open={open}
       onCancel={onCancel}
       footer={null}
@@ -338,8 +339,8 @@ const CreatePlanModal = ({
             }
           >
             {Number(quantity) > 1
-              ? `Create ${quantity} Plans`
-              : "Create Plan"}
+              ? `Create ${quantity} ${entityPluralLabel}`
+              : `Create ${entityLabel}`}
           </Button>
         </Form.Item>
       </Form>

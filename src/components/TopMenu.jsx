@@ -217,7 +217,7 @@ const TopMenu = ({
     try {
       if (!isOwner) {
         message.error(
-          `Only the project owner can create ${nodeMode ? "Root Nodes" : "Plans"}.`,
+          `Only the project owner can create ${nodeMode ? "Categories" : "Plans"}.`,
         );
 
         return;
@@ -239,7 +239,7 @@ const TopMenu = ({
 
       if (!baseName) {
         message.warning(
-          `Please enter the ${nodeMode ? "Root Node" : "Plan"} name.`,
+          `Please enter the ${nodeMode ? "Category" : "Plan"} name.`,
         );
 
         return;
@@ -284,7 +284,7 @@ const TopMenu = ({
 
       if (duplicatePlans.length) {
         message.error(
-          `The following ${nodeMode ? "Root Node" : "Plan"} names already exist: ${duplicatePlans
+          `The following ${nodeMode ? "Category" : "Plan"} names already exist: ${duplicatePlans
             .map((plan) => plan.name)
             .join(", ")}`,
         );
@@ -312,7 +312,7 @@ const TopMenu = ({
         onSequenceRefresh?.();
 
         message.success(
-          `${newPlans.length} ${newPlans.length === 1 ? "Node" : "Nodes"} created successfully.`,
+          `${newPlans.length} ${newPlans.length === 1 ? "Category" : "Categories"} created successfully.`,
         );
       } else {
         dispatch(
@@ -340,7 +340,7 @@ const TopMenu = ({
 
         message.error(
           error?.message ||
-            `Unable to create the ${nodeMode ? "Root Nodes" : "Plans"}.`,
+            `Unable to create the ${nodeMode ? "Categories" : "Plans"}.`,
         );
       }
     }
@@ -926,7 +926,7 @@ const TopMenu = ({
     {
       key: "create-plans",
       icon: <FolderAddOutlined />,
-      label: nodeMode ? "Create multiple root nodes" : "Create multiple plans",
+      label: nodeMode ? "Create multiple categories" : "Create multiple plans",
       disabled: !isOwner,
       onClick: handleOpenCreateModal,
     },
@@ -970,7 +970,8 @@ const TopMenu = ({
           open={isModalOpen}
           form={form}
           loading={creatingPlans}
-          entityLabel={nodeMode ? "Root Node" : "Plan"}
+          entityLabel={nodeMode ? "Category" : "Plan"}
+          entityPluralLabel={nodeMode ? "Categories" : "Plans"}
           onCreate={handleCreate}
           onCancel={handleCancel}
         />
@@ -1225,7 +1226,7 @@ const TopMenu = ({
               <Tooltip
                 title={
                   nodeMode
-                    ? "Create multiple root nodes"
+                    ? "Create multiple categories"
                     : "Create multiple plans"
                 }
               >

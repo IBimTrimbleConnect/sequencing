@@ -12,6 +12,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
 } from "antd";
 
 import { ReloadOutlined } from "@ant-design/icons";
@@ -429,6 +430,8 @@ const SubPlanModal = ({
     ...DEFAULT_COLOR,
   });
 
+  const [useColor, setUseColor] = useState(true);
+
   const [createMode, setCreateMode] = useState(CREATE_MODE.MANUAL);
 
   /*
@@ -472,6 +475,8 @@ const SubPlanModal = ({
     setColor({
       ...DEFAULT_COLOR,
     });
+
+    setUseColor(true);
 
     setCreateMode(CREATE_MODE.MANUAL);
 
@@ -636,6 +641,9 @@ const SubPlanModal = ({
         planName: editingSubPlan.name || "",
       });
 
+      const hasColor = editingSubPlan.color != null;
+
+      setUseColor(hasColor);
       setColor(normalizeColor(editingSubPlan.color));
 
       return;
@@ -671,6 +679,8 @@ const SubPlanModal = ({
     setColor({
       ...DEFAULT_COLOR,
     });
+
+    setUseColor(true);
 
     setCreateMode(CREATE_MODE.MANUAL);
 
@@ -989,7 +999,7 @@ const SubPlanModal = ({
     try {
       const values = await form.validateFields();
 
-      const normalizedColor = normalizeColor(color);
+      const normalizedColor = useColor ? normalizeColor(color) : null;
 
       /*
        * Edit.
@@ -1114,6 +1124,7 @@ const SubPlanModal = ({
   }, [
     form,
     color,
+    useColor,
     isEditing,
     editingSubPlan,
     projectId,
@@ -1197,7 +1208,7 @@ const SubPlanModal = ({
           >
             <Form.Item
               name="planName"
-              label="Sub Plan Name"
+              label={nodeMode ? "Name" : "Sub Plan Name"}
               style={{
                 flex: 1,
 
@@ -1217,12 +1228,21 @@ const SubPlanModal = ({
             </Form.Item>
 
             <Form.Item label="Color">
-              <ColorPicker
-                value={color}
-                format="rgb"
-                disabled={pending}
-                onChange={handleColorChange}
-              />
+              <Space size={6}>
+                <Switch
+                  size="small"
+                  checked={useColor}
+                  disabled={pending}
+                  onChange={setUseColor}
+                />
+
+                <ColorPicker
+                  value={color}
+                  format="rgb"
+                  disabled={pending || !useColor}
+                  onChange={handleColorChange}
+                />
+              </Space>
             </Form.Item>
           </div>
         )}
