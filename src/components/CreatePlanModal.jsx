@@ -26,8 +26,13 @@ const CreatePlanModal = ({
     form,
   );
 
+  const watchedCreateMultiple = Form.useWatch(
+    "createMultiple",
+    form,
+  );
+
   const createMultiple = allowSingle
-    ? Boolean(Form.useWatch("createMultiple", form))
+    ? Boolean(watchedCreateMultiple)
     : true;
 
   const startIndex = Form.useWatch(
