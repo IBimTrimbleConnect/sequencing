@@ -2396,7 +2396,7 @@ const SortableSubItem = React.memo(
         },
         {
           key: "moveToSubPlan",
-          label: nodeMode ? "Move to Node" : "Move to Sub Plan",
+          label: nodeMode ? "Move to Sub Plan" : "Move to Sub Plan",
           onClick: ({ domEvent }) => {
             domEvent.stopPropagation();
             onOpenMoveModal?.(item);
@@ -4002,6 +4002,7 @@ const SequenceObjectCollapse = ({
           : null;
 
       let sortDates;
+      let shouldRebalanceOrder = false;
 
       try {
         sortDates = createSortDatesBetween({
@@ -4010,17 +4011,22 @@ const SequenceObjectCollapse = ({
           count: movingObjects.length,
         });
       } catch (error) {
-        console.error("Unable to calculate sequence object order:", error);
+        console.warn(
+          "The sort_datetime gap is exhausted. Rebalancing object order.",
+          error,
+        );
 
-        return;
+        shouldRebalanceOrder = true;
       }
 
-      const updatedMovingObjects = movingObjects.map((object, index) => ({
+      let updatedMovingObjects = movingObjects.map((object, index) => ({
         ...object,
-        sortDatetime: sortDates[index],
+        sortDatetime: shouldRebalanceOrder
+          ? object.sortDatetime
+          : sortDates[index],
       }));
 
-      const reorderedVisible = [
+      let reorderedVisible = [
         ...remainingVisibleObjects.slice(0, safeInsertIndex),
         ...updatedMovingObjects,
         ...remainingVisibleObjects.slice(safeInsertIndex),
@@ -4032,7 +4038,7 @@ const SequenceObjectCollapse = ({
        */
       const reorderedVisibleQueue = [...reorderedVisible];
 
-      const reorderedAll = currentObjects.map((object) => {
+      let reorderedAll = currentObjects.map((object) => {
         const modelId = getObjectModelId(object);
 
         if (modelId == null || !loadedModelIdSet.has(String(modelId))) {
@@ -4041,6 +4047,29 @@ const SequenceObjectCollapse = ({
 
         return reorderedVisibleQueue.shift() || object;
       });
+
+      if (shouldRebalanceOrder) {
+        const rebalanceBaseTime = Date.now();
+        const movingKeySet = new Set(
+          movingObjects.map((object) => getObjectKey(object)),
+        );
+
+        /*
+         * Rebalance every object, including objects from models that are not
+         * currently visible. Otherwise their old timestamps could interleave
+         * with the new visible order after the next database reload.
+         */
+        reorderedAll = reorderedAll.map((object, index) => ({
+          ...object,
+          sortDatetime: new Date(
+            rebalanceBaseTime + index * 1000,
+          ).toISOString(),
+        }));
+
+        updatedMovingObjects = reorderedAll.filter((object) =>
+          movingKeySet.has(getObjectKey(object)),
+        );
+      }
 
       setLocalObjects(reorderedAll);
 
@@ -4055,10 +4084,14 @@ const SequenceObjectCollapse = ({
           setLocalObjects(currentObjects);
         });
       } else {
+        const objectsToPersist = shouldRebalanceOrder
+          ? reorderedAll
+          : updatedMovingObjects;
+
         dispatch(
           UpdateSequenceObjectSortDatesRequest({
             subPlanId: subPlan.id,
-            objects: updatedMovingObjects.map((object) => ({
+            objects: objectsToPersist.map((object) => ({
               dbId: object.dbId,
               subPlanId: subPlan.id,
               externalId: getExternalId(object),

@@ -352,8 +352,8 @@ function NodeItem({
           onHighlightObject={onHighlightNode}
           onAssignDate={canEdit ? onAssignDate : undefined}
           onSimulation={onSimulation}
-          addChildLabel="Create Child Node"
-          copyLabel="Copy Node"
+          addChildLabel="Add Sub Plan"
+          copyLabel="Copy Sub Plan"
         />
       ),
       children: (
