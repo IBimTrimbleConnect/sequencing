@@ -20,6 +20,7 @@ import {
   FolderAddOutlined,
   MenuOutlined,
   MoreOutlined,
+  CalendarOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SelectOutlined,
@@ -93,6 +94,8 @@ const SortableHeader = ({
 
   objectCount = 0,
 
+  dateRange = null,
+
   isOwner = false,
 
   isFree = false,
@@ -158,6 +161,11 @@ const SortableHeader = ({
   const [
     assignDate,
     setAssignDate,
+  ] = useState(null);
+
+  const [
+    assignEndDate,
+    setAssignEndDate,
   ] = useState(null);
 
   const [
@@ -352,6 +360,7 @@ const SortableHeader = ({
                */}
               <DatePicker
                 size="small"
+                placeholder="Start date"
                 value={
                   assignDate
                 }
@@ -362,6 +371,14 @@ const SortableHeader = ({
                     date,
                   );
                 }}
+              />
+
+              <DatePicker
+                size="small"
+                placeholder="End date"
+                value={assignEndDate}
+                minDate={assignDate || undefined}
+                onChange={setAssignEndDate}
               />
 
               {/*
@@ -404,9 +421,8 @@ const SortableHeader = ({
                   !canEdit ||
                   (
                     !assignDate &&
-                    !Number(
-                      dateStep,
-                    )
+                    !assignEndDate &&
+                    !Number(dateStep)
                   )
                 }
                 icon={
@@ -423,26 +439,26 @@ const SortableHeader = ({
                     return;
                   }
 
+                  if (
+                    !assignDate &&
+                    !assignEndDate &&
+                    !Number(dateStep)
+                  ) {
+                    return;
+                  }
+
                   /*
                    * Date empty
                    * Step empty / 0
                    *
                    * => không làm gì.
                    */
-                  if (
-                    !assignDate &&
-                    !Number(
-                      dateStep,
-                    )
-                  ) {
-                    return;
-                  }
-
                   onAssignDate?.(
                     plan,
                     assignDate,
                     dateStep,
                     considerWeekend,
+                    assignEndDate,
                   );
                 }}
               />
@@ -928,6 +944,8 @@ const SortableHeader = ({
 
       assignDate,
 
+      assignEndDate,
+
       dateStep,
 
       considerWeekend,
@@ -1007,8 +1025,17 @@ const SortableHeader = ({
         width:
           "100%",
 
+        maxWidth:
+          "100%",
+
         minWidth:
           0,
+
+        overflow:
+          "hidden",
+
+        boxSizing:
+          "border-box",
 
         /*
          * Selection boundary is rendered by the outer
@@ -1206,8 +1233,68 @@ const SortableHeader = ({
           style={{
             flexShrink:
               0,
+
+            display:
+              "inline-flex",
+
+            alignItems:
+              "center",
+
+            gap:
+              6,
+
+            minWidth:
+              0,
+
+            maxWidth:
+              "48%",
+
+            flex:
+              "0 1 220px",
           }}
         >
+          {dateRange && (
+            <span
+              title={`Start: ${dateRange.start} | End: ${dateRange.end}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                minHeight: 20,
+                padding: "0 5px",
+                color: "rgba(0, 0, 0, 0.72)",
+                background: "rgba(0, 0, 0, 0.035)",
+                border: "1px solid rgba(0, 0, 0, 0.10)",
+                borderRadius: 4,
+                fontSize: 11,
+                fontVariantNumeric: "tabular-nums",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+                maxWidth: "100%",
+                overflow: "hidden",
+                flex: "1 1 auto",
+              }}
+            >
+              <CalendarOutlined
+                style={{
+                  color: "#1677ff",
+                  fontSize: 11,
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {dateRange.start} → {dateRange.end}
+              </span>
+            </span>
+          )}
+
           <Dropdown
             open={
               dropdownOpen

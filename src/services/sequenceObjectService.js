@@ -29,6 +29,9 @@ function mapSequenceObject(row) {
     date:
       row.assigned_date,
 
+    endDate:
+      row.end_date,
+
     sortDatetime:
       row.sort_datetime,
 
@@ -55,6 +58,7 @@ const OBJECT_COLUMNS = `
   node_id,
   external_id,
   assigned_date,
+  end_date,
   sort_datetime,
   camera,
   created_at,
@@ -106,6 +110,11 @@ function normalizeObjectRow({
       object.assignedDate ??
       object.assigned_date ??
       object.date ??
+      null,
+
+    end_date:
+      object.endDate ??
+      object.end_date ??
       null,
 
     sort_datetime:
@@ -340,6 +349,11 @@ export async function copySequenceObjectsToSubPlans({
         assigned_date:
           object.assignedDate,
 
+        end_date:
+          object.endDate ??
+          object.end_date ??
+          null,
+
         sort_datetime:
           createUtcSortDate(
             baseDate,
@@ -520,6 +534,15 @@ export async function updateSequenceObjectFields(
         null;
     }
 
+    if (
+      Object.prototype.hasOwnProperty.call(
+        changes,
+        "endDate",
+      )
+    ) {
+      updates.end_date = changes.endDate || null;
+    }
+
     if (!Object.keys(updates).length) {
       continue;
     }
@@ -629,6 +652,7 @@ export async function replaceSequenceObjectsForNode({
     const object = objects[index];
     const dbId = object?.dbId ?? null;
     const assignedDate = object?.assignedDate ?? object?.assigned_date ?? object?.date ?? null;
+    const endDate = object?.endDate ?? object?.end_date ?? null;
     const sortDatetime = object?.sortDatetime ?? object?.sort_datetime ?? createUtcSortDate(baseDate, index);
     const camera = object?.camera ?? null;
 
@@ -638,6 +662,7 @@ export async function replaceSequenceObjectsForNode({
         .update({
           node_id: nodeId,
           assigned_date: assignedDate,
+          end_date: endDate,
           sort_datetime: sortDatetime,
           camera,
         })
@@ -655,6 +680,7 @@ export async function replaceSequenceObjectsForNode({
       node_id: nodeId,
       external_id: normalizeExternalId(object),
       assigned_date: assignedDate,
+      end_date: endDate,
       sort_datetime: sortDatetime,
       camera,
     };

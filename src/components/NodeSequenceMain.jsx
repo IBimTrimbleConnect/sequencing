@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { App, Collapse, DatePicker, Empty, Modal, Spin, message } from "antd";
+import { App, Checkbox, Collapse, DatePicker, Empty, Modal, Spin, message } from "antd";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import dayjs from "dayjs";
@@ -257,8 +257,13 @@ const createObjectsFromSelection = async ({ tcapi, selections, selectedDate, ref
         runtimeId,
         id: runtimeId,
         asmPos: propertyData.asmPos,
-        assignedDate: selectedDate.format("YYYY-MM-DD"),
-        date: selectedDate.format("YYYY-MM-DD"),
+        assignedDate: selectedDate?.isValid()
+          ? selectedDate.format("YYYY-MM-DD")
+          : null,
+        date: selectedDate?.isValid()
+          ? selectedDate.format("YYYY-MM-DD")
+          : null,
+        endDate: null,
         positionCode: propertyData.positionCode,
         cog: propertyData.cog,
         weight: propertyData.weight,
@@ -310,6 +315,47 @@ function NodeItem({
     0,
   );
 
+  const nodeDateRange = useMemo(() => {
+    const descendantIds = getDescendantIds(node.id, childrenByParent);
+    const startDates = [];
+    const endDates = [];
+
+    descendantIds.forEach((id) => {
+      const objects = sequenceGroups.get(String(id))?.objects || [];
+
+      objects.forEach((object) => {
+        const startDate = parseDate(
+          object?.assignedDate ?? object?.assigned_date ?? object?.date,
+        );
+        const endDate = parseDate(object?.endDate ?? object?.end_date);
+
+        if (startDate) startDates.push(startDate);
+        if (endDate) endDates.push(endDate);
+      });
+    });
+
+    if (startDates.length === 0 && endDates.length === 0) {
+      return null;
+    }
+
+    const startDate = startDates.length > 0
+      ? startDates.reduce((earliest, current) =>
+          current.valueOf() < earliest.valueOf() ? current : earliest,
+        )
+      : null;
+
+    const endDate = endDates.length > 0
+      ? endDates.reduce((latest, current) =>
+          current.valueOf() > latest.valueOf() ? current : latest,
+        )
+      : null;
+
+    return {
+      start: startDate ? startDate.format("DD-MM-YYYY") : "?",
+      end: endDate ? endDate.format("DD-MM-YYYY") : "?",
+    };
+  }, [node.id, childrenByParent, sequenceGroups]);
+
   const selected = selectedNodeIds.includes(String(node.id));
 
   const activeNodeId = String(activeSimulationItem?.nodeId || activeSimulationItem?.subPlanId || "");
@@ -329,6 +375,7 @@ function NodeItem({
         <SortableHeader
           plan={node}
           objectCount={objectCount}
+          dateRange={nodeDateRange}
           isOwner={canEdit}
           isFree={isFree}
           selected={selected}
@@ -353,7 +400,7 @@ function NodeItem({
           onAssignDate={canEdit ? onAssignDate : undefined}
           onSimulation={onSimulation}
           addChildLabel="Add Sub Plan"
-          copyLabel="Copy Sub Plan"
+          copyLabel="Copy Plan"
         />
       ),
       children: (
@@ -418,7 +465,7 @@ function NodeItem({
       },
     },
   ], [
-    node, directObjectCount, objectCount, canEdit, isFree, selected, setSelectedNodeIds,
+    node, directObjectCount, objectCount, nodeDateRange, canEdit, isFree, selected, setSelectedNodeIds,
     onEdit, onDelete, onCreateChild, onAssignObject, onAutoAssign,
     onCopyNode, onSortByDate, onHighlightNode, onAssignDate, onSimulation,
     children, level, childrenByParent, nodeMap, sequenceGroups, nodes,
@@ -435,7 +482,15 @@ function NodeItem({
       onChange={(keys) => {
         setActiveKeys(Array.isArray(keys) ? keys.map(String) : [String(keys)]);
       }}
-      style={{ borderRadius: 0, background: "transparent" }}
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        overflow: "hidden",
+        boxSizing: "border-box",
+        borderRadius: 0,
+        background: "transparent",
+      }}
       styles={{
         header: {
           minHeight: 28,
@@ -515,6 +570,7 @@ export default function NodeSequenceMain({
   const [editingNode, setEditingNode] = useState(null);
   const [creatingParent, setCreatingParent] = useState(null);
   const [pendingAssignment, setPendingAssignment] = useState(null);
+  const [assignmentProcessing, setAssignmentProcessing] = useState(false);
   const tcapiRef = useRef(null);
   const sequenceGroupsRef = useRef(new Map());
   const persistRevisionRef = useRef(new Map());
@@ -836,10 +892,15 @@ export default function NodeSequenceMain({
     return ids.flatMap((id) => sequenceGroups.get(id)?.objects || []);
   }, [childrenByParent, sequenceGroups]);
 
-  const handleAssignDate = useCallback((node, date, dateStep, considerWeekend = false) => {
+  const handleAssignDate = useCallback((
+    node,
+    date,
+    dateStep,
+    considerWeekend = false,
+    endDate = null,
+  ) => {
     if (!canEdit || !node?.id) return;
     const step = Number(dateStep) || 0;
-    if (!date && step === 0) return;
 
     const targetIds = selectedNodeIds.includes(String(node.id))
       ? selectedNodeIds
@@ -860,27 +921,54 @@ export default function NodeSequenceMain({
       let hasChanges = false;
       const updated = objects.map((object) => {
         let nextDate = null;
+        let nextEndDate = null;
+        const offset = dateCount;
+
         if (date) {
-          nextDate = addSequenceDays(date, dateCount, considerWeekend);
-          dateCount += step;
+          nextDate = addSequenceDays(date, offset, considerWeekend);
         } else {
           const currentDate = object?.assignedDate || object?.date;
-          if (!currentDate) return object;
-          nextDate = addSequenceDays(currentDate, step, considerWeekend);
+          nextDate = step !== 0 && currentDate
+            ? addSequenceDays(currentDate, step, considerWeekend)
+            : null;
         }
-        if (!nextDate?.isValid()) return object;
-        const value = nextDate.format("YYYY-MM-DD");
+
+        if (endDate) {
+          nextEndDate = addSequenceDays(endDate, offset, considerWeekend);
+        } else if (step !== 0) {
+          const currentEndDate = object?.endDate || object?.end_date;
+          nextEndDate = currentEndDate
+            ? addSequenceDays(currentEndDate, step, considerWeekend)
+            : null;
+        }
+
+        if (date || endDate) {
+          dateCount += step;
+        }
+
+        const value = nextDate?.isValid()
+          ? nextDate.format("YYYY-MM-DD")
+          : null;
+        const endValue = nextEndDate?.isValid()
+          ? nextEndDate.format("YYYY-MM-DD")
+          : null;
 
         if (
           object?.assignedDate === value &&
-          object?.date === value
+          object?.date === value &&
+          (object?.endDate ?? object?.end_date ?? null) === endValue
         ) {
           return object;
         }
 
         hasChanges = true;
         updatedCount += 1;
-        return { ...object, assignedDate: value, date: value };
+        return {
+          ...object,
+          assignedDate: value,
+          date: value,
+          endDate: endValue,
+        };
       });
 
       if (hasChanges) {
@@ -894,19 +982,27 @@ export default function NodeSequenceMain({
   }, [canEdit, selectedNodeIds, childrenByParent, sequenceGroups, persistObjects, appMessage]);
 
   const openAssignment = useCallback((node, mode) => {
-    if (!canEdit) return;
-    setPendingAssignment({ node, mode, date: dayjs() });
-  }, [canEdit]);
+    if (!canEdit || assignmentProcessing) return;
+    setPendingAssignment({ node, mode, date: dayjs(), withoutDate: false });
+  }, [canEdit, assignmentProcessing]);
 
   const closeAssignment = useCallback(() => setPendingAssignment(null), []);
 
   const executeAssignment = useCallback(async () => {
-    if (!pendingAssignment?.node) return;
-    const selectedDate = pendingAssignment.date?.startOf("day");
-    if (!selectedDate?.isValid()) {
+    const assignment = pendingAssignment;
+    if (!assignment?.node || assignmentProcessing) return;
+
+    const selectedDate = assignment.withoutDate
+      ? null
+      : assignment.date?.startOf("day");
+    if (!assignment.withoutDate && !selectedDate?.isValid()) {
       appMessage.warning("Please select an assigned date.");
       return;
     }
+
+    /* Close immediately so manual point picking can continue in the Viewer. */
+    setPendingAssignment(null);
+    setAssignmentProcessing(true);
 
     try {
       const tcapi = tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
@@ -921,7 +1017,7 @@ export default function NodeSequenceMain({
       const existingIds = new Set(allExisting.map((object) => String(getExternalId(object))).filter(Boolean));
 
       let referencePoint = null;
-      if (pendingAssignment.mode === "manual") {
+      if (assignment.mode === "manual") {
         tcapi.viewer.activateTool("pointMarkup");
         const point = await new Promise((resolve) => {
           const handler = (event) => {
@@ -957,20 +1053,20 @@ export default function NodeSequenceMain({
 
       if (!unique.length) {
         appMessage.info("No new objects were assigned.");
-        closeAssignment();
         return;
       }
 
-      const nodeId = pendingAssignment.node.id;
+      const nodeId = assignment.node.id;
       const existing = sequenceGroups.get(String(nodeId))?.objects || [];
       await persistObjects({ nodeId, objects: [...existing, ...unique] });
       appMessage.success(`${unique.length} object(s) assigned.`);
-      closeAssignment();
     } catch (error) {
       console.error("Assign objects failed:", error);
       appMessage.error(error?.message || "Assign objects failed.");
+    } finally {
+      setAssignmentProcessing(false);
     }
-  }, [pendingAssignment, sequenceGroups, persistObjects, appMessage, closeAssignment]);
+  }, [pendingAssignment, assignmentProcessing, sequenceGroups, persistObjects, appMessage]);
 
   const handleHighlightNode = useCallback(async (node) => {
     try {
@@ -1085,7 +1181,15 @@ export default function NodeSequenceMain({
   const rootNodes = childrenByParent.get("__ROOT__") || [];
 
   return (
-    <>
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        overflowX: "hidden",
+        boxSizing: "border-box",
+      }}
+    >
       {pendingAssignment && (
         <Modal
           title={pendingAssignment.mode === "auto" ? "Assign Picked Assemblies" : "Assign Multiple Assemblies"}
@@ -1097,13 +1201,30 @@ export default function NodeSequenceMain({
           destroyOnHidden
           maskClosable={false}
         >
-          <DatePicker
-            value={pendingAssignment.date || dayjs()}
-            format="DD-MM-YYYY"
-            allowClear={false}
-            style={{ width: "100%" }}
-            onChange={(date) => setPendingAssignment((current) => ({ ...current, date }))}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Checkbox
+              checked={Boolean(pendingAssignment.withoutDate)}
+              onChange={(event) =>
+                setPendingAssignment((current) => ({
+                  ...current,
+                  withoutDate: event.target.checked,
+                }))
+              }
+            >
+              Assign without date
+            </Checkbox>
+
+            <DatePicker
+              value={pendingAssignment.date || dayjs()}
+              format="DD-MM-YYYY"
+              allowClear={false}
+              disabled={Boolean(pendingAssignment.withoutDate)}
+              style={{ width: "100%" }}
+              onChange={(date) =>
+                setPendingAssignment((current) => ({ ...current, date }))
+              }
+            />
+          </div>
         </Modal>
       )}
 
@@ -1124,7 +1245,10 @@ export default function NodeSequenceMain({
         />
       )}
 
-      <Spin spinning={loading}>
+      <Spin
+        spinning={loading || assignmentProcessing}
+        tip={assignmentProcessing ? "Assigning items..." : undefined}
+      >
         {!rootNodes.length ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Nodes" />
         ) : (
@@ -1159,6 +1283,6 @@ export default function NodeSequenceMain({
           />
         )}
       </Spin>
-    </>
+    </div>
   );
 }

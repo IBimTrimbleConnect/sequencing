@@ -79,6 +79,7 @@ const getObjectKey = (object) =>
   String(object?.dbId ?? getExternalId(object) ?? "");
 
 const getObjectDate = (object) => object?.assignedDate ?? object?.date ?? "";
+const getObjectEndDate = (object) => object?.endDate ?? object?.end_date ?? "";
 
 /*
  * Convert Trimble viewer.getObjectProperties() output to a flat
@@ -1828,6 +1829,7 @@ const DEFAULT_COLUMN_WIDTHS = {
   drag: 34,
   index: 54,
   date: 110,
+  endDate: 110,
   actions: 72,
 };
 
@@ -1835,6 +1837,7 @@ const MIN_COLUMN_WIDTHS = {
   drag: 28,
   index: 44,
   date: 90,
+  endDate: 90,
   actions: 56,
 };
 
@@ -2141,6 +2144,7 @@ const SortableSubItem = React.memo(
     const { message } = App.useApp();
 
     const [assignDate, setAssignDate] = useState(null);
+    const [assignEndDate, setAssignEndDate] = useState(null);
 
     const [dateStep, setDateStep] = useState(0);
     const [considerWeekend, setConsiderWeekend] = useState(false);
@@ -2305,8 +2309,17 @@ const SortableSubItem = React.memo(
             >
               <DatePicker
                 size="small"
+                placeholder="Start date"
                 value={assignDate}
                 onChange={setAssignDate}
+              />
+
+              <DatePicker
+                size="small"
+                placeholder="End date"
+                value={assignEndDate}
+                minDate={assignDate || undefined}
+                onChange={setAssignEndDate}
               />
 
               <Input
@@ -2331,12 +2344,17 @@ const SortableSubItem = React.memo(
               <Button
                 size="small"
                 type="text"
-                disabled={!assignDate && !dateStep}
+                disabled={!assignDate && !assignEndDate && !Number(dateStep)}
                 icon={<EditOutlined />}
                 onClick={(event) => {
                   event.stopPropagation();
 
-                  onAssignDate(assignDate, dateStep, considerWeekend);
+                  onAssignDate(
+                    assignDate,
+                    assignEndDate,
+                    dateStep,
+                    considerWeekend,
+                  );
                 }}
               />
             </div>
@@ -2396,7 +2414,7 @@ const SortableSubItem = React.memo(
         },
         {
           key: "moveToSubPlan",
-          label: nodeMode ? "Move to Sub Plan" : "Move to Sub Plan",
+          label: nodeMode ? "Move to Node" : "Move to Sub Plan",
           onClick: ({ domEvent }) => {
             domEvent.stopPropagation();
             onOpenMoveModal?.(item);
@@ -2425,6 +2443,7 @@ const SortableSubItem = React.memo(
       return items;
     }, [
       assignDate,
+      assignEndDate,
       dateStep,
       considerWeekend,
       isOwner,
@@ -2443,6 +2462,11 @@ const SortableSubItem = React.memo(
 
     const displayDate = objectDate
       ? dayjs(objectDate).format("DD-MM-YYYY")
+      : "";
+
+    const objectEndDate = getObjectEndDate(item);
+    const displayEndDate = objectEndDate
+      ? dayjs(objectEndDate).format("DD-MM-YYYY")
       : "";
 
     return (
@@ -2539,6 +2563,10 @@ const SortableSubItem = React.memo(
 
           <td style={cellStyle.date}>
             {displayDate}
+          </td>
+
+          <td style={cellStyle.date}>
+            {displayEndDate}
           </td>
 
           <td
@@ -4131,7 +4159,7 @@ const SequenceObjectCollapse = ({
   );
 
   const handleAssignDate = useCallback(
-    (date, dateStep, considerWeekend = false) => {
+    (date, endDate, dateStep, considerWeekend = false) => {
       if (!isOwner) {
         return;
       }
@@ -4143,7 +4171,7 @@ const SequenceObjectCollapse = ({
        *
        * Negative Step is allowed for Modify Date.
        */
-      if (!date && step === 0) {
+      if (!date && !endDate && step === 0) {
         return;
       }
 
@@ -4165,6 +4193,8 @@ const SequenceObjectCollapse = ({
         }
 
         let nextDate = null;
+        let nextEndDate = null;
+        const offset = dateCount;
 
         if (date) {
           /*
@@ -4175,40 +4205,57 @@ const SequenceObjectCollapse = ({
            */
           nextDate = addSequenceDays(
             date,
-            dateCount,
+            offset,
             considerWeekend,
           );
-
-          dateCount += step;
         } else {
           const currentAssignedDate = object.assignedDate;
 
-          if (!currentAssignedDate) {
-            return object;
-          }
-
-          const currentDate = parseDate(
-            currentAssignedDate,
-          );
-
-          if (!currentDate) {
-            return object;
-          }
+          const currentDate = currentAssignedDate
+            ? parseDate(currentAssignedDate)
+            : null;
 
           /*
            * Modify Assigned Date using working days only.
            */
-          nextDate = addSequenceDays(
-            currentDate,
-            step,
+          nextDate = step !== 0 && currentDate
+            ? addSequenceDays(currentDate, step, considerWeekend)
+            : null;
+        }
+
+        if (endDate) {
+          nextEndDate = addSequenceDays(
+            endDate,
+            offset,
             considerWeekend,
           );
+        } else {
+          const currentEndDate = getObjectEndDate(object);
+          const parsedEndDate = currentEndDate
+            ? parseDate(currentEndDate)
+            : null;
+
+          nextEndDate = step !== 0 && parsedEndDate
+            ? addSequenceDays(parsedEndDate, step, considerWeekend)
+            : null;
         }
+
+        if (date || endDate) {
+          dateCount += step;
+        }
+
+        const assignedDateValue = nextDate?.isValid()
+          ? nextDate.format("YYYY-MM-DD")
+          : null;
+        const endDateValue = nextEndDate?.isValid()
+          ? nextEndDate.format("YYYY-MM-DD")
+          : null;
 
         return {
           ...object,
-          assignedDate: nextDate.format("YYYY-MM-DD"),
-          date: nextDate.format("YYYY-MM-DD"),
+          assignedDate: assignedDateValue,
+          date: assignedDateValue,
+          endDate: endDateValue,
         };
       });
 
@@ -4611,6 +4658,7 @@ const SequenceObjectCollapse = ({
                     "index",
                     ...visiblePropertyKeys,
                     "date",
+                    "endDate",
                     "actions",
                   ].reduce(
                     (
@@ -4681,6 +4729,13 @@ const SequenceObjectCollapse = ({
                   style={{
                     width:
                       columnWidths.date,
+                  }}
+                />
+
+                <col
+                  style={{
+                    width:
+                      columnWidths.endDate,
                   }}
                 />
 
@@ -4798,7 +4853,18 @@ const SequenceObjectCollapse = ({
                       handleAutoFitColumn
                     }
                   >
-                    Date
+                    Start Date
+                  </ResizableHeaderCell>
+
+                  <ResizableHeaderCell
+                    columnKey="endDate"
+                    width={columnWidths.endDate}
+                    minWidth={MIN_COLUMN_WIDTHS.endDate}
+                    align="center"
+                    onResize={handleColumnResize}
+                    onAutoFit={handleAutoFitColumn}
+                  >
+                    End Date
                   </ResizableHeaderCell>
 
                   <ResizableHeaderCell
