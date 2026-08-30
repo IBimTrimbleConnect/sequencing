@@ -114,6 +114,8 @@ const SortableHeader = ({
 
   onAutoAssign,
 
+  assignItemsDisabled = false,
+
   onCopySubPlan,
 
   onSortByDate,
@@ -583,7 +585,8 @@ const SortableHeader = ({
               onAssignObject,
 
             disabled:
-              !canEdit,
+              !canEdit ||
+              assignItemsDisabled,
           }),
         );
       }
@@ -612,7 +615,8 @@ const SortableHeader = ({
               onAutoAssign,
 
             disabled:
-              !canEdit,
+              !canEdit ||
+              assignItemsDisabled,
           }),
         );
       }
@@ -929,6 +933,8 @@ const SortableHeader = ({
       onAssignObject,
 
       onAutoAssign,
+
+      assignItemsDisabled,
 
       onCopySubPlan,
 
@@ -1247,10 +1253,17 @@ const SortableHeader = ({
               0,
 
             maxWidth:
-              "48%",
+              dateRange
+                ? "48%"
+                : undefined,
 
             flex:
-              "0 1 220px",
+              dateRange
+                ? "0 1 220px"
+                : "0 0 auto",
+
+            marginLeft:
+              "auto",
           }}
         >
           {dateRange && (

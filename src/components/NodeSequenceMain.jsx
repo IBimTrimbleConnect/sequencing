@@ -394,6 +394,7 @@ function NodeItem({
           onAddSubPlan={canEdit ? onCreateChild : undefined}
           onAssignObject={canEdit ? onAssignObject : undefined}
           onAutoAssign={canEdit ? onAutoAssign : undefined}
+          assignItemsDisabled={children.length > 0}
           onCopySubPlan={canEdit ? onCopyNode : undefined}
           onSortByDate={canEdit ? onSortByDate : undefined}
           onHighlightObject={onHighlightNode}
@@ -983,8 +984,18 @@ export default function NodeSequenceMain({
 
   const openAssignment = useCallback((node, mode) => {
     if (!canEdit || assignmentProcessing) return;
+
+    const hasSubNodes =
+      (childrenByParent.get(String(node?.id)) || []).length > 0;
+    if (hasSubNodes) {
+      appMessage.warning(
+        "Items can only be assigned to a node without sub nodes.",
+      );
+      return;
+    }
+
     setPendingAssignment({ node, mode, date: dayjs(), withoutDate: false });
-  }, [canEdit, assignmentProcessing]);
+  }, [canEdit, assignmentProcessing, childrenByParent, appMessage]);
 
   const closeAssignment = useCallback(() => setPendingAssignment(null), []);
 
@@ -1012,12 +1023,13 @@ export default function NodeSequenceMain({
         appMessage.info("Please select at least one object.");
         return;
       }
-
+      
       const allExisting = [...sequenceGroups.values()].flatMap((group) => group.objects || []);
       const existingIds = new Set(allExisting.map((object) => String(getExternalId(object))).filter(Boolean));
 
       let referencePoint = null;
       if (assignment.mode === "manual") {
+        appMessage.info("Please pick a reference point in the model.");
         tcapi.viewer.activateTool("pointMarkup");
         const point = await new Promise((resolve) => {
           const handler = (event) => {
@@ -1052,7 +1064,7 @@ export default function NodeSequenceMain({
       if (referencePoint) unique.sort((a, b) => Number(a.distance) - Number(b.distance));
 
       if (!unique.length) {
-        appMessage.info("No new objects were assigned.");
+        appMessage.info("No new objects were assigned because they were duplicates.");
         return;
       }
 
@@ -1192,7 +1204,7 @@ export default function NodeSequenceMain({
     >
       {pendingAssignment && (
         <Modal
-          title={pendingAssignment.mode === "auto" ? "Assign Picked Assemblies" : "Assign Multiple Assemblies"}
+          title={pendingAssignment.mode === "auto" ? "Assign Picked Items" : "Assign Multiple Items"}
           open
           okText="Continue"
           cancelText="Cancel"

@@ -2414,7 +2414,7 @@ const SortableSubItem = React.memo(
         },
         {
           key: "moveToSubPlan",
-          label: nodeMode ? "Move to Node" : "Move to Sub Plan",
+          label: nodeMode ? "Move to Sub Plan" : "Move to Sub Plan",
           onClick: ({ domEvent }) => {
             domEvent.stopPropagation();
             onOpenMoveModal?.(item);
