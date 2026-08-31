@@ -11,6 +11,7 @@ import {
   Input,
   Popconfirm,
   Checkbox,
+  Tooltip,
 } from "antd";
 
 import {
@@ -110,9 +111,13 @@ const SortableHeader = ({
 
   onAddSubPlan,
 
+  addSubPlanDisabled = false,
+
   onAssignObject,
 
   onAutoAssign,
+
+  onAssignByLayer,
 
   assignItemsDisabled = false,
 
@@ -550,6 +555,7 @@ const SortableHeader = ({
         (
           onAssignObject ||
           onAutoAssign ||
+          onAssignByLayer ||
           onAddSubPlan ||
           onSortByDate ||
           onCopySubPlan
@@ -623,6 +629,36 @@ const SortableHeader = ({
 
       /*
        * ============================================================
+       * ASSIGN BY LAYER
+       * ============================================================
+       */
+      if (
+        onAssignByLayer
+      ) {
+        items.push(
+          createMenuItem({
+            key:
+              "assignByLayer",
+
+            icon: (
+              <PlusOutlined />
+            ),
+
+            label:
+              "Assign by Layer",
+
+            callback:
+              onAssignByLayer,
+
+            disabled:
+              !canEdit ||
+              assignItemsDisabled,
+          }),
+        );
+      }
+
+      /*
+       * ============================================================
        * CREATE SUB PLAN
        * ============================================================
        */
@@ -645,7 +681,8 @@ const SortableHeader = ({
               onAddSubPlan,
 
             disabled:
-              !canEdit,
+              !canEdit ||
+              addSubPlanDisabled,
           }),
         );
       }
@@ -930,9 +967,13 @@ const SortableHeader = ({
 
       onAddSubPlan,
 
+      addSubPlanDisabled,
+
       onAssignObject,
 
       onAutoAssign,
+
+      onAssignByLayer,
 
       assignItemsDisabled,
 
@@ -1306,6 +1347,33 @@ const SortableHeader = ({
                 {dateRange.start} → {dateRange.end}
               </span>
             </span>
+          )}
+
+          {onHighlightObject && (
+            <Tooltip
+              title={
+                safeObjectCount > 0
+                  ? "Highlight objects in this node"
+                  : "This node has no objects"
+              }
+            >
+              <Button
+                type="text"
+                size="small"
+                aria-label="Highlight node objects"
+                icon={<SelectOutlined />}
+                disabled={safeObjectCount < 1}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (safeObjectCount < 1) return;
+                  onHighlightObject(plan);
+                }}
+                style={{
+                  flexShrink: 0,
+                  color: safeObjectCount > 0 ? "#1677ff" : undefined,
+                }}
+              />
+            </Tooltip>
           )}
 
           <Dropdown
