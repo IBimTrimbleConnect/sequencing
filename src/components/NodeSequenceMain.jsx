@@ -114,7 +114,19 @@ const normalizeColor = (color) => {
     }
   }
   if (typeof color === "string") {
-    const hex = color.trim().replace(/^#/, "");
+    const trimmed = color.trim();
+    const rgbMatch = trimmed.match(
+      /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+)?\s*\)$/i,
+    );
+    if (rgbMatch) {
+      return {
+        r: Math.max(0, Math.min(255, Number(rgbMatch[1]))),
+        g: Math.max(0, Math.min(255, Number(rgbMatch[2]))),
+        b: Math.max(0, Math.min(255, Number(rgbMatch[3]))),
+      };
+    }
+
+    const hex = trimmed.replace(/^#/, "");
     if (/^[0-9a-f]{6}$/i.test(hex)) {
       return {
         r: parseInt(hex.slice(0, 2), 16),
@@ -560,6 +572,7 @@ function NodeItem({
   onDelete,
   onCreateChild,
   onCopyNode,
+  onCopyNodesFrom,
   onAssignDate,
   onAssignObject,
   onAutoAssign,
@@ -567,6 +580,7 @@ function NodeItem({
   onSimulation,
   onSortByDate,
   onHighlightNode,
+  onShowOnlyNode,
   onPersistObjects,
   onMoveObjects,
   onReorderNodes,
@@ -670,8 +684,11 @@ function NodeItem({
           onAssignByLayer={canEdit ? onAssignByLayer : undefined}
           assignItemsDisabled={children.length > 0}
           onCopySubPlan={canEdit ? onCopyNode : undefined}
+          onCopyNodesFrom={canEdit ? onCopyNodesFrom : undefined}
+          copyNodesFromDisabled={directObjectCount > 0}
           onSortByDate={canEdit ? onSortByDate : undefined}
           onHighlightObject={onHighlightNode}
+          onShowOnlyObject={onShowOnlyNode}
           onAssignDate={canEdit ? onAssignDate : undefined}
           onSimulation={onSimulation}
           addChildLabel="Add Sub Plan"
@@ -700,6 +717,7 @@ function NodeItem({
               onDelete={onDelete}
               onCreateChild={onCreateChild}
               onCopyNode={onCopyNode}
+              onCopyNodesFrom={onCopyNodesFrom}
               onAssignDate={onAssignDate}
               onAssignObject={onAssignObject}
               onAutoAssign={onAutoAssign}
@@ -707,6 +725,7 @@ function NodeItem({
               onSimulation={onSimulation}
               onSortByDate={onSortByDate}
               onHighlightNode={onHighlightNode}
+              onShowOnlyNode={onShowOnlyNode}
               onPersistObjects={onPersistObjects}
               onMoveObjects={onMoveObjects}
               onReorderNodes={onReorderNodes}
@@ -743,7 +762,7 @@ function NodeItem({
   ], [
     node, directObjectCount, objectCount, nodeDateRange, canEdit, isFree, selected, setSelectedNodeIds,
     onEdit, onDelete, onCreateChild, onAssignObject, onAutoAssign, onAssignByLayer,
-    onCopyNode, onSortByDate, onHighlightNode, onAssignDate, onSimulation,
+    onCopyNode, onCopyNodesFrom, onSortByDate, onHighlightNode, onShowOnlyNode, onAssignDate, onSimulation,
     children, level, childrenByParent, nodeMap, sequenceGroups, nodes, leafMoveTargets,
     selectedNodeIds, isViewer, loadedModelIds, activeSimulationItem,
     displayIndexMap, onPersistObjects, onMoveObjects, onReorderNodes, activeHere, activeKeys,
@@ -845,6 +864,9 @@ export default function NodeSequenceMain({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingNode, setEditingNode] = useState(null);
   const [creatingParent, setCreatingParent] = useState(null);
+  const [copyNodesTarget, setCopyNodesTarget] = useState(null);
+  const [copyNodesSourceId, setCopyNodesSourceId] = useState(null);
+  const [copyNodesProcessing, setCopyNodesProcessing] = useState(false);
   const [pendingAssignment, setPendingAssignment] = useState(null);
   const [assignmentProcessing, setAssignmentProcessing] = useState(false);
   const [layerOptions, setLayerOptions] = useState([]);
@@ -1179,13 +1201,16 @@ export default function NodeSequenceMain({
     setCreatingParent(null);
   }, []);
 
-  const handleCreateNodes = useCallback(async ({ names, parentId, color }) => {
-    for (let index = 0; index < names.length; index += 1) {
+  const handleCreateNodes = useCallback(async ({ names, parentId, color, items }) => {
+    const nodesToCreate = Array.isArray(items) && items.length
+      ? items
+      : names.map((name) => ({ name, color }));
+    for (let index = 0; index < nodesToCreate.length; index += 1) {
       await createNode({
         trimbleProjectId: effectiveProjectId,
         parentId,
-        name: names[index],
-        color,
+        name: nodesToCreate[index].name,
+        color: nodesToCreate[index].color ?? null,
       });
     }
     await loadData();
@@ -1216,7 +1241,9 @@ export default function NodeSequenceMain({
       const copy = await createNode({
         trimbleProjectId: effectiveProjectId,
         parentId: sourceId === String(node.id) ? getNodeParentId(node) : newParentId,
-        name: `${source.name} Copy`,
+        name: sourceId === String(node.id)
+          ? `${source.name} Copy`
+          : source.name,
         color: source.color ?? null,
         nodeType: source.nodeType,
         sortOrder: getNodeSort(source) + 1,
@@ -1225,6 +1252,98 @@ export default function NodeSequenceMain({
     }
     await loadData();
   }, [canEdit, childrenByParent, nodeMap, effectiveProjectId, loadData]);
+
+  const openCopyNodesFrom = useCallback((targetNode) => {
+    if (!canEdit || !targetNode?.id) return;
+    const directObjects =
+      sequenceGroups.get(String(targetNode.id))?.objects || [];
+    if (directObjects.length > 0) {
+      appMessage.warning(
+        "Move all items out of this node before copying sub nodes into it.",
+      );
+      return;
+    }
+    setCopyNodesSourceId(null);
+    setCopyNodesTarget(targetNode);
+  }, [canEdit, sequenceGroups, appMessage]);
+
+  const closeCopyNodesFrom = useCallback(() => {
+    if (copyNodesProcessing) return;
+    setCopyNodesTarget(null);
+    setCopyNodesSourceId(null);
+  }, [copyNodesProcessing]);
+
+  const confirmCopyNodesFrom = useCallback(async () => {
+    if (
+      !canEdit ||
+      !copyNodesTarget?.id ||
+      !copyNodesSourceId ||
+      copyNodesProcessing
+    ) {
+      return;
+    }
+
+    const sourceChildren =
+      childrenByParent.get(String(copyNodesSourceId)) || [];
+    if (!sourceChildren.length) {
+      appMessage.warning("The selected source node has no sub nodes.");
+      return;
+    }
+
+    setCopyNodesProcessing(true);
+    try {
+      for (const sourceChild of sourceChildren) {
+        const sourceIds = getDescendantIds(
+          sourceChild.id,
+          childrenByParent,
+        );
+        const copiedIdMap = new Map();
+
+        for (const sourceId of sourceIds) {
+          const source = nodeMap.get(String(sourceId));
+          if (!source) continue;
+
+          const sourceParentId = getNodeParentId(source);
+          const targetParentId = String(sourceId) === String(sourceChild.id)
+            ? copyNodesTarget.id
+            : copiedIdMap.get(String(sourceParentId));
+          if (!targetParentId) continue;
+
+          const copied = await createNode({
+            trimbleProjectId: effectiveProjectId,
+            parentId: targetParentId,
+            name: source.name,
+            color: source.color ?? null,
+            nodeType: source.nodeType,
+            sortOrder: getNodeSort(source),
+          });
+          copiedIdMap.set(String(sourceId), copied.id);
+        }
+      }
+
+      await loadData();
+      appMessage.success(
+        `Sub nodes copied into ${copyNodesTarget.name || "the target node"}.`,
+      );
+      setCopyNodesTarget(null);
+      setCopyNodesSourceId(null);
+    } catch (error) {
+      console.error("Copy nodes from source failed:", error);
+      appMessage.error(error?.message || "Unable to copy nodes.");
+    } finally {
+      setCopyNodesProcessing(false);
+    }
+  }, [
+    canEdit,
+    copyNodesTarget,
+    copyNodesSourceId,
+    copyNodesProcessing,
+    childrenByParent,
+    nodeMap,
+    effectiveProjectId,
+    loadData,
+    appMessage,
+  ]);
 
   const getNodeObjects = useCallback((nodeId) => {
     const ids = getDescendantIds(nodeId, childrenByParent);
@@ -1961,14 +2080,60 @@ export default function NodeSequenceMain({
         if (!groups.has(key)) groups.set(key, { modelId: object.modelId, objectRuntimeIds: new Set() });
         groups.get(key).objectRuntimeIds.add(object.runtimeId);
       });
-      const modelObjectIds = [...groups.values()].map((group) => ({ modelId: group.modelId, objectRuntimeIds: [...group.objectRuntimeIds] }));
+      const modelObjectIds = [...groups.values()].map((group) => ({
+        modelId: group.modelId,
+        objectRuntimeIds: [...group.objectRuntimeIds],
+      }));
       const tcapi = tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
       tcapiRef.current = tcapi;
       await tcapi.viewer.setSelection({ modelObjectIds }, "set");
-      if (!modelObjectIds.length) appMessage.info("No loaded objects are available for highlighting.");
+      if (!modelObjectIds.length) {
+        appMessage.info("No loaded objects are available for highlighting.");
+      }
     } catch (error) {
       console.error(error);
       appMessage.error("Unable to highlight the node objects.");
+    }
+  }, [getNodeObjects, appMessage]);
+
+  const handleShowOnlyNode = useCallback(async (node) => {
+    try {
+      const objects = getNodeObjects(node.id);
+      const groups = new Map();
+      objects.forEach((object) => {
+        if (
+          object?.objectAvailable === false ||
+          object?.modelId == null ||
+          object?.runtimeId == null
+        ) {
+          return;
+        }
+        const key = String(object.modelId);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            modelId: object.modelId,
+            entityIds: new Set(),
+          });
+        }
+        groups.get(key).entityIds.add(object.runtimeId);
+      });
+
+      const modelEntities = [...groups.values()].map((group) => ({
+        modelId: group.modelId,
+        entityIds: [...group.entityIds],
+      }));
+      if (!modelEntities.length) {
+        appMessage.info("No loaded objects are available for Show Only.");
+        return;
+      }
+
+      const tcapi = tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
+      tcapiRef.current = tcapi;
+      await tcapi.viewer.setSelection({ modelObjectIds: [] }, "set");
+      await tcapi.viewer.isolateEntities(modelEntities);
+    } catch (error) {
+      console.error(error);
+      appMessage.error("Unable to show only the node objects.");
     }
   }, [getNodeObjects, appMessage]);
 
@@ -2114,6 +2279,21 @@ export default function NodeSequenceMain({
   }, [layerOptions, layerSearch]);
 
   const rootNodes = childrenByParent.get("__ROOT__") || [];
+
+  const copyNodesSourceTreeData = useMemo(() => {
+    const buildSourceNode = (node) => {
+      const children = childrenByParent.get(String(node.id)) || [];
+      const isTarget = String(node.id) === String(copyNodesTarget?.id || "");
+      return {
+        key: String(node.id),
+        title: `${node.name || "Unnamed Node"} (${children.length} sub node${children.length === 1 ? "" : "s"})`,
+        disabled: isTarget || children.length === 0,
+        children: children.map(buildSourceNode),
+      };
+    };
+
+    return rootNodes.map(buildSourceNode);
+  }, [rootNodes, childrenByParent, copyNodesTarget]);
 
   return (
     <div
@@ -2261,6 +2441,46 @@ export default function NodeSequenceMain({
         </Modal>
       )}
 
+      {copyNodesTarget && (
+        <Modal
+          title={`Copy Nodes Into ${copyNodesTarget.name || "Node"}`}
+          open
+          okText="Copy Nodes"
+          cancelText="Cancel"
+          confirmLoading={copyNodesProcessing}
+          okButtonProps={{ disabled: !copyNodesSourceId }}
+          onOk={confirmCopyNodesFrom}
+          onCancel={closeCopyNodesFrom}
+          maskClosable={false}
+          destroyOnHidden
+        >
+          <div style={{ marginBottom: 10, color: "rgba(0, 0, 0, 0.65)" }}>
+            Select a source Node. Its direct Sub Nodes and their complete
+            hierarchy will be copied into the target. The source Node and its
+            objects will not be copied.
+          </div>
+          <div
+            style={{
+              maxHeight: 360,
+              overflow: "auto",
+              border: "1px solid #d9d9d9",
+              borderRadius: 6,
+              padding: 8,
+            }}
+          >
+            <Tree
+              blockNode
+              defaultExpandAll
+              treeData={copyNodesSourceTreeData}
+              selectedKeys={copyNodesSourceId ? [String(copyNodesSourceId)] : []}
+              onSelect={(selectedKeys) => {
+                setCopyNodesSourceId(selectedKeys?.[0] || null);
+              }}
+            />
+          </div>
+        </Modal>
+      )}
+
       {modalOpen && (
         <SubPlanModal
           title={editingNode ? "Edit Node" : "Create Node"}
@@ -2272,7 +2492,9 @@ export default function NodeSequenceMain({
           isEditing={Boolean(editingNode)}
           nodeMode
           projectIdOverride={effectiveProjectId}
-          onCreateOverride={({ names, parentId, color }) => handleCreateNodes({ names, parentId, color })}
+          onCreateOverride={({ names, parentId, color, items }) =>
+            handleCreateNodes({ names, parentId, color, items })
+          }
           onUpdateOverride={handleUpdateNode}
           entityLabel="Node"
         />
@@ -2304,6 +2526,7 @@ export default function NodeSequenceMain({
             onDelete={handleDeleteNode}
             onCreateChild={handleCreateChild}
             onCopyNode={handleCopyNode}
+            onCopyNodesFrom={openCopyNodesFrom}
             onAssignDate={handleAssignDate}
             onAssignObject={(node) => openAssignment(node, "manual")}
             onAutoAssign={(node) => openAssignment(node, "auto")}
@@ -2311,6 +2534,7 @@ export default function NodeSequenceMain({
             onSimulation={handleSimulation}
             onSortByDate={handleSortByDate}
             onHighlightNode={handleHighlightNode}
+            onShowOnlyNode={handleShowOnlyNode}
             onPersistObjects={persistObjects}
             onMoveObjects={handleMoveNodeObjects}
             onReorderNodes={handleReorderNodes}

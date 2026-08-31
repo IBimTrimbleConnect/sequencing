@@ -43,6 +43,7 @@ const CREATE_MODE = {
   SERIAL: "serial",
   DATES: "dates",
   ASSEMBLY_NAME: "assemblyName",
+  LAYERS: "layers",
 };
 
 const CREATE_MODE_OPTIONS = [
@@ -61,6 +62,10 @@ const CREATE_MODE_OPTIONS = [
   {
     value: CREATE_MODE.ASSEMBLY_NAME,
     label: "Assembly Names",
+  },
+  {
+    value: CREATE_MODE.LAYERS,
+    label: "Layers",
   },
 ];
 
@@ -84,6 +89,29 @@ const clampColorValue = (value) =>
   Math.max(0, Math.min(255, Number(value) || 0));
 
 const normalizeColor = (value, fallback = DEFAULT_COLOR) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const rgbMatch = trimmed.match(
+      /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+)?\s*\)$/i,
+    );
+    if (rgbMatch) {
+      return {
+        r: clampColorValue(rgbMatch[1]),
+        g: clampColorValue(rgbMatch[2]),
+        b: clampColorValue(rgbMatch[3]),
+      };
+    }
+
+    const hex = trimmed.replace(/^#/, "");
+    if (/^[0-9a-f]{6}$/i.test(hex)) {
+      return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16),
+      };
+    }
+  }
+
   const source = value?.rgb ?? value ?? fallback;
 
   return {
@@ -93,6 +121,38 @@ const normalizeColor = (value, fallback = DEFAULT_COLOR) => {
 
     b: clampColorValue(source?.b ?? fallback.b),
   };
+};
+
+const hslToRgb = (hue, saturation = 72, lightness = 58) => {
+  const h = ((Number(hue) % 360) + 360) % 360;
+  const s = Math.max(0, Math.min(100, Number(saturation))) / 100;
+  const l = Math.max(0, Math.min(100, Number(lightness))) / 100;
+  const chroma = (1 - Math.abs(2 * l - 1)) * s;
+  const section = h / 60;
+  const x = chroma * (1 - Math.abs((section % 2) - 1));
+  let rgb = [0, 0, 0];
+  if (section < 1) rgb = [chroma, x, 0];
+  else if (section < 2) rgb = [x, chroma, 0];
+  else if (section < 3) rgb = [0, chroma, x];
+  else if (section < 4) rgb = [0, x, chroma];
+  else if (section < 5) rgb = [x, 0, chroma];
+  else rgb = [chroma, 0, x];
+  const match = l - chroma / 2;
+  return {
+    r: Math.round((rgb[0] + match) * 255),
+    g: Math.round((rgb[1] + match) * 255),
+    b: Math.round((rgb[2] + match) * 255),
+  };
+};
+
+const buildDistinctColors = (count, selectedColor) => {
+  const quantity = Math.max(0, Number(count) || 0);
+  const normalizedSelectedColor = normalizeColor(selectedColor);
+  return Array.from({ length: quantity }, (_, index) =>
+    index === 0
+      ? normalizedSelectedColor
+      : hslToRgb((index * 137.508 + 18) % 360),
+  );
 };
 
 /* -------------------------------------------------------------------------- */
@@ -430,7 +490,7 @@ const SubPlanModal = ({
     ...DEFAULT_COLOR,
   });
 
-  const [useColor, setUseColor] = useState(true);
+  const [useColor, setUseColor] = useState(false);
 
   const [createMode, setCreateMode] = useState(CREATE_MODE.MANUAL);
 
@@ -457,6 +517,10 @@ const SubPlanModal = ({
 
   const [loadingAssemblyNames, setLoadingAssemblyNames] = useState(false);
 
+  const [layerOptions, setLayerOptions] = useState([]);
+
+  const [loadingLayers, setLoadingLayers] = useState(false);
+
   const editingSubPlan = subPlan || (isEditing ? plan : null);
 
   const parentPlan = isEditing ? null : plan;
@@ -476,13 +540,17 @@ const SubPlanModal = ({
       ...DEFAULT_COLOR,
     });
 
-    setUseColor(true);
+    setUseColor(false);
 
     setCreateMode(CREATE_MODE.MANUAL);
 
     setAssemblyNames([]);
 
     setLoadingAssemblyNames(false);
+
+    setLayerOptions([]);
+
+    setLoadingLayers(false);
 
     setPublicHolidayDates(new Set());
 
@@ -627,6 +695,81 @@ const SubPlanModal = ({
     }
   }, []);
 
+  const loadLayers = useCallback(async () => {
+    try {
+      setLoadingLayers(true);
+      setLayerOptions([]);
+
+      const tcapi = await WorkspaceAPI.connect(window.parent);
+      const [objectGroups, models] = await Promise.all([
+        tcapi.viewer.getObjects(),
+        tcapi.viewer.getModels().catch(() => []),
+      ]);
+      const modelIds = [...new Set(
+        (objectGroups || [])
+          .map((group) => group?.modelId)
+          .filter((modelId) => modelId != null),
+      )];
+
+      const results = await Promise.allSettled(
+        modelIds.map(async (modelId) => ({
+          modelId,
+          layers: await tcapi.viewer.getLayers(modelId),
+        })),
+      );
+      const options = [];
+      const seenKeys = new Set();
+
+      results.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        const { modelId, layers } = result.value;
+        const model = (models || []).find((item) =>
+          [item?.id, item?.modelId, item?.fileId, item?.versionId]
+            .filter((value) => value != null)
+            .some((value) => String(value) === String(modelId)),
+        );
+        const modelName =
+          model?.name ||
+          model?.fileName ||
+          model?.displayName ||
+          String(modelId);
+
+        (layers || []).forEach((layer, index) => {
+          const layerName = String(layer?.name || "").trim();
+          if (!layerName) return;
+          const key = `${String(modelId)}::${index}::${layerName}`;
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+          options.push({
+            value: key,
+            label: `${layerName} (${modelName})`,
+            layerName,
+            subPlanName: `${layerName} (${modelName})`,
+            modelName,
+          });
+        });
+      });
+
+      options.sort((left, right) =>
+        left.label.localeCompare(right.label, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
+      setLayerOptions(options);
+
+      if (!options.length) {
+        message.warning("No layers were found in the loaded models.");
+      }
+    } catch (error) {
+      console.error("Load Layers failed:", error);
+      setLayerOptions([]);
+      message.error(error?.message || "Unable to retrieve model layers.");
+    } finally {
+      setLoadingLayers(false);
+    }
+  }, []);
+
   /* ------------------------------------------------------------------------ */
   /* OPEN                                                                     */
   /* ------------------------------------------------------------------------ */
@@ -641,10 +784,9 @@ const SubPlanModal = ({
         planName: editingSubPlan.name || "",
       });
 
-      const hasColor = editingSubPlan.color != null;
-
-      setUseColor(hasColor);
       setColor(normalizeColor(editingSubPlan.color));
+
+      setUseColor(Boolean(editingSubPlan.color));
 
       return;
     }
@@ -674,17 +816,21 @@ const SubPlanModal = ({
        * Assembly.
        */
       assemblyNames: [],
+
+      layerKeys: [],
     });
 
     setColor({
       ...DEFAULT_COLOR,
     });
 
-    setUseColor(true);
+    setUseColor(false);
 
     setCreateMode(CREATE_MODE.MANUAL);
 
     setAssemblyNames([]);
+
+    setLayerOptions([]);
 
     setPublicHolidayDates(new Set());
 
@@ -707,7 +853,11 @@ const SubPlanModal = ({
     if (createMode === CREATE_MODE.DATES) {
       loadCountries();
     }
-  }, [open, isEditing, createMode, loadAssemblyNames, loadCountries]);
+
+    if (createMode === CREATE_MODE.LAYERS) {
+      loadLayers();
+    }
+  }, [open, isEditing, createMode, loadAssemblyNames, loadCountries, loadLayers]);
 
   /* ------------------------------------------------------------------------ */
   /* COLOR                                                                    */
@@ -729,6 +879,10 @@ const SubPlanModal = ({
 
       if (mode !== CREATE_MODE.ASSEMBLY_NAME) {
         form.setFieldValue("assemblyNames", []);
+      }
+
+      if (mode !== CREATE_MODE.LAYERS) {
+        form.setFieldValue("layerKeys", []);
       }
 
       setPublicHolidayDates(new Set());
@@ -773,6 +927,11 @@ const SubPlanModal = ({
 
         {
           name: "assemblyNames",
+          errors: [],
+        },
+
+        {
+          name: "layerKeys",
           errors: [],
         },
       ]);
@@ -986,9 +1145,25 @@ const SubPlanModal = ({
           : [];
       }
 
+      if (createMode === CREATE_MODE.LAYERS) {
+        const selectedKeys = Array.isArray(values.layerKeys)
+          ? new Set(values.layerKeys.map(String))
+          : new Set();
+        return layerOptions
+          .filter((option) => selectedKeys.has(String(option.value)))
+          .map((option) => option.subPlanName)
+          .filter(Boolean)
+          .sort((left, right) =>
+            left.localeCompare(right, undefined, {
+              numeric: true,
+              sensitivity: "base",
+            }),
+          );
+      }
+
       return [];
     },
-    [createMode, publicHolidayDates],
+    [createMode, publicHolidayDates, layerOptions],
   );
 
   /* ------------------------------------------------------------------------ */
@@ -1094,6 +1269,10 @@ const SubPlanModal = ({
       /*
        * Existing Saga splits by comma.
        */
+      const itemColors = useColor && names.length > 1
+        ? buildDistinctColors(names.length, color)
+        : [];
+
       const createPayload = {
         projectId,
         planId: parentPlan.id,
@@ -1101,6 +1280,14 @@ const SubPlanModal = ({
         color: normalizedColor,
         names,
         parentId: parentPlan.id,
+        items: names.map((name, index) => ({
+          name,
+          color: !useColor
+            ? null
+            : names.length === 1
+              ? normalizedColor
+              : itemColors[index],
+        })),
       };
 
       if (nodeMode && onCreateOverride) {
@@ -1208,7 +1395,7 @@ const SubPlanModal = ({
           >
             <Form.Item
               name="planName"
-              label={nodeMode ? "Name" : "Sub Plan Name"}
+              label="Sub Plan Name"
               style={{
                 flex: 1,
 
@@ -1227,25 +1414,31 @@ const SubPlanModal = ({
               <Input placeholder="Grid 1-2, Grid 2-4" disabled={pending} />
             </Form.Item>
 
-            <Form.Item label="Color">
-              <Space size={6}>
-                <Switch
-                  size="small"
-                  checked={useColor}
-                  disabled={pending}
-                  onChange={setUseColor}
-                />
-
-                <ColorPicker
-                  value={color}
-                  format="rgb"
-                  disabled={pending || !useColor}
-                  onChange={handleColorChange}
-                />
-              </Space>
-            </Form.Item>
           </div>
         )}
+
+        <Form.Item label="Color">
+          <Space>
+            <Switch
+              checked={useColor}
+              disabled={pending}
+              checkedChildren="On"
+              unCheckedChildren="Off"
+              onChange={setUseColor}
+            />
+            <ColorPicker
+              value={color}
+              format="rgb"
+              disabled={pending || !useColor}
+              onChange={handleColorChange}
+            />
+            {!isEditing && useColor && (
+              <span style={{ color: "rgba(0, 0, 0, 0.55)", fontSize: 12 }}>
+                Multiple Sub Plans will receive different colors.
+              </span>
+            )}
+          </Space>
+        </Form.Item>
 
         {/* SERIAL */}
 
@@ -1582,6 +1775,56 @@ const SubPlanModal = ({
           </>
         )}
 
+        {/* LAYERS */}
+
+        {!isEditing && createMode === CREATE_MODE.LAYERS && (
+          <>
+            <Form.Item label="Layers">
+              <div style={{ display: "flex", gap: 8 }}>
+                <Form.Item
+                  name="layerKeys"
+                  noStyle
+                  rules={[
+                    {
+                      required: true,
+                      type: "array",
+                      min: 1,
+                      message: "Please select at least one Layer.",
+                    },
+                  ]}
+                >
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    allowClear
+                    optionFilterProp="label"
+                    maxTagCount="responsive"
+                    loading={loadingLayers}
+                    disabled={pending || loadingLayers}
+                    options={layerOptions}
+                    placeholder={
+                      loadingLayers ? "Loading Layers..." : "Select Layers"
+                    }
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </Form.Item>
+
+                <Button
+                  icon={<ReloadOutlined />}
+                  loading={loadingLayers}
+                  disabled={pending || loadingLayers}
+                  onClick={loadLayers}
+                />
+              </div>
+            </Form.Item>
+
+            <div style={{ marginBottom: 16, fontSize: 12, color: "#888" }}>
+              {layerOptions.length} layers found in the loaded models. Each
+              selected layer will create one Sub Plan.
+            </div>
+          </>
+        )}
+
         {/* FOOTER */}
 
         <Form.Item
@@ -1606,7 +1849,11 @@ const SubPlanModal = ({
               type="primary"
               htmlType="submit"
               loading={pending}
-              disabled={loadingCountries || loadingPublicHolidays}
+              disabled={
+                loadingCountries ||
+                loadingPublicHolidays ||
+                loadingLayers
+              }
             >
               {submitButtonName}
             </Button>

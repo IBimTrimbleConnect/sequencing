@@ -950,7 +950,7 @@ export default function App() {
               before using Sequence Planner.
               <br />
               After the model has finished loading, click{" "}
-              <strong>Check Again</strong>.
+              <strong>Refresh</strong>.
             </span>
           }
           extra={

@@ -24,6 +24,7 @@ import {
   CalendarOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  EyeOutlined,
   SelectOutlined,
   SortAscendingOutlined,
 } from "@ant-design/icons";
@@ -123,9 +124,15 @@ const SortableHeader = ({
 
   onCopySubPlan,
 
+  onCopyNodesFrom,
+
+  copyNodesFromDisabled = false,
+
   onSortByDate,
 
   onHighlightObject,
+
+  onShowOnlyObject,
 
   onSimulation,
 
@@ -745,6 +752,18 @@ const SortableHeader = ({
         );
       }
 
+      if (onCopyNodesFrom) {
+        items.push(
+          createMenuItem({
+            key: "copyNodesFrom",
+            icon: <CopyOutlined />,
+            label: "Copy Nodes From",
+            callback: onCopyNodesFrom,
+            disabled: !canEdit || copyNodesFromDisabled,
+          }),
+        );
+      }
+
       /*
        * Divider before Edit/Delete.
        */
@@ -978,6 +997,10 @@ const SortableHeader = ({
       assignItemsDisabled,
 
       onCopySubPlan,
+
+      onCopyNodesFrom,
+
+      copyNodesFromDisabled,
 
       onSortByDate,
 
@@ -1349,24 +1372,24 @@ const SortableHeader = ({
             </span>
           )}
 
-          {onHighlightObject && (
+          {onShowOnlyObject && (
             <Tooltip
               title={
                 safeObjectCount > 0
-                  ? "Highlight objects in this node"
+                  ? "Show only objects in this node"
                   : "This node has no objects"
               }
             >
               <Button
                 type="text"
                 size="small"
-                aria-label="Highlight node objects"
-                icon={<SelectOutlined />}
+                aria-label="Show only node objects"
+                icon={<EyeOutlined />}
                 disabled={safeObjectCount < 1}
                 onClick={(event) => {
                   event.stopPropagation();
                   if (safeObjectCount < 1) return;
-                  onHighlightObject(plan);
+                  onShowOnlyObject(plan);
                 }}
                 style={{
                   flexShrink: 0,
