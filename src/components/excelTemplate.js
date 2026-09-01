@@ -41,6 +41,7 @@ export const fillHeader = (worksheet, data) => {
 };
 
 export const findTemplateRows = (worksheet) => {
+  let headerRowIndex = null;
   let planRowIndex = null;
   let groupRowIndex = null;
   let itemRowIndex = null;
@@ -50,6 +51,7 @@ export const findTemplateRows = (worksheet) => {
       const text = getCellText(cell);
       if (!text) return;
 
+      if (text.trim() === "Sequence No") headerRowIndex = rowNumber;
       if (text.includes("{{PlanName}}")) planRowIndex = rowNumber;
       if (text.includes("{{GroupDate}}") || text.includes("{{Qty}}")) {
         groupRowIndex = rowNumber;
@@ -64,6 +66,7 @@ export const findTemplateRows = (worksheet) => {
     });
   });
 
+  if (!headerRowIndex) throw new Error("Missing Sequence No header in Excel template.");
   if (!planRowIndex) throw new Error("Missing {{PlanName}} in Excel template.");
   if (!groupRowIndex) {
     throw new Error("Missing {{GroupDate}} or {{Qty}} in Excel template.");
@@ -79,7 +82,7 @@ export const findTemplateRows = (worksheet) => {
     );
   }
 
-  return { planRowIndex, groupRowIndex, itemRowIndex };
+  return { headerRowIndex, planRowIndex, groupRowIndex, itemRowIndex };
 };
 
 export const copyRowTo = (worksheet, sourceRowNumber, targetRowNumber) => {
@@ -109,11 +112,87 @@ export const copyRowTo = (worksheet, sourceRowNumber, targetRowNumber) => {
   return targetRow;
 };
 
-export const fillGroups = (worksheet, planGroups) => {
-  const { planRowIndex, groupRowIndex, itemRowIndex } =
+const getExportColumnHeader = (column) => {
+  const field = String(column?.field || "").trim();
+  if (!field) return "";
+
+  return field.includes("+") ? field.split("+").pop().trim() : field;
+};
+
+const configureColumnSetTemplate = (
+  worksheet,
+  headerRowIndex,
+  planRowIndex,
+  groupRowIndex,
+  itemRowIndex,
+  columns,
+) => {
+  const headerRow = worksheet.getRow(headerRowIndex);
+  const planRow = worksheet.getRow(planRowIndex);
+  const groupRow = worksheet.getRow(groupRowIndex);
+  const itemRow = worksheet.getRow(itemRowIndex);
+  const headerStyle = clone(headerRow.getCell(2).style);
+  const planStyle = clone(planRow.getCell(2).style);
+  const groupStyle = clone(groupRow.getCell(2).style);
+  const itemStyle = clone(itemRow.getCell(2).style);
+  const requiredColumnCount = 1 + columns.length;
+  const clearUntil = Math.max(worksheet.columnCount, requiredColumnCount);
+
+  for (let columnNumber = 1; columnNumber <= clearUntil; columnNumber += 1) {
+    headerRow.getCell(columnNumber).value = null;
+    itemRow.getCell(columnNumber).value = null;
+  }
+
+  headerRow.getCell(1).value = "Sequence No";
+  itemRow.getCell(1).value = "{{SequenceNo}}";
+
+  columns.forEach((column, index) => {
+    const columnNumber = index + 2;
+    const field = String(column.field).trim();
+    const headerCell = headerRow.getCell(columnNumber);
+    const itemCell = itemRow.getCell(columnNumber);
+
+    if (columnNumber > 1) {
+      headerCell.style = clone(headerStyle);
+      itemCell.style = clone(itemStyle);
+      planRow.getCell(columnNumber).style = clone(planStyle);
+      groupRow.getCell(columnNumber).style = clone(groupStyle);
+    }
+
+    headerCell.value = getExportColumnHeader(column);
+    itemCell.value = `{{${field}}}`;
+    worksheet.getColumn(columnNumber).width = Math.max(
+      12,
+      Math.min(32, getExportColumnHeader(column).length + 4),
+    );
+  });
+
+  headerRow.commit();
+  planRow.commit();
+  groupRow.commit();
+  itemRow.commit();
+};
+
+export const fillGroups = (worksheet, planGroups, columns = []) => {
+  const { headerRowIndex, planRowIndex, groupRowIndex, itemRowIndex } =
     findTemplateRows(worksheet);
 
+  const exportColumns = (columns || []).filter((column) => {
+    const field = String(column?.field || "").trim();
+    return field && field.toLowerCase() !== "name";
+  });
+
+  configureColumnSetTemplate(
+    worksheet,
+    headerRowIndex,
+    planRowIndex,
+    groupRowIndex,
+    itemRowIndex,
+    exportColumns,
+  );
+
   let insertAt = itemRowIndex + 1;
+  let sequenceNumber = 1;
 
   planGroups.forEach((plan, planIndex) => {
     if (!plan?.groups?.length) return;
@@ -130,23 +209,15 @@ export const fillGroups = (worksheet, planGroups) => {
         Qty: items.length,
       });
 
-      items.forEach((item, itemIndex) => {
+      items.forEach((item) => {
         const itemRow = copyRowTo(worksheet, itemRowIndex, insertAt++);
 
         fillRow(itemRow, {
-          Index: itemIndex + 1,
-          AsmName: item.AsmName || "",
-          AsmPos: item.AsmPos || "",
-          MainProfile: item.MainProfile || "",
-          GridPos: item.GridPos || "",
-          Length: item.Length ?? "",
-          Weight: item.Weight ?? "",
-          Cog: item.Cog || "",
-          CogX: item.CogX ?? "",
-          CogY: item.CogY ?? "",
-          CogZ: item.CogZ ?? "",
-          Comment: item.Comment || "",
+          SequenceNo: sequenceNumber,
+          ...(item.DataTableValues || {}),
         });
+
+        sequenceNumber += 1;
       });
     });
 

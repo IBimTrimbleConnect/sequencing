@@ -757,7 +757,7 @@ const SortableHeader = ({
           createMenuItem({
             key: "copyNodesFrom",
             icon: <CopyOutlined />,
-            label: "Copy Nodes From",
+            label: "Copy Sub Plans From",
             callback: onCopyNodesFrom,
             disabled: !canEdit || copyNodesFromDisabled,
           }),

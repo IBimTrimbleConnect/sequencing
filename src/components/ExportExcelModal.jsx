@@ -14,6 +14,7 @@ const ExportExcelModal = ({
   exporting,
   form,
   plans,
+  columnSets,
   onCancel,
   onConfirm,
 }) => (
@@ -28,6 +29,7 @@ const ExportExcelModal = ({
     destroyOnHidden
     maskClosable={!exporting}
     closable={!exporting}
+    width={600}
   >
     <Form
       form={form}
@@ -37,6 +39,7 @@ const ExportExcelModal = ({
         startDate: null,
         endDate: null,
         planIds: [],
+        columnSetName: null,
       }}
     >
       <Form.Item
@@ -54,11 +57,7 @@ const ExportExcelModal = ({
       </Form.Item>
 
       <Space style={{ width: "100%" }} size={16} align="start">
-        <Form.Item
-          label="Start Date"
-          name="startDate"
-          style={{ flex: 1 }}
-        >
+        <Form.Item label="Start Date" name="startDate" style={{ flex: 1 }}>
           <DatePicker
             style={{ width: "100%" }}
             format="DD-MM-YYYY"
@@ -75,11 +74,9 @@ const ExportExcelModal = ({
             ({ getFieldValue }) => ({
               validator(_, value) {
                 const start = getFieldValue("startDate");
-
                 if (!start || !value || !value.isBefore(start, "day")) {
                   return Promise.resolve();
                 }
-
                 return Promise.reject(
                   new Error(
                     "End Date must be greater than or equal to Start Date.",
@@ -96,6 +93,28 @@ const ExportExcelModal = ({
           />
         </Form.Item>
       </Space>
+
+      <Form.Item
+        label="DataTable ColumnSet"
+        name="columnSetName"
+        rules={[
+          {
+            required: true,
+            message: "Please select a DataTable ColumnSet.",
+          },
+        ]}
+      >
+        <Select
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          placeholder="Select columns to export"
+          options={(columnSets || []).map((columnSet) => ({
+            value: columnSet.name,
+            label: columnSet.name,
+          }))}
+        />
+      </Form.Item>
 
       <Form.Item
         label="Plans"

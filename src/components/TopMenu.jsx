@@ -52,12 +52,108 @@ import {
   normalizeProjectFormatting,
 } from "../utils/projectFormatting";
 import { buildGroups } from "./buildExcelGroups";
-import { fillGroups, fillHeader } from "./excelTemplate";
+import {
+  fillGroups,
+  fillHeader,
+} from "./excelTemplate";
 import {
   useSequenceColumnConfig,
 } from "../context/SequenceColumnConfigContext";
 
 const DEFAULT_FILE_NAME = "Sequencing Report";
+
+const EXCEL_PROPERTY_BATCH_SIZE = 300;
+
+const buildExcelDataTableValues = (objectProperties) => {
+  const values = {
+    name: objectProperties?.name ?? "",
+    entity_class: objectProperties?.class ?? "",
+  };
+
+  for (const propertySet of objectProperties?.properties || []) {
+    const propertySetName = String(propertySet?.name || "").trim();
+    if (!propertySetName) continue;
+
+    for (const property of propertySet?.properties || []) {
+      const propertyName = String(property?.name || "").trim();
+      if (!propertyName) continue;
+
+      values[`${propertySetName}+${propertyName}`] = property?.value ?? "";
+    }
+  }
+
+  return values;
+};
+
+const getExcelObjectRuntimeId = (object) =>
+  object?.runtimeId ?? object?.runtime_id ?? object?.objectRuntimeId ?? null;
+
+const getExcelObjectModelId = (object) =>
+  object?.modelId ?? object?.model_id ?? null;
+
+const hydrateExcelDataTableValues = async (tcapi, sequenceGroups) => {
+  const objectsByModel = new Map();
+
+  for (const group of sequenceGroups || []) {
+    for (const object of group?.objects || []) {
+      const modelId = getExcelObjectModelId(object);
+      const runtimeId = getExcelObjectRuntimeId(object);
+      if (modelId == null || runtimeId == null) continue;
+
+      const modelKey = String(modelId);
+      if (!objectsByModel.has(modelKey)) {
+        objectsByModel.set(modelKey, { modelId, runtimeIds: [] });
+      }
+      objectsByModel.get(modelKey).runtimeIds.push(runtimeId);
+    }
+  }
+
+  const valuesByObject = new Map();
+
+  for (const modelGroup of objectsByModel.values()) {
+    const runtimeIds = [...new Set(modelGroup.runtimeIds)];
+
+    for (
+      let index = 0;
+      index < runtimeIds.length;
+      index += EXCEL_PROPERTY_BATCH_SIZE
+    ) {
+      const batch = runtimeIds.slice(index, index + EXCEL_PROPERTY_BATCH_SIZE);
+      const properties = await tcapi.viewer.getObjectProperties(
+        modelGroup.modelId,
+        batch,
+      );
+
+      for (const objectProperties of properties || []) {
+        if (objectProperties?.id == null) continue;
+        valuesByObject.set(
+          `${String(modelGroup.modelId)}:${String(objectProperties.id)}`,
+          buildExcelDataTableValues(objectProperties),
+        );
+      }
+    }
+  }
+
+  return (sequenceGroups || []).map((group) => ({
+    ...group,
+    objects: (group?.objects || []).map((object) => {
+      const key = `${String(getExcelObjectModelId(object))}:${String(
+        getExcelObjectRuntimeId(object),
+      )}`;
+
+      return {
+        ...object,
+        dataTableValues: {
+          name: object?.name ?? object?.asmName ?? "",
+          entity_class:
+            object?.entityClass ?? object?.entity_class ?? object?.class ?? "",
+          ...(object?.dataTableValues || {}),
+          ...(valuesByObject.get(key) || {}),
+        },
+      };
+    }),
+  }));
+};
 
 const FFMPEG_CORE_BASE_URL =
   "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd";
@@ -493,10 +589,14 @@ const TopMenu = ({
       startDate: null,
       endDate: null,
       planIds: plans.map((plan) => String(plan.id)),
+      columnSetName:
+        selectedPresetName ||
+        (Array.isArray(columnSets) ? columnSets[0]?.name : null) ||
+        null,
     });
 
     setExportModalOpen(true);
-  }, [exportForm, plans, isFree]);
+  }, [exportForm, plans, isFree, selectedPresetName, columnSets]);
 
   const handleCloseExportModal = useCallback(() => {
     if (exporting) {
@@ -513,6 +613,7 @@ const TopMenu = ({
       selectedPlanIds,
       startDateValue,
       endDateValue,
+      selectedColumnSet,
     }) => {
       if (isFree) {
         message.warning(
@@ -533,19 +634,27 @@ const TopMenu = ({
           projectSettings?.formatting || DEFAULT_FORMATTING,
         );
 
+        const hydratedSequenceObjects = await hydrateExcelDataTableValues(
+          tcapi,
+          sequenceObjects,
+        );
+
         const groups = buildGroups({
           plans,
-          sequenceObjects,
+          sequenceObjects: hydratedSequenceObjects,
           selectedPlanIds,
           startDateValue,
           endDateValue,
           formatting,
+          selectedColumns: selectedColumnSet?.columns || [],
         });
 
         if (!groups.length) {
           message.warning("No data matches the selected conditions.");
           return;
         }
+
+        const workbook = new ExcelJS.Workbook();
 
         const response = await fetch(
           `${process.env.PUBLIC_URL}/Erection_Template.xlsx`,
@@ -556,8 +665,6 @@ const TopMenu = ({
             `Unable to download Excel template: ${response.status}`,
           );
         }
-
-        const workbook = new ExcelJS.Workbook();
 
         const templateBuffer = await response.arrayBuffer();
 
@@ -588,7 +695,7 @@ const TopMenu = ({
           CogZTitle: `COG Z (${lengthUnit})`,
         });
 
-        fillGroups(worksheet, groups);
+        fillGroups(worksheet, groups, selectedColumnSet?.columns || []);
 
         const buffer = await workbook.xlsx.writeBuffer();
 
@@ -622,18 +729,38 @@ const TopMenu = ({
     try {
       const values = await exportForm.validateFields();
 
+      const selectedColumnSet = (columnSets || []).find(
+        (columnSet) => columnSet?.name === values.columnSetName,
+      );
+
+      if (!selectedColumnSet) {
+        message.error("Unable to retrieve the selected DataTable ColumnSet.");
+        return;
+      }
+
+      if (!Array.isArray(selectedColumnSet.columns) || !selectedColumnSet.columns.length) {
+        message.warning("The selected DataTable ColumnSet contains no columns.");
+        return;
+      }
+
+      console.log("[ExcelExport] Selected ColumnSet", {
+        name: selectedColumnSet.name,
+        fields: selectedColumnSet.columns.map((column) => column?.field),
+      });
+
       await exportWorkbook({
         fileNameInput: values.fileName?.trim() || DEFAULT_FILE_NAME,
         selectedPlanIds: values.planIds || [],
         startDateValue: values.startDate || null,
         endDateValue: values.endDate || null,
+        selectedColumnSet,
       });
     } catch (error) {
       if (!error?.errorFields) {
         console.error("Validate export form error:", error);
       }
     }
-  }, [exportForm, exportWorkbook]);
+  }, [exportForm, exportWorkbook, columnSets]);
 
   const getFFmpeg = useCallback(async () => {
     if (ffmpegRef.current) {
@@ -998,6 +1125,7 @@ const TopMenu = ({
         exporting={exporting}
         form={exportForm}
         plans={plans}
+        columnSets={columnSets}
         onCancel={handleCloseExportModal}
         onConfirm={handleConfirmExport}
       />

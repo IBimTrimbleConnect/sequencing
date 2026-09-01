@@ -7,6 +7,7 @@ import {
   formatCog,
   DEFAULT_FORMATTING,
 } from "../utils/projectFormatting";
+import { getSequenceColumnValue } from "../context/SequenceColumnConfigContext";
 
 dayjs.extend(customParseFormat);
 
@@ -28,8 +29,18 @@ export const parseObjectDate = (value) => {
   return normalDate.isValid() ? normalDate : null;
 };
 
-const buildExportItem = (obj, formatting) => {
+const buildExportItem = (obj, formatting, selectedColumns) => {
   const cog = Array.isArray(obj.cog) ? obj.cog : [];
+  const formattedDataTableValues = {};
+
+  for (const column of selectedColumns || []) {
+    const field = String(column?.field || "").trim();
+    if (!field || field.toLowerCase() === "name") continue;
+
+    formattedDataTableValues[field] = getSequenceColumnValue(obj, column, {
+      projectFormatting: formatting,
+    });
+  }
 
   return {
     AsmName: obj.name || obj.asmName || "",
@@ -59,6 +70,9 @@ const buildExportItem = (obj, formatting) => {
         ? convertLengthFromMm(cog[2], formatting)
         : "",
     Comment: obj.comment || "",
+    DataTableValues: {
+      ...formattedDataTableValues,
+    },
   };
 };
 
@@ -69,6 +83,7 @@ export const buildGroups = ({
   startDateValue = null,
   endDateValue = null,
   formatting = DEFAULT_FORMATTING,
+  selectedColumns = [],
 }) => {
   const selectedPlanIdSet = new Set(
     selectedPlanIds.map(String),
@@ -123,7 +138,7 @@ export const buildGroups = ({
 
       currentPlan.dates
         .get(dateKey)
-        .push(buildExportItem(obj, formatting));
+        .push(buildExportItem(obj, formatting, selectedColumns));
     });
   });
 

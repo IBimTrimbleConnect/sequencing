@@ -1323,13 +1323,13 @@ export default function NodeSequenceMain({
 
       await loadData();
       appMessage.success(
-        `Sub nodes copied into ${copyNodesTarget.name || "the target node"}.`,
+        `Sub plans copied into ${copyNodesTarget.name || "the target plan"}.`,
       );
       setCopyNodesTarget(null);
       setCopyNodesSourceId(null);
     } catch (error) {
       console.error("Copy nodes from source failed:", error);
-      appMessage.error(error?.message || "Unable to copy nodes.");
+      appMessage.error(error?.message || "Unable to copy plans.");
     } finally {
       setCopyNodesProcessing(false);
     }
@@ -1774,7 +1774,7 @@ export default function NodeSequenceMain({
       (childrenByParent.get(String(node?.id)) || []).length > 0;
     if (hasSubNodes) {
       appMessage.warning(
-        "Items can only be assigned to a node without sub nodes.",
+        "Items can only be assigned to a plan without sub plans.",
       );
       return;
     }
@@ -2092,7 +2092,7 @@ export default function NodeSequenceMain({
       }
     } catch (error) {
       console.error(error);
-      appMessage.error("Unable to highlight the node objects.");
+      appMessage.error("Unable to highlight the plan objects.");
     }
   }, [getNodeObjects, appMessage]);
 
@@ -2133,7 +2133,7 @@ export default function NodeSequenceMain({
       await tcapi.viewer.isolateEntities(modelEntities);
     } catch (error) {
       console.error(error);
-      appMessage.error("Unable to show only the node objects.");
+      appMessage.error("Unable to show only the plan objects.");
     }
   }, [getNodeObjects, appMessage]);
 
@@ -2224,7 +2224,7 @@ export default function NodeSequenceMain({
       (childrenByParent.get(String(targetNodeId)) || []).length > 0;
     if (targetHasSubNodes) {
       appMessage.warning(
-        "Items can only be moved to a node without sub nodes.",
+        "Items can only be moved to a plan without sub plans.",
       );
       return;
     }
@@ -2286,7 +2286,7 @@ export default function NodeSequenceMain({
       const isTarget = String(node.id) === String(copyNodesTarget?.id || "");
       return {
         key: String(node.id),
-        title: `${node.name || "Unnamed Node"} (${children.length} sub node${children.length === 1 ? "" : "s"})`,
+        title: `${node.name || "Unnamed Plan"} (${children.length} sub plan${children.length === 1 ? "" : "s"})`,
         disabled: isTarget || children.length === 0,
         children: children.map(buildSourceNode),
       };
@@ -2427,7 +2427,7 @@ export default function NodeSequenceMain({
               Assign without date
             </Checkbox>
 
-            <DatePicker
+            <DatePicker 
               value={pendingAssignment.date || dayjs()}
               format="DD-MM-YYYY"
               allowClear={false}
@@ -2443,9 +2443,9 @@ export default function NodeSequenceMain({
 
       {copyNodesTarget && (
         <Modal
-          title={`Copy Nodes Into ${copyNodesTarget.name || "Node"}`}
+          title={`Copy Plans/Sub Plans Into ${copyNodesTarget.name || "Plans/Sub Plans"}`}
           open
-          okText="Copy Nodes"
+          okText="Copy Plans/Sub Plans"
           cancelText="Cancel"
           confirmLoading={copyNodesProcessing}
           okButtonProps={{ disabled: !copyNodesSourceId }}
@@ -2455,9 +2455,7 @@ export default function NodeSequenceMain({
           destroyOnHidden
         >
           <div style={{ marginBottom: 10, color: "rgba(0, 0, 0, 0.65)" }}>
-            Select a source Node. Its direct Sub Nodes and their complete
-            hierarchy will be copied into the target. The source Node and its
-            objects will not be copied.
+            Select a source Plan/Sub Plan.
           </div>
           <div
             style={{
@@ -2483,7 +2481,7 @@ export default function NodeSequenceMain({
 
       {modalOpen && (
         <SubPlanModal
-          title={editingNode ? "Edit Node" : "Create Node"}
+          title={editingNode ? "Edit Plan/Sub Plan" : "Create Plan/Sub Plan"}
           buttonName={editingNode ? "Modify" : "Create"}
           plan={creatingParent}
           subPlan={editingNode}
@@ -2505,7 +2503,7 @@ export default function NodeSequenceMain({
         tip={assignmentProcessing ? "Assigning items..." : undefined}
       >
         {!rootNodes.length ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Nodes" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Plans" />
         ) : (
           <NodeChildren
             parentId={null}
