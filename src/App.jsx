@@ -994,7 +994,7 @@ export default function App() {
                 }
               }
             >
-              Check Again
+              Refresh
             </Button>
           }
         />

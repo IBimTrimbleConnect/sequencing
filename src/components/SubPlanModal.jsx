@@ -42,7 +42,7 @@ const CREATE_MODE = {
   MANUAL: "manual",
   SERIAL: "serial",
   DATES: "dates",
-  ASSEMBLY_NAME: "assemblyName",
+  PROPERTY: "property",
   LAYERS: "layers",
 };
 
@@ -60,8 +60,8 @@ const CREATE_MODE_OPTIONS = [
     label: "Dates",
   },
   {
-    value: CREATE_MODE.ASSEMBLY_NAME,
-    label: "Assembly Names",
+    value: CREATE_MODE.PROPERTY,
+    label: "Property",
   },
   {
     value: CREATE_MODE.LAYERS,
@@ -374,7 +374,7 @@ const buildWorkingDateNames = ({
 };
 
 /* -------------------------------------------------------------------------- */
-/* ASSEMBLY HELPERS                                                           */
+/* PROPERTY HELPERS                                                           */
 /* -------------------------------------------------------------------------- */
 
 const getPropertySets = (objectProperty) => {
@@ -401,55 +401,52 @@ const getPropertiesFromSet = (propertySet) => {
   return [];
 };
 
-const getAssemblyNameFromProperties = (objectProperty) => {
-  const propertySets = getPropertySets(objectProperty);
+const getDataTablePropertyValue = (objectProperty, columnField) => {
+  const field = String(columnField || "").trim();
+  if (!field) return null;
+  if (field.toLowerCase() === "name") {
+    return objectProperty?.name ?? objectProperty?.product?.name ?? null;
+  }
+  if (field.toLowerCase() === "entity_class") {
+    return objectProperty?.class ?? null;
+  }
 
-  for (const propertySet of propertySets) {
-    const groupName = String(propertySet?.name ?? propertySet?.groupName ?? "")
-      .trim()
-      .toUpperCase();
+  const separatorIndex = field.indexOf("+");
+  const expectedGroup =
+    separatorIndex >= 0 ? field.slice(0, separatorIndex).trim() : "";
+  const expectedProperty =
+    separatorIndex >= 0 ? field.slice(separatorIndex + 1).trim() : field;
 
-    const properties = getPropertiesFromSet(propertySet);
+  for (const propertySet of getPropertySets(objectProperty)) {
+    const groupName = String(
+      propertySet?.name ?? propertySet?.groupName ?? "",
+    ).trim();
+    if (
+      expectedGroup &&
+      groupName.localeCompare(expectedGroup, undefined, {
+        sensitivity: "base",
+      }) !== 0
+    ) {
+      continue;
+    }
 
-    for (const property of properties) {
-      const propertyName = String(property?.name ?? "")
-        .trim()
-        .toUpperCase();
-
-      const isAssemblyName =
-        propertyName === "ASSEMBLY NAME" ||
-        propertyName === "ASSEMBLY_NAME" ||
-        propertyName === "ASSEMBLYNAME" ||
-        (groupName === "ASSEMBLY" && propertyName === "NAME");
-
-      if (!isAssemblyName) {
+    for (const property of getPropertiesFromSet(propertySet)) {
+      const propertyName = String(property?.name ?? "").trim();
+      if (
+        propertyName.localeCompare(expectedProperty, undefined, {
+          sensitivity: "base",
+        }) !== 0
+      ) {
         continue;
       }
-
-      const rawValue =
+      return (
         property?.value ??
         property?.formattedValue ??
         property?.displayValue ??
-        null;
-
-      if (rawValue == null) {
-        continue;
-      }
-
-      const value = String(rawValue).trim();
-
-      if (value) {
-        return value;
-      }
+        null
+      );
     }
   }
-
-  const productName = String(objectProperty?.product?.name ?? "").trim();
-
-  if (productName) {
-    return productName;
-  }
-
   return null;
 };
 
@@ -510,12 +507,13 @@ const SubPlanModal = ({
 
   const [publicHolidayError, setPublicHolidayError] = useState("");
 
-  /*
-   * Assemblies.
-   */
-  const [assemblyNames, setAssemblyNames] = useState([]);
+  const [propertyColumns, setPropertyColumns] = useState([]);
 
-  const [loadingAssemblyNames, setLoadingAssemblyNames] = useState(false);
+  const [propertyValues, setPropertyValues] = useState([]);
+
+  const [loadingPropertyColumns, setLoadingPropertyColumns] = useState(false);
+
+  const [loadingPropertyValues, setLoadingPropertyValues] = useState(false);
 
   const [layerOptions, setLayerOptions] = useState([]);
 
@@ -525,7 +523,8 @@ const SubPlanModal = ({
 
   const parentPlan = isEditing ? null : plan;
 
-  const modalTitle = title || (isEditing ? `Edit ${entityLabel}` : `Create ${entityLabel}`);
+  const modalTitle =
+    title || (isEditing ? `Edit ${entityLabel}` : `Create ${entityLabel}`);
 
   const submitButtonName = buttonName || (isEditing ? "Update" : "Create");
 
@@ -544,9 +543,13 @@ const SubPlanModal = ({
 
     setCreateMode(CREATE_MODE.MANUAL);
 
-    setAssemblyNames([]);
+    setPropertyColumns([]);
 
-    setLoadingAssemblyNames(false);
+    setPropertyValues([]);
+
+    setLoadingPropertyColumns(false);
+
+    setLoadingPropertyValues(false);
 
     setLayerOptions([]);
 
@@ -590,110 +593,236 @@ const SubPlanModal = ({
   }, [countryOptions.length]);
 
   /* ------------------------------------------------------------------------ */
-  /* ASSEMBLY                                                                 */
+  /* PROPERTY                                                                 */
   /* ------------------------------------------------------------------------ */
 
-  const loadAssemblyNames = useCallback(async () => {
+  const loadPropertyColumns = useCallback(async () => {
     try {
-      setLoadingAssemblyNames(true);
-
-      setAssemblyNames([]);
+      setLoadingPropertyColumns(true);
 
       const tcapi = await WorkspaceAPI.connect(window.parent);
-
-      /*
-       * Assembly level.
-       */
-      const assemblyGroups = await tcapi.viewer.getObjects({
-        parameter: {
-          class: "IFCELEMENTASSEMBLY",
-        },
+      console.log("[CreateByProperty] Workspace API connected", {
+        hasDataTable: Boolean(tcapi?.dataTable),
+        hasGetAllColumns: typeof tcapi?.dataTable?.getAllColumns === "function",
       });
 
-      if (!Array.isArray(assemblyGroups) || !assemblyGroups.length) {
-        message.warning(
-          "No assembly-level objects were found in the loaded models.",
+      if (typeof tcapi?.dataTable?.getAllColumns !== "function") {
+        throw new Error(
+          "Trimble Data Table is not loaded. Open the Data Table extension and click Reload.",
         );
-
-        return;
       }
 
-      const uniqueNames = new Set();
+      let columns = [];
+      let lastGetAllColumnsError = null;
 
-      for (const modelGroup of assemblyGroups) {
-        const modelId = modelGroup?.modelId;
+      /*
+       * getAllColumns() is populated only after the Trimble Data Table client
+       * has been loaded. Ask Trimble to show it first, then allow its internal
+       * client a short time to initialise before reading the columns.
+       */
+      try {
+        const currentConfig = await tcapi.dataTable.getConfig();
 
-        if (modelId == null) {
-          continue;
-        }
+        console.log("[CreateByProperty] DataTable config before loading", {
+          currentConfig,
+        });
 
-        const objects = Array.isArray(modelGroup?.objects)
-          ? modelGroup.objects
-          : [];
+        if (currentConfig?.show !== true) {
+          await tcapi.dataTable.setConfig({
+            ...currentConfig,
+            show: true,
+          });
 
-        const runtimeIds = objects
-          .map((object) => object?.id ?? object?.runtimeId)
-          .filter((id) => id != null);
-
-        if (!runtimeIds.length) {
-          continue;
-        }
-
-        const uniqueRuntimeIds = [...new Set(runtimeIds)];
-
-        for (
-          let startIndex = 0;
-          startIndex < uniqueRuntimeIds.length;
-          startIndex += PROPERTY_BATCH_SIZE
-        ) {
-          const batch = uniqueRuntimeIds.slice(
-            startIndex,
-            startIndex + PROPERTY_BATCH_SIZE,
+          console.log(
+            "[CreateByProperty] Requested Trimble Data Table to be shown",
           );
 
-          const objectProperties = await tcapi.viewer.getObjectProperties(
-            modelId,
-            batch,
-          );
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        /*
+         * Some Workspace contexts reject DataTable calls until the user opens
+         * the extension manually. Continue to getAllColumns() so its exact
+         * rejection is included in the diagnostic log below.
+         */
+        console.warn(
+          "[CreateByProperty] Unable to initialise Trimble Data Table",
+          error,
+        );
+      }
 
-          for (const objectProperty of objectProperties || []) {
-            const assemblyName = getAssemblyNameFromProperties(objectProperty);
+      /*
+       * Trimble documents that DataTable API availability can change at
+       * runtime while its internal client is loading. Retry briefly instead
+       * of treating the first empty/rejected response as the final result.
+       */
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          const response = await tcapi.dataTable.getAllColumns();
 
-            if (assemblyName) {
-              uniqueNames.add(assemblyName);
-            }
+          console.log("[CreateByProperty] getAllColumns response", {
+            attempt,
+            isArray: Array.isArray(response),
+            count: Array.isArray(response) ? response.length : 0,
+            response,
+          });
+
+          if (Array.isArray(response) && response.length) {
+            columns = response;
+            break;
           }
+        } catch (error) {
+          lastGetAllColumnsError = error;
+          console.warn("[CreateByProperty] getAllColumns failed", {
+            attempt,
+            error,
+          });
+        }
+
+        if (attempt < 4) {
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
         }
       }
 
-      const result = Array.from(uniqueNames).sort((left, right) =>
-        left.localeCompare(right, undefined, {
-          numeric: true,
+      /*
+       * Fallback only supplies columns already present in the current config
+       * or stored presets. getAllColumns remains the primary source.
+       */
+      if (!columns.length) {
+        const [configResult, columnSetsResult] = await Promise.allSettled([
+          tcapi.dataTable.getConfig(),
+          tcapi.dataTable.getColumnSets(),
+        ]);
 
+        const currentColumns =
+          configResult.status === "fulfilled" &&
+          Array.isArray(configResult.value?.columnSet?.columns)
+            ? configResult.value.columnSet.columns
+            : [];
+        const presetColumns =
+          columnSetsResult.status === "fulfilled"
+            ? (columnSetsResult.value || []).flatMap((columnSet) =>
+                Array.isArray(columnSet?.columns) ? columnSet.columns : [],
+              )
+            : [];
+
+        columns = [...currentColumns, ...presetColumns];
+
+        console.warn("[CreateByProperty] getAllColumns returned no columns", {
+          lastGetAllColumnsError,
+          configResult,
+          columnSetsResult,
+          fallbackColumnCount: columns.length,
+        });
+      }
+
+      const uniqueColumns = new Map();
+
+      for (const column of columns || []) {
+        const field = String(column?.field || "").trim();
+        if (!field || uniqueColumns.has(field)) continue;
+        uniqueColumns.set(field, {
+          value: field,
+          field,
+          label: field
+        });
+      }
+
+      const options = [...uniqueColumns.values()].sort((left, right) =>
+        left.label.localeCompare(right.label, undefined, {
+          numeric: true,
           sensitivity: "base",
         }),
       );
-
-      setAssemblyNames(result);
-
-      if (!result.length) {
+      setPropertyColumns(options);
+      if (!options.length) {
         message.warning(
-          "Assembly objects were found, but no Assembly Names were available.",
+          "DataTable columns are not available yet. Open the Trimble Data Table or check the current user's permission, then click Reload.",
         );
       }
     } catch (error) {
-      console.error("Load Assembly Names failed:", error);
-
-      setAssemblyNames([]);
-
-      message.error(
-        error?.message ||
-          "Unable to retrieve Assembly Names from the loaded models.",
-      );
+      console.error("Load DataTable properties failed:", error);
+      setPropertyColumns([]);
+      message.error(error?.message || "Unable to load DataTable properties.");
     } finally {
-      setLoadingAssemblyNames(false);
+      setLoadingPropertyColumns(false);
     }
   }, []);
+
+  const loadPropertyValues = useCallback(
+    async (columnField) => {
+      const field = String(columnField || "").trim();
+      setPropertyValues([]);
+      form.setFieldValue("propertyValues", []);
+      if (!field) return;
+
+      try {
+        setLoadingPropertyValues(true);
+        const tcapi = await WorkspaceAPI.connect(window.parent);
+        const objectGroups = await tcapi.viewer.getObjects();
+        const uniqueValues = new Set();
+
+        const addValue = (rawValue) => {
+          if (Array.isArray(rawValue)) {
+            rawValue.forEach(addValue);
+            return;
+          }
+          if (rawValue == null) return;
+          const value = String(rawValue).trim();
+          if (value) uniqueValues.add(value);
+        };
+
+        for (const modelGroup of objectGroups || []) {
+          const modelId = modelGroup?.modelId;
+          if (modelId == null) continue;
+          const objects = Array.isArray(modelGroup?.objects)
+            ? modelGroup.objects
+            : [];
+          const runtimeIds = objects
+            .map((object) => object?.id ?? object?.runtimeId)
+            .filter((id) => id != null);
+          if (!runtimeIds.length) continue;
+          const uniqueRuntimeIds = [...new Set(runtimeIds)];
+          for (
+            let startIndex = 0;
+            startIndex < uniqueRuntimeIds.length;
+            startIndex += PROPERTY_BATCH_SIZE
+          ) {
+            const batch = uniqueRuntimeIds.slice(
+              startIndex,
+              startIndex + PROPERTY_BATCH_SIZE,
+            );
+
+            const objectProperties = await tcapi.viewer.getObjectProperties(
+              modelId,
+              batch,
+            );
+            for (const objectProperty of objectProperties || []) {
+              addValue(getDataTablePropertyValue(objectProperty, field));
+            }
+          }
+        }
+
+        const result = [...uniqueValues].sort((left, right) =>
+          left.localeCompare(right, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          }),
+        );
+        setPropertyValues(result);
+        if (!result.length) {
+          message.warning("No model values were found for this property.");
+        }
+      } catch (error) {
+        console.error("Load property values failed:", error);
+        setPropertyValues([]);
+        message.error(error?.message || "Unable to load property values.");
+      } finally {
+        setLoadingPropertyValues(false);
+      }
+    },
+    [form],
+  );
 
   const loadLayers = useCallback(async () => {
     try {
@@ -705,11 +834,13 @@ const SubPlanModal = ({
         tcapi.viewer.getObjects(),
         tcapi.viewer.getModels().catch(() => []),
       ]);
-      const modelIds = [...new Set(
-        (objectGroups || [])
-          .map((group) => group?.modelId)
-          .filter((modelId) => modelId != null),
-      )];
+      const modelIds = [
+        ...new Set(
+          (objectGroups || [])
+            .map((group) => group?.modelId)
+            .filter((modelId) => modelId != null),
+        ),
+      ];
 
       const results = await Promise.allSettled(
         modelIds.map(async (modelId) => ({
@@ -812,10 +943,9 @@ const SubPlanModal = ({
 
       endDate: null,
 
-      /*
-       * Assembly.
-       */
-      assemblyNames: [],
+      propertyField: null,
+
+      propertyValues: [],
 
       layerKeys: [],
     });
@@ -828,7 +958,9 @@ const SubPlanModal = ({
 
     setCreateMode(CREATE_MODE.MANUAL);
 
-    setAssemblyNames([]);
+    setPropertyColumns([]);
+
+    setPropertyValues([]);
 
     setLayerOptions([]);
 
@@ -846,8 +978,8 @@ const SubPlanModal = ({
       return;
     }
 
-    if (createMode === CREATE_MODE.ASSEMBLY_NAME) {
-      loadAssemblyNames();
+    if (createMode === CREATE_MODE.PROPERTY) {
+      loadPropertyColumns();
     }
 
     if (createMode === CREATE_MODE.DATES) {
@@ -857,7 +989,14 @@ const SubPlanModal = ({
     if (createMode === CREATE_MODE.LAYERS) {
       loadLayers();
     }
-  }, [open, isEditing, createMode, loadAssemblyNames, loadCountries, loadLayers]);
+  }, [
+    open,
+    isEditing,
+    createMode,
+    loadPropertyColumns,
+    loadCountries,
+    loadLayers,
+  ]);
 
   /* ------------------------------------------------------------------------ */
   /* COLOR                                                                    */
@@ -877,8 +1016,10 @@ const SubPlanModal = ({
     (mode) => {
       setCreateMode(mode);
 
-      if (mode !== CREATE_MODE.ASSEMBLY_NAME) {
-        form.setFieldValue("assemblyNames", []);
+      if (mode !== CREATE_MODE.PROPERTY) {
+        form.setFieldValue("propertyField", null);
+        form.setFieldValue("propertyValues", []);
+        setPropertyValues([]);
       }
 
       if (mode !== CREATE_MODE.LAYERS) {
@@ -926,7 +1067,12 @@ const SubPlanModal = ({
         },
 
         {
-          name: "assemblyNames",
+          name: "propertyField",
+          errors: [],
+        },
+
+        {
+          name: "propertyValues",
           errors: [],
         },
 
@@ -948,6 +1094,22 @@ const SubPlanModal = ({
   const serialStart = Form.useWatch("serialStart", form);
 
   const serialQuantity = Form.useWatch("serialQuantity", form);
+
+  const selectedPropertyField = Form.useWatch("propertyField", form);
+
+  useEffect(() => {
+    if (
+      !open ||
+      isEditing ||
+      createMode !== CREATE_MODE.PROPERTY ||
+      !selectedPropertyField
+    ) {
+      setPropertyValues([]);
+      return;
+    }
+
+    loadPropertyValues(selectedPropertyField);
+  }, [open, isEditing, createMode, selectedPropertyField, loadPropertyValues]);
 
   const serialPreview = useMemo(() => {
     const names = buildSerialNames({
@@ -1128,13 +1290,10 @@ const SubPlanModal = ({
         });
       }
 
-      /*
-       * Assembly.
-       */
-      if (createMode === CREATE_MODE.ASSEMBLY_NAME) {
-        return Array.isArray(values.assemblyNames)
-          ? values.assemblyNames
-              .map((name) => String(name).trim())
+      if (createMode === CREATE_MODE.PROPERTY) {
+        return Array.isArray(values.propertyValues)
+          ? values.propertyValues
+              .map((value) => String(value).trim())
               .filter(Boolean)
               .sort((a, b) =>
                 a.localeCompare(b, undefined, {
@@ -1201,9 +1360,7 @@ const SubPlanModal = ({
         if (nodeMode && onUpdateOverride) {
           await onUpdateOverride(updatePayload);
         } else {
-          dispatch(
-            UpdateSubPlanRequest(updatePayload),
-          );
+          dispatch(UpdateSubPlanRequest(updatePayload));
         }
 
         handleCancel();
@@ -1261,7 +1418,9 @@ const SubPlanModal = ({
       }
 
       if (names.length > 500) {
-        message.error(`A maximum of 500 ${entityLabel}s can be created at once.`);
+        message.error(
+          `A maximum of 500 ${entityLabel}s can be created at once.`,
+        );
 
         return;
       }
@@ -1269,9 +1428,10 @@ const SubPlanModal = ({
       /*
        * Existing Saga splits by comma.
        */
-      const itemColors = useColor && names.length > 1
-        ? buildDistinctColors(names.length, color)
-        : [];
+      const itemColors =
+        useColor && names.length > 1
+          ? buildDistinctColors(names.length, color)
+          : [];
 
       const createPayload = {
         projectId,
@@ -1293,9 +1453,7 @@ const SubPlanModal = ({
       if (nodeMode && onCreateOverride) {
         await onCreateOverride(createPayload);
       } else {
-        dispatch(
-          CreateSubPlanRequest(createPayload),
-        );
+        dispatch(CreateSubPlanRequest(createPayload));
       }
 
       handleCancel();
@@ -1333,14 +1491,14 @@ const SubPlanModal = ({
   /* OPTIONS                                                                  */
   /* ------------------------------------------------------------------------ */
 
-  const assemblyNameOptions = useMemo(
+  const propertyValueOptions = useMemo(
     () =>
-      assemblyNames.map((name) => ({
-        value: name,
+      propertyValues.map((value) => ({
+        value,
 
-        label: name,
+        label: value,
       })),
-    [assemblyNames],
+    [propertyValues],
   );
 
   /* ------------------------------------------------------------------------ */
@@ -1413,7 +1571,6 @@ const SubPlanModal = ({
             >
               <Input placeholder="Grid 1-2, Grid 2-4" disabled={pending} />
             </Form.Item>
-
           </div>
         )}
 
@@ -1703,11 +1860,11 @@ const SubPlanModal = ({
           </>
         )}
 
-        {/* ASSEMBLY */}
+        {/* PROPERTY */}
 
-        {!isEditing && createMode === CREATE_MODE.ASSEMBLY_NAME && (
+        {!isEditing && createMode === CREATE_MODE.PROPERTY && (
           <>
-            <Form.Item label="Assembly Names">
+            <Form.Item label="Property">
               <div
                 style={{
                   display: "flex",
@@ -1716,33 +1873,27 @@ const SubPlanModal = ({
                 }}
               >
                 <Form.Item
-                  name="assemblyNames"
+                  name="propertyField"
                   noStyle
                   rules={[
                     {
                       required: true,
 
-                      type: "array",
-
-                      min: 1,
-
-                      message: "Please select at least one Assembly Name.",
+                      message: "Please select a property.",
                     },
                   ]}
                 >
                   <Select
-                    mode="multiple"
                     showSearch
                     allowClear
                     optionFilterProp="label"
-                    maxTagCount="responsive"
-                    loading={loadingAssemblyNames}
-                    disabled={pending || loadingAssemblyNames}
-                    options={assemblyNameOptions}
+                    loading={loadingPropertyColumns}
+                    disabled={pending || loadingPropertyColumns}
+                    options={propertyColumns}
                     placeholder={
-                      loadingAssemblyNames
-                        ? "Loading Assembly Names..."
-                        : "Select Assembly Names"
+                      loadingPropertyColumns
+                        ? "Loading DataTable properties..."
+                        : "Select a DataTable property"
                     }
                     style={{
                       flex: 1,
@@ -1754,24 +1905,45 @@ const SubPlanModal = ({
 
                 <Button
                   icon={<ReloadOutlined />}
-                  loading={loadingAssemblyNames}
-                  disabled={pending || loadingAssemblyNames}
-                  onClick={loadAssemblyNames}
+                  loading={loadingPropertyColumns}
+                  disabled={pending || loadingPropertyColumns}
+                  onClick={loadPropertyColumns}
                 />
               </div>
             </Form.Item>
 
-            <div
-              style={{
-                marginBottom: 16,
-
-                fontSize: 12,
-
-                color: "#888",
-              }}
+            <Form.Item
+              name="propertyValues"
+              label="Values"
+              rules={[
+                {
+                  required: true,
+                  type: "array",
+                  min: 1,
+                  message: "Please select at least one property value.",
+                },
+              ]}
             >
-              {assemblyNames.length} unique Assembly Names found.
-            </div>
+              <Select
+                mode="multiple"
+                showSearch
+                allowClear
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                loading={loadingPropertyValues}
+                disabled={
+                  pending || loadingPropertyValues || !selectedPropertyField
+                }
+                options={propertyValueOptions}
+                placeholder={
+                  !selectedPropertyField
+                    ? "Select a property first"
+                    : loadingPropertyValues
+                      ? "Loading values from the model..."
+                      : "Select one or more values"
+                }
+              />
+            </Form.Item>
           </>
         )}
 
@@ -1852,6 +2024,8 @@ const SubPlanModal = ({
               disabled={
                 loadingCountries ||
                 loadingPublicHolidays ||
+                loadingPropertyColumns ||
+                loadingPropertyValues ||
                 loadingLayers
               }
             >
