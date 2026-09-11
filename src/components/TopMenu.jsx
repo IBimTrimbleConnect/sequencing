@@ -42,7 +42,6 @@ import {
 } from "../store/sequence/action";
 
 import CreatePlanModal from "./CreatePlanModal";
-import { createNodesBulk } from "../services/nodeService";
 import ExportExcelModal from "./ExportExcelModal";
 
 import {
@@ -168,7 +167,6 @@ const TopMenu = ({
   refreshModelsError = "",
   sequenceDataOverride = null,
   nodeMode = false,
-  onSequenceRefresh,
 }) => {
   const dispatch = useDispatch();
 
@@ -311,6 +309,11 @@ const TopMenu = ({
 
   const handleCreate = useCallback(async () => {
     try {
+      if (nodeMode && sequenceDataOverride?.publishState?.publishing) {
+        message.warning("Please wait for the current publish to finish.");
+        return;
+      }
+
       if (!isOwner) {
         message.error(
           `Only the project owner can create ${nodeMode ? "Categories" : "Plans"}.`,
@@ -406,20 +409,20 @@ const TopMenu = ({
        * Legacy mode: giữ nguyên flow V1 và dispatch Redux như trước.
        */
       if (nodeMode) {
-        await createNodesBulk({
-          trimbleProjectId: projectId,
-          nodes: newPlans.map((plan) => ({
+        if (typeof sequenceDataOverride?.createRootNodesInDraft !== "function") {
+          throw new Error("The draft editor is not ready yet.");
+        }
+
+        await sequenceDataOverride.createRootNodesInDraft(
+          newPlans.map((plan) => ({
             name: plan.name,
             color: plan.color,
             parentId: null,
-            // Let nodeService append new root nodes after existing roots.
           })),
-        });
-
-        onSequenceRefresh?.();
+        );
 
         message.success(
-          `${newPlans.length} ${newPlans.length === 1 ? "Category" : "Categories"} created successfully.`,
+          `${newPlans.length} ${newPlans.length === 1 ? "Category" : "Categories"} added to the draft. Publish to save changes.`,
         );
       } else {
         dispatch(
@@ -453,7 +456,7 @@ const TopMenu = ({
         );
       }
     }
-  }, [dispatch, form, isOwner, plans, projectId, nodeMode, onSequenceRefresh, message]);
+  }, [dispatch, form, isOwner, plans, projectId, nodeMode, sequenceDataOverride, message]);
 
   const handleCancel = useCallback(() => {
     form.resetFields();
@@ -1069,7 +1072,9 @@ const TopMenu = ({
       key: "create-plans",
       icon: <FolderAddOutlined />,
       label: nodeMode ? "Create multiple categories" : "Create multiple plans",
-      disabled: !isOwner,
+      disabled:
+        !isOwner ||
+        Boolean(nodeMode && sequenceDataOverride?.publishState?.publishing),
       onClick: handleOpenCreateModal,
     },
     {
@@ -1377,7 +1382,12 @@ const TopMenu = ({
                 <Button
                   size="large"
                   type="text"
-                  disabled={!isOwner}
+                  disabled={
+                    !isOwner ||
+                    Boolean(
+                      nodeMode && sequenceDataOverride?.publishState?.publishing,
+                    )
+                  }
                   icon={
                     <FolderAddOutlined
                       style={{

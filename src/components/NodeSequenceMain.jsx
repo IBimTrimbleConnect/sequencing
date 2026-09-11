@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { App, Checkbox, Collapse, DatePicker, Empty, Input, Modal, Spin, Tree, message } from "antd";
+import { App, Button, Checkbox, Collapse, DatePicker, Empty, Input, Modal, Space, Spin, Tag, Tree } from "antd";
+import { CloudUploadOutlined, ReloadOutlined } from "@ant-design/icons";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import dayjs from "dayjs";
@@ -11,18 +12,19 @@ import SequenceObjectCollapse from "./SequenceObjectCollapse";
 import SubPlanModal from "./SubPlanModal";
 import { hydrateSequenceObjects } from "../services/trimbleRuntimeService";
 import {
-  createNode,
-  deleteNode,
   getNodesByProject,
-  updateNode,
-  updateNodesOrder,
 } from "../services/nodeService";
 import {
   getSequenceObjectsByProject,
-  replaceSequenceObjectsForNode,
-  updateSequenceObjectSortDatesForNode,
-  moveSequenceObjectsToNode,
 } from "../services/sequenceObjectService";
+import {
+  buildPublishChanges,
+  createDraftId,
+  createPublishedSnapshot,
+  getPublishedRevision,
+  hasPublishChanges,
+  publishSequenceV2,
+} from "../services/sequencePublishService";
 
 const DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD/MM/YYYY", "YYYY/MM/DD"];
 const LAYER_PROPERTY_BATCH_SIZE = 250;
@@ -810,7 +812,7 @@ function NodeChildren(props) {
   const children = childrenByParent.get(parentKey) || [];
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const handleDragEnd = async ({ active, over }) => {
+  const handleDragEnd = ({ active, over }) => {
     if (!canEdit || !over || String(active.id) === String(over.id)) return;
     const oldIndex = children.findIndex((item) => String(item.id) === String(active.id));
     const newIndex = children.findIndex((item) => String(item.id) === String(over.id));
@@ -823,12 +825,6 @@ function NodeChildren(props) {
      */
     onReorderNodes?.(parentId, reordered);
 
-    try {
-      await updateNodesOrder(reordered);
-    } catch (error) {
-      onReorderNodes?.(parentId, children);
-      message.error(error?.message || "Unable to reorder nodes.");
-    }
   };
 
   return (
@@ -860,6 +856,10 @@ export default function NodeSequenceMain({
   const [nodes, setNodes] = useState([]);
   const [sequenceGroups, setSequenceGroups] = useState(new Map());
   const [loading, setLoading] = useState(true);
+  const [publishedRevision, setPublishedRevision] = useState(0);
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishConflict, setPublishConflict] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingNode, setEditingNode] = useState(null);
@@ -877,7 +877,7 @@ export default function NodeSequenceMain({
   const originalLayersRef = useRef(new Map());
   const layerPreviewRevisionRef = useRef(0);
   const sequenceGroupsRef = useRef(new Map());
-  const persistRevisionRef = useRef(new Map());
+  const publishedSnapshotRef = useRef({ nodes: [], objects: [] });
 
   useEffect(() => {
     sequenceGroupsRef.current = sequenceGroups;
@@ -936,9 +936,10 @@ export default function NodeSequenceMain({
     try {
       const tcapi = tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
       tcapiRef.current = tcapi;
-      const [loadedNodes, objectRows] = await Promise.all([
+      const [loadedNodes, objectRows, revision] = await Promise.all([
         getNodesByProject(effectiveProjectId),
         getSequenceObjectsByProject(effectiveProjectId),
+        getPublishedRevision(effectiveProjectId),
       ]);
       const hydrated = await hydrateSequenceObjects({ tcapi, objects: objectRows || [] });
       const groups = new Map();
@@ -954,6 +955,14 @@ export default function NodeSequenceMain({
       const nextGroups = new Map(groups);
       sequenceGroupsRef.current = nextGroups;
       setSequenceGroups(nextGroups);
+      publishedSnapshotRef.current = createPublishedSnapshot({
+        projectId: effectiveProjectId,
+        nodes: loadedNodes,
+        sequenceGroups: nextGroups,
+      });
+      setPublishedRevision(revision);
+      setHasDraftChanges(false);
+      setPublishConflict(false);
     } catch (error) {
       console.error("Failed to load node hierarchy:", error);
       appMessage.error(error?.message || "Unable to load node hierarchy.");
@@ -963,6 +972,17 @@ export default function NodeSequenceMain({
   }, [effectiveProjectId, appMessage]);
 
   useEffect(() => { loadData(); }, [loadData, sequenceRefreshKey]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event) => {
+      if (!hasDraftChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasDraftChanges]);
 
   const { nodeMap, childrenByParent } = useMemo(() => buildTreeMaps(nodes), [nodes]);
   const getRootNode = useCallback((nodeId) => {
@@ -978,6 +998,31 @@ export default function NodeSequenceMain({
     }
     return null;
   }, [nodeMap]);
+
+  const createRootNodesInDraft = useCallback(async (items) => {
+    const rootCount = nodes.filter((node) => !getNodeParentId(node)).length;
+    const created = (items || []).map((item, index) => ({
+      id: createDraftId(),
+      trimbleProjectId: effectiveProjectId,
+      parentId: null,
+      nodeType: item?.nodeType ?? "Folder",
+      name: String(item?.name || "").trim(),
+      color: item?.color ?? null,
+      sortOrder: rootCount + index,
+    }));
+
+    if (!created.length) return [];
+    setNodes((current) => [...current, ...created]);
+    const nextGroups = new Map(sequenceGroupsRef.current);
+    created.forEach((node) => {
+      nextGroups.set(String(node.id), { nodeId: node.id, objects: [] });
+    });
+    sequenceGroupsRef.current = nextGroups;
+    setSequenceGroups(nextGroups);
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+    return created;
+  }, [effectiveProjectId, nodes]);
 
   const exportData = useMemo(() => {
     const rootNodes = nodes
@@ -1018,8 +1063,24 @@ export default function NodeSequenceMain({
       plans: rootNodes,
       subPlans: simulationNodes,
       sequenceObjects: groups,
+      createRootNodesInDraft,
+      publishState: {
+        revision: publishedRevision,
+        hasDraftChanges,
+        publishing,
+        conflict: publishConflict,
+      },
     };
-  }, [nodes, sequenceGroups, getRootNode]);
+  }, [
+    nodes,
+    sequenceGroups,
+    getRootNode,
+    createRootNodesInDraft,
+    publishedRevision,
+    hasDraftChanges,
+    publishing,
+    publishConflict,
+  ]);
 
   useEffect(() => {
     onDataChange?.(exportData);
@@ -1040,136 +1101,28 @@ export default function NodeSequenceMain({
     return objectIndexes;
   }, [sequenceGroups]);
 
-  const refreshNodeGroup = useCallback(async (nodeId) => {
-    const rows = await getSequenceObjectsByProject(effectiveProjectId);
-    const tcapi = tcapiRef.current || (await WorkspaceAPI.connect(window.parent));
-    tcapiRef.current = tcapi;
-    const hydrated = await hydrateSequenceObjects({ tcapi, objects: rows || [] });
-    const groups = new Map();
-    nodes.forEach((node) => groups.set(String(node.id), { nodeId: node.id, objects: [] }));
-    hydrated.forEach((object) => {
-      if (!object?.nodeId) return;
-      const key = String(object.nodeId);
-      if (!groups.has(key)) groups.set(key, { nodeId: object.nodeId, objects: [] });
-      groups.get(key).objects.push({ ...object, nodeId: object.nodeId });
-    });
-    sequenceGroupsRef.current = groups;
-    setSequenceGroups(groups);
-  }, [effectiveProjectId, nodes]);
-
   const persistObjects = useCallback(async ({ nodeId, objects }) => {
     const key = String(nodeId);
-    const revision = (persistRevisionRef.current.get(key) || 0) + 1;
-    persistRevisionRef.current.set(key, revision);
-
     const nextObjects = Array.isArray(objects)
       ? objects.map((object) => ({
           ...object,
+          // `id` is frequently a Trimble runtime ID, not a database UUID.
+          dbId: object?.dbId ?? createDraftId(),
           nodeId,
         }))
       : [];
 
-    /*
-     * Optimistic UI:
-     * update the in-memory group immediately. This is important for Node mode
-     * because newly picked Trimble objects already contain modelId/runtimeId.
-     * Waiting for Supabase and replacing the objects with DB-only rows would
-     * remove those runtime fields and make the table appear empty until reload.
-     */
-    const previousGroup = sequenceGroupsRef.current.get(key) || {
-      nodeId,
-      objects: [],
-    };
-
-    const optimisticGroups = new Map(sequenceGroupsRef.current);
-    optimisticGroups.set(key, {
+    const nextGroups = new Map(sequenceGroupsRef.current);
+    nextGroups.set(key, {
       nodeId,
       objects: nextObjects,
     });
-    sequenceGroupsRef.current = optimisticGroups;
-    setSequenceGroups(optimisticGroups);
-
-    try {
-      const saved = await replaceSequenceObjectsForNode({
-        trimbleProjectId: effectiveProjectId,
-        nodeId,
-        objects: nextObjects,
-      });
-
-      /*
-       * Merge DB fields (dbId, dates, sort_datetime, camera, etc.) back into
-       * the original runtime objects instead of replacing them. This preserves
-       * modelId/runtimeId/objectAvailable and therefore keeps the UI visible
-       * without requiring a full reload.
-       */
-      const savedByExternalId = new Map(
-        saved.map((object) => [
-          String(getExternalId(object) ?? ""),
-          object,
-        ]),
-      );
-
-      /*
-       * Preserve the exact optimistic array order. Supabase/PostgREST does not
-       * guarantee that returned INSERT rows have the same order as the input.
-       */
-      const merged = nextObjects.map((runtimeObject) => {
-        const savedObject = savedByExternalId.get(
-          String(getExternalId(runtimeObject) ?? ""),
-        );
-
-        if (!savedObject) {
-          return {
-            ...runtimeObject,
-            nodeId,
-          };
-        }
-
-        return {
-          ...runtimeObject,
-          dbId: savedObject.dbId ?? runtimeObject.dbId,
-          trimbleProjectId:
-            savedObject.trimbleProjectId ?? runtimeObject.trimbleProjectId,
-          subPlanId: savedObject.subPlanId,
-          nodeId,
-          externalId:
-            savedObject.externalId ?? getExternalId(runtimeObject),
-          assignedDate: savedObject.assignedDate,
-          date: savedObject.date,
-          sortDatetime: savedObject.sortDatetime,
-          camera: savedObject.camera,
-          createdAt: savedObject.createdAt ?? runtimeObject.createdAt,
-          updatedAt: savedObject.updatedAt ?? runtimeObject.updatedAt,
-        };
-      });
-
-      /* Ignore a stale response when a newer drag/update already started. */
-      if (persistRevisionRef.current.get(key) === revision) {
-        const next = new Map(sequenceGroupsRef.current);
-        next.set(key, {
-          nodeId,
-          objects: merged,
-        });
-        sequenceGroupsRef.current = next;
-        setSequenceGroups(next);
-      }
-
-      return merged;
-    } catch (error) {
-      /*
-       * Roll back only this Node's optimistic update when persistence fails.
-       */
-      /* A failed older request must not roll back a newer successful drag. */
-      if (persistRevisionRef.current.get(key) === revision) {
-        const next = new Map(sequenceGroupsRef.current);
-        next.set(key, previousGroup);
-        sequenceGroupsRef.current = next;
-        setSequenceGroups(next);
-      }
-
-      throw error;
-    }
-  }, [effectiveProjectId]);
+    sequenceGroupsRef.current = nextGroups;
+    setSequenceGroups(nextGroups);
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+    return nextObjects;
+  }, []);
 
   const handleEdit = useCallback((node) => {
     if (!canEdit) return;
@@ -1205,29 +1158,52 @@ export default function NodeSequenceMain({
     const nodesToCreate = Array.isArray(items) && items.length
       ? items
       : names.map((name) => ({ name, color }));
-    for (let index = 0; index < nodesToCreate.length; index += 1) {
-      await createNode({
-        trimbleProjectId: effectiveProjectId,
-        parentId,
-        name: nodesToCreate[index].name,
-        color: nodesToCreate[index].color ?? null,
-      });
-    }
-    await loadData();
-  }, [effectiveProjectId, loadData]);
+    const parentKey = String(parentId ?? "__ROOT__");
+    const siblingCount = nodes.filter(
+      (node) => String(getNodeParentId(node) ?? "__ROOT__") === parentKey,
+    ).length;
+    const created = nodesToCreate.map((item, index) => ({
+      id: createDraftId(),
+      trimbleProjectId: effectiveProjectId,
+      parentId: parentId ?? null,
+      nodeType: item?.nodeType ?? "Folder",
+      name: String(item?.name || "").trim(),
+      color: item?.color ?? null,
+      sortOrder: siblingCount + index,
+    }));
+
+    setNodes((current) => [...current, ...created]);
+    const nextGroups = new Map(sequenceGroupsRef.current);
+    created.forEach((node) => {
+      nextGroups.set(String(node.id), { nodeId: node.id, objects: [] });
+    });
+    sequenceGroupsRef.current = nextGroups;
+    setSequenceGroups(nextGroups);
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+    return created;
+  }, [effectiveProjectId, nodes]);
 
   const handleUpdateNode = useCallback(async ({ id, name, color }) => {
-    await updateNode({ id, name, color });
     setNodes((current) => current.map((node) => String(node.id) === String(id) ? { ...node, name, color } : node));
+    setHasDraftChanges(true);
+    setPublishConflict(false);
   }, []);
 
   const handleDeleteNode = useCallback(async (node) => {
     if (!canEdit || !node?.id) return;
     const confirmed = window.confirm(`Delete "${node.name}" and all child nodes?`);
     if (!confirmed) return;
-    await deleteNode(node.id);
-    await loadData();
-  }, [canEdit, loadData]);
+    const deletedIds = new Set(getDescendantIds(node.id, childrenByParent));
+    setNodes((current) => current.filter((item) => !deletedIds.has(String(item.id))));
+    const nextGroups = new Map(sequenceGroupsRef.current);
+    deletedIds.forEach((id) => nextGroups.delete(String(id)));
+    sequenceGroupsRef.current = nextGroups;
+    setSequenceGroups(nextGroups);
+    setSelectedNodeIds((current) => current.filter((id) => !deletedIds.has(String(id))));
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+  }, [canEdit, childrenByParent]);
 
   const handleCopyNode = useCallback(async (node) => {
     if (!canEdit || !node?.id) return;
@@ -1238,8 +1214,9 @@ export default function NodeSequenceMain({
       if (!source) continue;
       const parentId = getNodeParentId(source);
       const newParentId = parentId && idMap.has(String(parentId)) ? idMap.get(String(parentId)) : parentId;
-      const copy = await createNode({
-        trimbleProjectId: effectiveProjectId,
+      const copy = {
+        ...source,
+        id: createDraftId(),
         parentId: sourceId === String(node.id) ? getNodeParentId(node) : newParentId,
         name: sourceId === String(node.id)
           ? `${source.name} Copy`
@@ -1247,11 +1224,22 @@ export default function NodeSequenceMain({
         color: source.color ?? null,
         nodeType: source.nodeType,
         sortOrder: getNodeSort(source) + 1,
-      });
+        createdAt: null,
+        updatedAt: null,
+      };
       idMap.set(sourceId, copy.id);
+      setNodes((current) => [...current, copy]);
+      const nextGroups = new Map(sequenceGroupsRef.current);
+      nextGroups.set(String(copy.id), {
+        nodeId: copy.id,
+        objects: [],
+      });
+      sequenceGroupsRef.current = nextGroups;
+      setSequenceGroups(nextGroups);
     }
-    await loadData();
-  }, [canEdit, childrenByParent, nodeMap, effectiveProjectId, loadData]);
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+  }, [canEdit, childrenByParent, nodeMap]);
 
   const openCopyNodesFrom = useCallback((targetNode) => {
     if (!canEdit || !targetNode?.id) return;
@@ -1309,21 +1297,33 @@ export default function NodeSequenceMain({
             : copiedIdMap.get(String(sourceParentId));
           if (!targetParentId) continue;
 
-          const copied = await createNode({
-            trimbleProjectId: effectiveProjectId,
+          const copied = {
+            ...source,
+            id: createDraftId(),
             parentId: targetParentId,
             name: source.name,
             color: source.color ?? null,
             nodeType: source.nodeType,
             sortOrder: getNodeSort(source),
-          });
+            createdAt: null,
+            updatedAt: null,
+          };
           copiedIdMap.set(String(sourceId), copied.id);
+          setNodes((current) => [...current, copied]);
+          const nextGroups = new Map(sequenceGroupsRef.current);
+          nextGroups.set(String(copied.id), {
+            nodeId: copied.id,
+            objects: [],
+          });
+          sequenceGroupsRef.current = nextGroups;
+          setSequenceGroups(nextGroups);
         }
       }
 
-      await loadData();
+      setHasDraftChanges(true);
+      setPublishConflict(false);
       appMessage.success(
-        `Sub plans copied into ${copyNodesTarget.name || "the target plan"}.`,
+        `Sub plans copied into ${copyNodesTarget.name || "the target plan"}. Publish to save changes.`,
       );
       setCopyNodesTarget(null);
       setCopyNodesSourceId(null);
@@ -1340,8 +1340,6 @@ export default function NodeSequenceMain({
     copyNodesProcessing,
     childrenByParent,
     nodeMap,
-    effectiveProjectId,
-    loadData,
     appMessage,
   ]);
 
@@ -2154,13 +2152,11 @@ export default function NodeSequenceMain({
       return diff || String(a?.externalId || "").localeCompare(String(b?.externalId || ""));
     });
     const updates = sorted.map((object, index) => ({
-      dbId: object.dbId,
-      externalId: getExternalId(object),
+      ...object,
       sortDatetime: new Date(Date.now() + index).toISOString(),
     }));
-    await updateSequenceObjectSortDatesForNode(updates);
-    await refreshNodeGroup(node.id);
-  }, [canEdit, sequenceGroups, appMessage, refreshNodeGroup]);
+    await persistObjects({ nodeId: node.id, objects: updates });
+  }, [canEdit, sequenceGroups, appMessage, persistObjects]);
 
   const handleSimulation = useCallback((node) => {
     if (isFree || !node?.id) return;
@@ -2217,6 +2213,8 @@ export default function NodeSequenceMain({
           return 0;
         }),
     );
+    setHasDraftChanges(true);
+    setPublishConflict(false);
   }, []);
 
   const handleMoveNodeObjects = useCallback(async ({ sourceNodeId, targetNodeId, movedObjects }) => {
@@ -2229,11 +2227,37 @@ export default function NodeSequenceMain({
       return;
     }
 
-    const dbIds = (movedObjects || []).map((object) => object?.dbId).filter(Boolean);
-    if (!dbIds.length) return;
-    await moveSequenceObjectsToNode({ objectIds: dbIds, targetNodeId });
-    await loadData();
-  }, [childrenByParent, appMessage, loadData]);
+    const movedIds = new Set(
+      (movedObjects || []).map((object) => getObjectKey(object)),
+    );
+    if (!movedIds.size) return;
+
+    const sourceKey = String(sourceNodeId);
+    const targetKey = String(targetNodeId);
+    const sourceObjects =
+      sequenceGroupsRef.current.get(sourceKey)?.objects || [];
+    const targetObjects =
+      sequenceGroupsRef.current.get(targetKey)?.objects || [];
+    const moved = sourceObjects
+      .filter((object) => movedIds.has(getObjectKey(object)))
+      .map((object) => ({ ...object, nodeId: targetNodeId }));
+
+    const nextGroups = new Map(sequenceGroupsRef.current);
+    nextGroups.set(sourceKey, {
+      nodeId: sourceNodeId,
+      objects: sourceObjects.filter(
+        (object) => !movedIds.has(getObjectKey(object)),
+      ),
+    });
+    nextGroups.set(targetKey, {
+      nodeId: targetNodeId,
+      objects: [...targetObjects, ...moved],
+    });
+    sequenceGroupsRef.current = nextGroups;
+    setSequenceGroups(nextGroups);
+    setHasDraftChanges(true);
+    setPublishConflict(false);
+  }, [childrenByParent, appMessage]);
 
   const layerTreeData = useMemo(() => {
     const matcher = createWildcardMatcher(layerSearch);
@@ -2295,6 +2319,67 @@ export default function NodeSequenceMain({
     return rootNodes.map(buildSourceNode);
   }, [rootNodes, childrenByParent, copyNodesTarget]);
 
+  const handleDiscardDraft = useCallback(async () => {
+    if (!hasDraftChanges || publishing) return;
+    const confirmed = window.confirm(
+      "Discard all unpublished V2 changes and reload the latest published version?",
+    );
+    if (!confirmed) return;
+    await loadData();
+    appMessage.info("Unpublished changes were discarded.");
+  }, [hasDraftChanges, publishing, loadData, appMessage]);
+
+  const handlePublish = useCallback(async () => {
+    if (!canEdit || !hasDraftChanges || publishing || publishConflict) return;
+
+    const { changes } = buildPublishChanges({
+      projectId: effectiveProjectId,
+      published: publishedSnapshotRef.current,
+      nodes,
+      sequenceGroups: sequenceGroupsRef.current,
+    });
+
+    if (!hasPublishChanges(changes)) {
+      setHasDraftChanges(false);
+      appMessage.info("There are no changes to publish.");
+      return;
+    }
+
+    setPublishing(true);
+    try {
+      const result = await publishSequenceV2({
+        projectId: effectiveProjectId,
+        expectedRevision: publishedRevision,
+        changes,
+      });
+      setPublishedRevision(result.revision);
+      await loadData();
+      appMessage.success(`V2 revision ${result.revision} published successfully.`);
+    } catch (error) {
+      console.error("Publish V2 failed:", error);
+      if (error?.code === "SEQUENCE_VERSION_CONFLICT") {
+        setPublishConflict(true);
+        appMessage.error(
+          "A newer version was published by another user. Your draft is still available. Reload the published version before publishing again.",
+        );
+      } else {
+        appMessage.error(error?.message || "Unable to publish V2 changes.");
+      }
+    } finally {
+      setPublishing(false);
+    }
+  }, [
+    canEdit,
+    hasDraftChanges,
+    publishing,
+    publishConflict,
+    effectiveProjectId,
+    nodes,
+    publishedRevision,
+    loadData,
+    appMessage,
+  ]);
+
   return (
     <div
       style={{
@@ -2305,6 +2390,66 @@ export default function NodeSequenceMain({
         boxSizing: "border-box",
       }}
     >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          padding: "6px 8px",
+          marginBottom: 6,
+          border: "1px solid #d9d9d9",
+          background: publishConflict
+            ? "#fff2f0"
+            : hasDraftChanges
+              ? "#fffbe6"
+              : "#f6ffed",
+        }}
+      >
+        <Space size={6} wrap>
+          <Tag color={publishConflict ? "error" : hasDraftChanges ? "warning" : "success"}>
+            {publishConflict
+              ? "Publish conflict"
+              : hasDraftChanges
+                ? "Unsaved changes"
+                : "Published"}
+          </Tag>
+          <span style={{ fontSize: 12, color: "rgba(0, 0, 0, 0.65)" }}>
+            Revision {publishedRevision}
+          </span>
+        </Space>
+
+        {canEdit && (
+          <Space size={6}>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              disabled={!hasDraftChanges || publishing}
+              onClick={handleDiscardDraft}
+            >
+              Discard
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              icon={<CloudUploadOutlined />}
+              loading={publishing}
+              disabled={!hasDraftChanges || publishConflict}
+              onClick={handlePublish}
+            >
+              Publish
+            </Button>
+          </Space>
+        )}
+      </div>
+
+      {publishConflict && (
+        <div style={{ marginBottom: 6, color: "#cf1322", fontSize: 12 }}>
+          Another user published a newer revision. Click Discard to reload it;
+          your current draft will otherwise remain visible in this tab.
+        </div>
+      )}
+
       {pendingAssignment && (
         <Modal
           title={
@@ -2499,8 +2644,14 @@ export default function NodeSequenceMain({
       )}
 
       <Spin
-        spinning={loading || assignmentProcessing}
-        tip={assignmentProcessing ? "Assigning items..." : undefined}
+        spinning={loading || assignmentProcessing || publishing}
+        tip={
+          publishing
+            ? "Publishing V2 changes..."
+            : assignmentProcessing
+              ? "Assigning items..."
+              : undefined
+        }
       >
         {!rootNodes.length ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Plans" />
