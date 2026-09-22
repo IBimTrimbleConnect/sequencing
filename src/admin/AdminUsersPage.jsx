@@ -73,6 +73,67 @@ const getLicenseColor = (
   }
 };
 
+const compareText = (
+  firstValue,
+  secondValue,
+) =>
+  String(
+    firstValue ?? "",
+  ).localeCompare(
+    String(
+      secondValue ?? "",
+    ),
+    undefined,
+    {
+      numeric: true,
+      sensitivity:
+        "base",
+    },
+  );
+
+const compareNumber = (
+  firstValue,
+  secondValue,
+) =>
+  Number(
+    firstValue ?? 0,
+  ) -
+  Number(
+    secondValue ?? 0,
+  );
+
+const compareDate = (
+  firstValue,
+  secondValue,
+) => {
+  const firstTime =
+    firstValue
+      ? new Date(
+          firstValue,
+        ).getTime()
+      : 0;
+
+  const secondTime =
+    secondValue
+      ? new Date(
+          secondValue,
+        ).getTime()
+      : 0;
+
+  return (
+    (Number.isNaN(
+      firstTime,
+    )
+      ? 0
+      : firstTime) -
+    (Number.isNaN(
+      secondTime,
+    )
+      ? 0
+      : secondTime)
+  );
+};
+
 export default function AdminUsersPage() {
   const navigate =
     useNavigate();
@@ -393,6 +454,15 @@ export default function AdminUsersPage() {
         "userName",
 
       width: 150,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.userName,
+          second.userName,
+        ),
     },
     {
       title:
@@ -405,6 +475,15 @@ export default function AdminUsersPage() {
         "companyName",
 
       width: 180,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.companyName,
+          second.companyName,
+        ),
     },
     {
       title:
@@ -417,6 +496,15 @@ export default function AdminUsersPage() {
         "email",
 
       width: 220,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.email,
+          second.email,
+        ),
     },
     {
       title:
@@ -429,6 +517,15 @@ export default function AdminUsersPage() {
         "status",
 
       width: 100,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.status,
+          second.status,
+        ),
 
       render: (
         value,
@@ -460,6 +557,15 @@ export default function AdminUsersPage() {
 
       width: 90,
 
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.role,
+          second.role,
+        ),
+
       render: (
         value,
       ) => (
@@ -480,6 +586,15 @@ export default function AdminUsersPage() {
         "licenseType",
 
       width: 100,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareText(
+          first.licenseType,
+          second.licenseType,
+        ),
 
       render: (
         value,
@@ -510,6 +625,15 @@ export default function AdminUsersPage() {
 
       align:
         "center",
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareNumber(
+          first.trialCount,
+          second.trialCount,
+        ),
 
       render: (
         value,
@@ -544,6 +668,15 @@ export default function AdminUsersPage() {
 
       width: 115,
 
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareDate(
+          first.startDate,
+          second.startDate,
+        ),
+
       render: (
         value,
       ) =>
@@ -560,6 +693,15 @@ export default function AdminUsersPage() {
         "endDate",
 
       width: 115,
+
+      sorter: (
+        first,
+        second,
+      ) =>
+        compareDate(
+          first.endDate,
+          second.endDate,
+        ),
 
       render: (
         value,
